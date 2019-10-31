@@ -9,15 +9,6 @@ type Predict func(buf []byte) (bool, error)
 
 // TODO: agg funcs
 
-// Model -
-type Model interface {
-	ID() []byte
-	Type() uint16
-	Load([]byte)
-	Save() []byte
-	Dump() []byte
-}
-
 // Cursor -
 type Cursor interface {
 	Model

@@ -12,6 +12,8 @@ var (
 	ErrConnect        = newError("Ошибка подключения к СУБД")
 	ErrNullModel      = newError("Чтение неинициализированной модели")
 	ErrEmptyID        = newError("empty identifier")
+	ErrEmptyValue     = newError("empty value")
+	ErrInvalidGZ      = newError("invalid gzip value")
 )
 
 func newError(msg string) *fdbxError { return &fdbxError{message: msg} }
