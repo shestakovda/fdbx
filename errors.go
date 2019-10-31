@@ -11,7 +11,7 @@ var (
 	ErrOldVersion     = newError("Подключение к устаревшей версии клиента")
 	ErrConnect        = newError("Ошибка подключения к СУБД")
 	ErrNullModel      = newError("Чтение неинициализированной модели")
-	ErrEmptyModelID   = newError("Чтение модели без идентификатора")
+	ErrEmptyID        = newError("empty identifier")
 )
 
 func newError(msg string) *fdbxError { return &fdbxError{message: msg} }

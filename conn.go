@@ -5,9 +5,14 @@ const (
 	ConnVersion610 = 610
 )
 
+// TxHandler -
+type TxHandler func(DB) error
+
 // Conn - database connection (as stored database index)
 type Conn interface {
-	Key(Model) ([]byte, error)
+	Key(ctype uint16, id []byte) ([]byte, error)
+	MKey(Model) ([]byte, error)
+
 	Tx(TxHandler) error
 }
 
