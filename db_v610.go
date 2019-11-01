@@ -16,6 +16,9 @@ var ChunkType = uint16(65535)
 // ChunkSize is max chunk length. Default 100 Kb - fdb value limit
 var ChunkSize = 100000
 
+// MaxChunkSize is max possible chunk size.
+const MaxChunkSize = 100000
+
 // GZipSize is a value len more then GZipSize cause gzip processing
 var GZipSize = 860
 
