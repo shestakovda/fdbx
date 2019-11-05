@@ -56,6 +56,7 @@ func (db *v610db) Set(ctype uint16, id, value []byte) (err error) {
 	}
 
 	db.tx.Set(fdb.Key(key), value)
+
 	return nil
 }
 
@@ -67,6 +68,7 @@ func (db *v610db) Del(ctype uint16, id []byte) (err error) {
 	}
 
 	db.tx.Clear(fdb.Key(key))
+
 	return nil
 }
 
@@ -85,6 +87,7 @@ func (db *v610db) Load(models ...Model) (err error) {
 
 	// query all futures to leverage wait time
 	futures := make([]fdb.FutureByteSlice, 0, len(models))
+
 	for i := range models {
 		if key, err = db.conn.MKey(models[i]); err != nil {
 			return
@@ -104,15 +107,39 @@ func (db *v610db) Load(models ...Model) (err error) {
 
 func (db *v610db) save(m Model) (err error) {
 	var flags uint8
-	var value, key []byte
+	var value, key, idx []byte
 
+	// basic model key
 	if key, err = db.conn.MKey(m); err != nil {
 		return
+	}
+
+	// type index list
+	indexes := db.conn.Indexes(m.Type())
+
+	// old data dump for index invalidate
+	if dump := m.Dump(); len(dump) > 0 {
+		for _, index := range indexes {
+			if idx, err = index(dump); err != nil {
+				return
+			}
+
+			db.tx.Clear(fdb.Key(idx))
+		}
 	}
 
 	// plain object buffer
 	if value, err = m.Pack(); err != nil {
 		return
+	}
+
+	// new index keys
+	for _, index := range indexes {
+		if idx, err = index(value); err != nil {
+			return
+		}
+
+		db.tx.Set(fdb.Key(idx), nil)
 	}
 
 	// so long, try to reduce
@@ -145,7 +172,7 @@ func (db *v610db) load(m Model, fb fdb.FutureByteSlice) (err error) {
 		return nil
 	}
 
-	flags := uint8(value[0])
+	flags := value[0]
 	value = value[1:]
 
 	// blob data

@@ -2,12 +2,16 @@ package fdbx
 
 import (
 	"encoding/binary"
+	"sync"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
 
 func newV610Conn(db uint16) (conn *v610Conn, err error) {
-	conn = &v610Conn{db: db}
+	conn = &v610Conn{
+		db:      db,
+		indexes: make(map[uint16][]Index, 8),
+	}
 
 	// Installed version check
 	if err = fdb.APIVersion(ConnVersion610); err != nil {
@@ -23,8 +27,10 @@ func newV610Conn(db uint16) (conn *v610Conn, err error) {
 }
 
 type v610Conn struct {
-	db  uint16
-	fdb fdb.Database
+	sync.RWMutex
+	db      uint16
+	fdb     fdb.Database
+	indexes map[uint16][]Index
 }
 
 func (c *v610Conn) Key(ctype uint16, id []byte) ([]byte, error) {
@@ -32,7 +38,6 @@ func (c *v610Conn) Key(ctype uint16, id []byte) ([]byte, error) {
 		return nil, ErrEmptyID
 	}
 
-	// TODO: using sync.Pool
 	idl := len(id)
 	key := make([]byte, 4+idl)
 
@@ -66,5 +71,19 @@ func (c *v610Conn) Tx(h TxHandler) error {
 
 		return nil, h(db)
 	})
+
 	return exp
+}
+
+func (c *v610Conn) Indexes(ctype uint16) []Index {
+	c.RLock()
+	defer c.RUnlock()
+
+	return c.indexes[ctype]
+}
+
+func (c *v610Conn) AddIndex(ctype uint16, index Index) {
+	c.Lock()
+	defer c.Unlock()
+	c.indexes[ctype] = append(c.indexes[ctype], index)
 }

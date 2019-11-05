@@ -8,12 +8,18 @@ const (
 // TxHandler -
 type TxHandler func(DB) error
 
+// Index - calc index key from model buffer
+type Index func([]byte) ([]byte, error)
+
 // Conn - database connection (as stored database index)
 type Conn interface {
 	Key(ctype uint16, id []byte) ([]byte, error)
 	MKey(Model) ([]byte, error)
 
 	Tx(TxHandler) error
+
+	Indexes(ctype uint16) []Index
+	AddIndex(ctype uint16, index Index)
 }
 
 // NewConn - makes new connection with specified client version

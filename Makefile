@@ -13,4 +13,4 @@ bench: fmt
 	@go test -bench . -benchmem -benchtime 10s ./...
 
 lint:
-	@golangci-lint run --enable-all --fix
+	@golangci-lint run --enable-all --fix --tests=false

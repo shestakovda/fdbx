@@ -104,31 +104,31 @@ func TestConn(t *testing.T) {
 	assert.Equal(t, m2.Dump(), m4.Dump())
 }
 
-// func BenchmarkSaveOneBig(b *testing.B) {
-// 	b.StopTimer()
+func BenchmarkSaveOneBig(b *testing.B) {
+	b.StopTimer()
 
-// 	const db = 1
-// 	const ctype = 2
+	const db = 1
+	const ctype = 2
 
-// 	// overvalue for disable gzipping
-// 	fdbx.GZipSize = 10000000
-// 	fdbx.ChunkSize = fdbx.MaxChunkSize
+	// overvalue for disable gzipping
+	fdbx.GZipSize = 10000000
+	fdbx.ChunkSize = fdbx.MaxChunkSize
 
-// 	c, err := fdbx.NewConn(db, fdbx.ConnVersion610)
-// 	assert.NoError(b, err)
-// 	assert.NotNil(b, c)
+	c, err := fdbx.NewConn(db, fdbx.ConnVersion610)
+	assert.NoError(b, err)
+	assert.NotNil(b, c)
 
-// 	// 9 Mb no gzipped records
-// 	uid := uuid.New()
-// 	m := &testModel{key: uid.String(), ctype: ctype, data: bytes.Repeat(uid[:9], 1024*1024)}
+	// 9 Mb no gzipped records
+	uid := uuid.New()
+	m := &testModel{key: uid.String(), ctype: ctype, data: bytes.Repeat(uid[:9], 1024*1024)}
 
-// 	b.StartTimer()
+	b.StartTimer()
 
-// 	for i := 0; i < b.N; i++ {
-// 		m.key = uuid.New().String()
-// 		assert.NoError(b, c.Tx(func(db fdbx.DB) (e error) { return db.Save(m) }))
-// 	}
-// }
+	for i := 0; i < b.N; i++ {
+		m.key = uuid.New().String()
+		assert.NoError(b, c.Tx(func(db fdbx.DB) (e error) { return db.Save(m) }))
+	}
+}
 
 func BenchmarkSaveMultiSmalls(b *testing.B) {
 	b.StopTimer()
