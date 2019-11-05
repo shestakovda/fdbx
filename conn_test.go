@@ -87,18 +87,30 @@ func TestConn(t *testing.T) {
 
 	m1 := &testModel{key: skey, ctype: ctype, data: tdata}
 	m2 := &testModel{key: skey2, ctype: ctype, data: tdata2}
+	m3 := &testModel{key: skey, ctype: ctype}
+	m4 := &testModel{key: skey2, ctype: ctype}
+
+	k1, err := c1.MKey(m1)
+	assert.NoError(t, err)
+	k2, err := c1.MKey(m2)
+	assert.NoError(t, err)
+	k3, err := c1.MKey(m3)
+	assert.NoError(t, err)
+	k4, err := c1.MKey(m4)
+	assert.NoError(t, err)
+	assert.Equal(t, k1, k3)
+	assert.Equal(t, k2, k4)
 
 	fdbx.GZipSize = 0
 	fdbx.ChunkSize = 2
 
-	err = c1.Tx(func(db fdbx.DB) (e error) { return db.Save(m1, m2) })
-	assert.NoError(t, err)
+	assert.NoError(t, c1.Tx(func(db fdbx.DB) (e error) {
+		if e = db.Save(m1, m2); e != nil {
+			return
+		}
 
-	m3 := &testModel{key: skey, ctype: ctype}
-	m4 := &testModel{key: skey2, ctype: ctype}
-
-	err = c1.Tx(func(db fdbx.DB) (e error) { return db.Load(m3, m4) })
-	assert.NoError(t, err)
+		return db.Load(m3, m4)
+	}))
 
 	assert.Equal(t, m1.Dump(), m3.Dump())
 	assert.Equal(t, m2.Dump(), m4.Dump())

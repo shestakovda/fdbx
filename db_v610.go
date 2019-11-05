@@ -182,6 +182,11 @@ func (db *v610db) load(m Model, fb fdb.FutureByteSlice) (err error) {
 		}
 	}
 
+	if len(value) == 0 {
+		// it's model responsibility for loading control
+		return nil
+	}
+
 	// gzip data
 	if flags&flagGZip > 0 {
 		if value, err = db.gunzipValue(value); err != nil {
@@ -263,7 +268,7 @@ func (db *v610db) saveBlob(flags *uint8, blob []byte) (value []byte, err error) 
 	var i uint16
 	var last bool
 	var part, key []byte
-	index := make([]byte, 2)
+	var index [2]byte
 
 	*flags |= flagChunk
 	blobID := uuid.New()
@@ -285,8 +290,8 @@ func (db *v610db) saveBlob(flags *uint8, blob []byte) (value []byte, err error) 
 		}
 
 		// save part
-		binary.BigEndian.PutUint16(index, i)
-		db.tx.Set(fdb.Key(append(key, index...)), part)
+		binary.BigEndian.PutUint16(index[:], i)
+		db.tx.Set(fdb.Key(append(key, index[0], index[1])), part)
 		i++
 	}
 
@@ -308,7 +313,6 @@ func (db *v610db) loadBlob(value []byte) (blob []byte, err error) {
 		if kv, err = res.Get(); err != nil {
 			return
 		}
-
 		blob = append(blob, kv.Value...)
 	}
 	return blob, nil

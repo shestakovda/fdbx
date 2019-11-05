@@ -35,19 +35,17 @@ type v610Conn struct {
 
 func (c *v610Conn) Key(ctype uint16, id []byte) ([]byte, error) {
 	if len(id) == 0 {
-		return nil, ErrEmptyID
+		return nil, ErrEmptyID.WithStack()
 	}
 
-	idl := len(id)
-	key := make([]byte, 4+idl)
+	key := make([]byte, 4+len(id))
 
 	// zero values is supported
 	binary.BigEndian.PutUint16(key[0:2], c.db)
 	binary.BigEndian.PutUint16(key[2:4], ctype)
 
-	// just for convenience
-	if n := copy(key[4:], id); n != idl {
-		return nil, ErrMemFail
+	if n := copy(key[4:], id); n != len(id) {
+		return nil, ErrMemFail.WithStack()
 	}
 
 	return key, nil
@@ -55,7 +53,7 @@ func (c *v610Conn) Key(ctype uint16, id []byte) ([]byte, error) {
 
 func (c *v610Conn) MKey(m Model) ([]byte, error) {
 	if m == nil {
-		return nil, ErrNullModel
+		return nil, ErrNullModel.WithStack()
 	}
 
 	return c.Key(m.Type(), m.ID())
