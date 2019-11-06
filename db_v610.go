@@ -3,8 +3,11 @@ package fdbx
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/binary"
 	"io"
+	"log"
+	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/google/uuid"
@@ -316,4 +319,120 @@ func (db *v610db) loadBlob(value []byte) (blob []byte, err error) {
 		blob = append(blob, kv.Value...)
 	}
 	return blob, nil
+}
+
+func (db *v610db) Pub(qtype uint16, m Model, t time.Time) error {
+	var id []byte
+
+	if m == nil {
+		return ErrNullModel.WithStack()
+	}
+
+	if id = m.ID(); len(id) == 0 {
+		return ErrEmptyID.WithStack()
+	}
+
+	if t.IsZero() {
+		t = time.Now()
+	}
+
+	index := make(fdb.Key, 12+len(id))
+	binary.BigEndian.PutUint16(index[0:2], db.conn.DB())
+	binary.BigEndian.PutUint16(index[2:4], qtype)
+	binary.BigEndian.PutUint64(index[4:12], uint64(t.UnixNano()))
+
+	if n := copy(index[12:], id); n != len(id) {
+		return ErrMemFail.WithStack()
+	}
+
+	db.tx.Set(index, nil)
+	return nil
+}
+
+func (db *v610db) Sub(ctx context.Context, qtype uint16, limit int, f Fabric) (_ <-chan Model, err error) {
+	var keyl, keyr, keya []byte
+
+	res := make(chan Model)
+	now := time.Now().UnixNano()
+
+	key := make([]byte, 8)
+	binary.BigEndian.PutUint64(key, uint64(now))
+
+	if keyl, err = db.conn.Key(qtype, []byte{0}); err != nil {
+		return
+	}
+
+	if keyr, err = db.conn.Key(qtype, key); err != nil {
+		return
+	}
+
+	go func() {
+		defer close(res)
+
+		kr := fdb.KeyRange{Begin: fdb.Key(keyl), End: fdb.Key(keyr)}
+		rows := db.tx.GetRange(kr, fdb.RangeOptions{Mode: fdb.StreamingModeWantAll}).GetSliceOrPanic()
+
+		models := make([]Model, 0, len(rows))
+
+		for i := range rows {
+			models = append(models, f(rows[i].Key[12:]))
+		}
+
+		if err := db.Load(models...); err != nil {
+			log.Printf("queue load error = %+v", err)
+			return
+		}
+
+		for i := range models {
+			select {
+			case res <- models[i]:
+				if keya, err = db.conn.Key(qtype, append([]byte{0xFF}, models[i].ID()...)); err != nil {
+					log.Printf("queue sent to ack error = %+v", err)
+					return
+				}
+				db.tx.Set(fdb.Key(keya), nil)
+			case <-ctx.Done():
+				return
+			}
+
+		}
+
+	}()
+
+	return res, nil
+}
+
+func (db *v610db) Ack(qtype uint16, m Model) (err error) {
+	var keya []byte
+
+	if keya, err = db.conn.Key(qtype, append([]byte{0xFF}, m.ID()...)); err != nil {
+		return
+	}
+
+	db.tx.Clear(fdb.Key(keya))
+	return nil
+}
+
+func (db *v610db) Lost(qtype uint16, limit int, f Fabric) (models []Model, err error) {
+	var keya []byte
+
+	if keya, err = db.conn.Key(qtype, []byte{0xFF}); err != nil {
+		return
+	}
+
+	var kr fdb.KeyRange
+
+	if kr, err = fdb.PrefixRange(keya); err != nil {
+		return
+	}
+
+	rows := db.tx.GetRange(kr, fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: limit}).GetSliceOrPanic()
+
+	models = make([]Model, 0, len(rows))
+
+	for i := range rows {
+		models = append(models, f(rows[i].Key[12:]))
+	}
+
+	return models, db.Load(models...)
 }

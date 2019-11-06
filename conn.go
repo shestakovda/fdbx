@@ -13,6 +13,7 @@ type Index func([]byte) ([]byte, error)
 
 // Conn - database connection (as stored database index)
 type Conn interface {
+	DB() uint16
 	Key(ctype uint16, id []byte) ([]byte, error)
 	MKey(Model) ([]byte, error)
 

@@ -33,6 +33,8 @@ type v610Conn struct {
 	indexes map[uint16][]Index
 }
 
+func (c *v610Conn) DB() uint16 { return c.db }
+
 func (c *v610Conn) Key(ctype uint16, id []byte) ([]byte, error) {
 	if len(id) == 0 {
 		return nil, ErrEmptyID.WithStack()
