@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"log"
 	"time"
@@ -30,15 +31,30 @@ const (
 	flagChunk = uint8(1 << 7)
 )
 
-func newV610db(c Conn, tx fdb.Transaction) (db *v610db, err error) {
+func newV610db(c *v610Conn, tx fdb.Transaction) (db *v610db, err error) {
 	db = &v610db{conn: c, tx: tx}
 
 	return db, nil
 }
 
 type v610db struct {
-	conn Conn
+	conn *v610Conn
 	tx   fdb.Transaction
+}
+
+func (db *v610db) Clear() error {
+	dbtype := db.conn.DB()
+
+	// all plain data
+	begin := make(fdb.Key, 2)
+	binary.BigEndian.PutUint16(begin[0:2], dbtype)
+	end := make(fdb.Key, 5)
+	binary.BigEndian.PutUint16(end[0:2], dbtype)
+	binary.BigEndian.PutUint16(end[2:4], 0xFFFF)
+	end[4] = 0xFF
+	db.tx.ClearRange(fdb.KeyRange{Begin: begin, End: end})
+
+	return nil
 }
 
 func (db *v610db) Get(ctype uint16, id []byte) (_ []byte, err error) {
@@ -336,103 +352,187 @@ func (db *v610db) Pub(qtype uint16, m Model, t time.Time) error {
 		t = time.Now()
 	}
 
-	index := make(fdb.Key, 12+len(id))
+	unix := make([]byte, 8)
+	binary.BigEndian.PutUint64(unix, uint64(t.UnixNano()))
+
+	index := make(fdb.Key, 2+2+8+len(id))
 	binary.BigEndian.PutUint16(index[0:2], db.conn.DB())
 	binary.BigEndian.PutUint16(index[2:4], qtype)
-	binary.BigEndian.PutUint64(index[4:12], uint64(t.UnixNano()))
+
+	if n := copy(index[4:12], unix); n != len(unix) {
+		return ErrMemFail.WithStack()
+	}
 
 	if n := copy(index[12:], id); n != len(id) {
 		return ErrMemFail.WithStack()
 	}
 
 	db.tx.Set(index, nil)
+	db.tx.Set(db.watchKey(qtype), unix)
 	return nil
 }
 
-func (db *v610db) Sub(ctx context.Context, qtype uint16, limit int, f Fabric) (_ <-chan Model, err error) {
-	var keyl, keyr, keya []byte
+func (db *v610db) Sub(ctx context.Context, qtype uint16, fabric Fabric) (m Model, err error) {
+	var wait fdb.FutureNil
 
-	res := make(chan Model)
-	now := time.Now().UnixNano()
+	for m == nil {
+		if wait != nil {
+			wc := make(chan struct{}, 1)
+			go func() { defer close(wc); wait.BlockUntilReady(); wc <- struct{}{} }()
 
-	key := make([]byte, 8)
-	binary.BigEndian.PutUint64(key, uint64(now))
-
-	if keyl, err = db.conn.Key(qtype, []byte{0}); err != nil {
-		return
-	}
-
-	if keyr, err = db.conn.Key(qtype, key); err != nil {
-		return
-	}
-
-	go func() {
-		defer close(res)
-
-		kr := fdb.KeyRange{Begin: fdb.Key(keyl), End: fdb.Key(keyr)}
-		rows := db.tx.GetRange(kr, fdb.RangeOptions{Mode: fdb.StreamingModeWantAll}).GetSliceOrPanic()
-
-		models := make([]Model, 0, len(rows))
-
-		for i := range rows {
-			models = append(models, f(rows[i].Key[12:]))
+			select {
+			case <-wc:
+			case <-ctx.Done():
+				wait.Cancel()
+				return nil, ctx.Err()
+			}
 		}
 
-		if err := db.Load(models...); err != nil {
-			log.Printf("queue load error = %+v", err)
+		if m, wait, err = db.qReady(ctx, qtype, fabric); err != nil {
+			return
+		}
+	}
+
+	return m, nil
+}
+
+func (db *v610db) watchKey(qtype uint16) fdb.Key {
+	watch := make(fdb.Key, 2+2+2)
+	binary.BigEndian.PutUint16(watch[0:2], db.conn.DB())
+	binary.BigEndian.PutUint16(watch[2:4], qtype)
+	binary.BigEndian.PutUint16(watch[4:6], 0xFFFF)
+	return watch
+}
+
+func (db *v610db) ackPrefix(qtype uint16) []byte {
+	var prefix [5]byte
+	binary.BigEndian.PutUint16(prefix[0:2], db.conn.DB())
+	binary.BigEndian.PutUint16(prefix[2:4], qtype)
+	prefix[4] = 0xFF
+	return prefix[:]
+}
+
+func (db *v610db) prefixKey(prefix []byte, m Model) (fdb.Key, error) {
+	mid := m.ID()
+	key := make(fdb.Key, len(prefix)+len(mid))
+
+	if n := copy(key[:len(prefix)], prefix); n != len(prefix) {
+		return nil, ErrMemFail.WithStack()
+	}
+
+	if n := copy(key[len(prefix):], mid); n != len(mid) {
+		return nil, ErrMemFail.WithStack()
+	}
+
+	return key, nil
+}
+
+func (db *v610db) qReady(ctx context.Context, qtype uint16, f Fabric) (m Model, wait fdb.FutureNil, err error) {
+	dbtype := db.conn.DB()
+	prefix := db.ackPrefix(qtype)
+
+	// last byte is zero, that's what we need
+	begin := make(fdb.Key, 2+2+1)
+	binary.BigEndian.PutUint16(begin[0:2], dbtype)
+	binary.BigEndian.PutUint16(begin[2:4], qtype)
+
+	// all rows before now
+	end := make(fdb.Key, 2+2+8)
+	binary.BigEndian.PutUint16(end[0:2], dbtype)
+	binary.BigEndian.PutUint16(end[2:4], qtype)
+	binary.BigEndian.PutUint64(end[4:12], uint64(time.Now().UnixNano()))
+
+	kr := fdb.KeyRange{Begin: begin, End: end}
+	db.tx.AddWriteConflictRange(kr)
+
+	rows := db.tx.GetRange(kr, fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: 1}).GetSliceOrPanic()
+
+	m = f(rows[i].Key[12:])
+	if err = db.Load(m); err != nil {
+		return
+	}
+
+	var db2 DB
+	var ack fdb.Key
+
+	// select all available rows in self transaction
+	wait = nil
+	_, err = db.conn.fdb.Transact(func(tx fdb.Transaction) (_ interface{}, e error) {
+
+		if len(rows) == 0 {
+			wait = tx.Watch(db.watchKey(qtype))
+			return nil, nil
+		}
+
+		log.Printf("db = %p", db)
+		log.Printf("rows = %+v", rows)
+
+		models := make([]Model, 0, len(rows))
+		mukeys := make(map[int]fdb.Key, len(rows))
+
+		for i := range rows {
+			mid := rows[i].Key[12:]
+			models = append(models, f(mid))
+			mukeys[i] = rows[i].Key
+		}
+
+		if db2, err = newV610db(db.conn, tx); err != nil {
+			return
+		}
+
+		if e = db2.Load(models...); e != nil {
 			return
 		}
 
 		for i := range models {
-			select {
-			case res <- models[i]:
-				if keya, err = db.conn.Key(qtype, append([]byte{0xFF}, models[i].ID()...)); err != nil {
-					log.Printf("queue sent to ack error = %+v", err)
-					return
-				}
-				db.tx.Set(fdb.Key(keya), nil)
-			case <-ctx.Done():
+			// total cnt
+			if *cnt >= limit {
 				return
 			}
 
+			select {
+			case res <- models[i]:
+				if ack, e = db.prefixKey(prefix, models[i]); e != nil {
+					return
+				}
+				log.Printf("key = %s", mukeys[i])
+				tx.Clear(mukeys[i])
+				tx.Set(ack, nil)
+				*cnt++
+			case <-ctx.Done():
+				log.Printf("=-=-=-=-!!!!!!")
+				return
+			}
 		}
+		return nil, nil
+	})
 
-	}()
-
-	return res, nil
+	return wait, err
 }
 
 func (db *v610db) Ack(qtype uint16, m Model) (err error) {
-	var keya []byte
+	var ack fdb.Key
 
-	if keya, err = db.conn.Key(qtype, append([]byte{0xFF}, m.ID()...)); err != nil {
+	if ack, err = db.prefixKey(db.ackPrefix(qtype), m); err != nil {
 		return
 	}
 
-	db.tx.Clear(fdb.Key(keya))
+	db.tx.Clear(ack)
 	return nil
 }
 
 func (db *v610db) Lost(qtype uint16, limit int, f Fabric) (models []Model, err error) {
-	var keya []byte
-
-	if keya, err = db.conn.Key(qtype, []byte{0xFF}); err != nil {
-		return
-	}
-
 	var kr fdb.KeyRange
 
-	if kr, err = fdb.PrefixRange(keya); err != nil {
+	if kr, err = fdb.PrefixRange(db.ackPrefix(qtype)); err != nil {
 		return
 	}
 
 	rows := db.tx.GetRange(kr, fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: limit}).GetSliceOrPanic()
 
-	models = make([]Model, 0, len(rows))
-
+	models = make([]Model, len(rows))
 	for i := range rows {
-		models = append(models, f(rows[i].Key[12:]))
+		models[i] = f(rows[i].Key[12:])
 	}
-
 	return models, db.Load(models...)
 }

@@ -17,6 +17,7 @@ type Conn interface {
 	Key(ctype uint16, id []byte) ([]byte, error)
 	MKey(Model) ([]byte, error)
 
+	ClearDB() error
 	Tx(TxHandler) error
 
 	Indexes(ctype uint16) []Index

@@ -61,6 +61,8 @@ func (c *v610Conn) MKey(m Model) ([]byte, error) {
 	return c.Key(m.Type(), m.ID())
 }
 
+func (c *v610Conn) ClearDB() error { return c.Tx(func(db DB) error { return db.Clear() }) }
+
 func (c *v610Conn) Tx(h TxHandler) error {
 	_, exp := c.fdb.Transact(func(tx fdb.Transaction) (_ interface{}, err error) {
 		var db DB

@@ -2,8 +2,11 @@ package fdbx_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/shestakovda/fdbx"
@@ -14,17 +17,26 @@ func TestConn(t *testing.T) {
 	const db = 1
 	const skey = "test key"
 	const skey2 = "test key 2"
+	const skey3 = "test key 3"
+	const skey4 = "test key 4"
 	const ctype = 2
+	const qtype = 3
 
 	var data []byte
 	var tkey = []byte(skey)
 	var tdata = []byte("test data")
 	var tdata2 = []byte("test data 2")
+	var tdata3 = []byte("test data 3")
+	var tdata4 = []byte("test data 4")
 	var terr = errors.New("test err")
 
 	c1, err := fdbx.NewConn(db, fdbx.ConnVersion610)
 	assert.NoError(t, err)
 	assert.NotNil(t, c1)
+
+	// ************ Clear All ************
+
+	assert.NoError(t, c1.ClearDB())
 
 	// ************ Key ************
 
@@ -87,16 +99,16 @@ func TestConn(t *testing.T) {
 
 	m1 := &testModel{key: skey, ctype: ctype, data: tdata}
 	m2 := &testModel{key: skey2, ctype: ctype, data: tdata2}
-	m3 := &testModel{key: skey, ctype: ctype}
-	m4 := &testModel{key: skey2, ctype: ctype}
+	m5 := &testModel{key: skey, ctype: ctype}
+	m6 := &testModel{key: skey2, ctype: ctype}
 
 	k1, err := c1.MKey(m1)
 	assert.NoError(t, err)
 	k2, err := c1.MKey(m2)
 	assert.NoError(t, err)
-	k3, err := c1.MKey(m3)
+	k3, err := c1.MKey(m5)
 	assert.NoError(t, err)
-	k4, err := c1.MKey(m4)
+	k4, err := c1.MKey(m6)
 	assert.NoError(t, err)
 	assert.Equal(t, k1, k3)
 	assert.Equal(t, k2, k4)
@@ -109,11 +121,81 @@ func TestConn(t *testing.T) {
 			return
 		}
 
-		return db.Load(m3, m4)
+		return db.Load(m5, m6)
 	}))
 
-	assert.Equal(t, m1.Dump(), m3.Dump())
-	assert.Equal(t, m2.Dump(), m4.Dump())
+	assert.Equal(t, m1.Dump(), m5.Dump())
+	assert.Equal(t, m2.Dump(), m6.Dump())
+
+	// ************ DB.Pub/DB.Sub ************
+
+	m3 := &testModel{key: skey3, ctype: ctype, data: tdata3}
+	m4 := &testModel{key: skey4, ctype: ctype, data: tdata4}
+
+	// publish 3 tasks
+	assert.NoError(t, c1.Tx(func(db fdbx.DB) (e error) {
+		if e = db.Save(m3, m4); e != nil {
+			return
+		}
+		if e = db.Pub(qtype, m1, time.Now()); e != nil {
+			return
+		}
+		time.Sleep(time.Millisecond)
+		if e = db.Pub(qtype, m2, time.Now()); e != nil {
+			return
+		}
+		time.Sleep(time.Millisecond)
+		if e = db.Pub(qtype, m3, time.Now()); e != nil {
+			return
+		}
+		return nil
+	}))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	fab := func(id []byte) fdbx.Model { return &testModel{key: string(id)} }
+	wrk := func(s string) {
+		var errc <-chan error
+		var modc <-chan fdbx.Model
+
+		defer wg.Done()
+
+		mods := make([]fdbx.Model, 0, 2)
+		errs := make([]error, 0, 2)
+
+		assert.NoError(t, c1.Tx(func(db fdbx.DB) error {
+			modc, errc = db.Sub(ctx, qtype, 2, fab)
+			return nil
+		}))
+
+		for m := range modc {
+			mods = append(mods, m)
+		}
+
+		for e := range errc {
+			errs = append(errs, e)
+		}
+
+		assert.Len(t, mods, 2)
+		assert.Len(t, errs, 0)
+		assert.Equal(t, s, string(mods[1].ID()))
+	}
+
+	// 1 worker get 2 tasks and exit
+	// 2 worker get 1 task and wait
+	go wrk(skey2)
+	go wrk(skey4)
+
+	// publish 4 task
+	assert.NoError(t, c1.Tx(func(db fdbx.DB) (e error) {
+		return db.Pub(qtype, m4, time.Now())
+	}))
+	wg.Wait()
+	assert.False(t, true)
 }
 
 func BenchmarkSaveOneBig(b *testing.B) {
