@@ -11,7 +11,7 @@ const (
 type TxHandler func(DB) error
 
 // Index - calc index key from model buffer
-type Index func([]byte) ([]byte, error)
+type Index func([]byte) (fdb.Key, error)
 
 // Conn - database connection (as stored database index)
 type Conn interface {

@@ -24,7 +24,6 @@ type v610queue struct {
 }
 
 func (q *v610queue) Ack(db DB, m Model) error {
-
 	if db == nil {
 		return ErrNullDB.WithStack()
 	}
@@ -37,7 +36,6 @@ func (q *v610queue) Ack(db DB, m Model) error {
 }
 
 func (q *v610queue) Pub(db DB, m Model, t time.Time) (err error) {
-
 	if db == nil {
 		return ErrNullDB.WithStack()
 	}
@@ -119,7 +117,6 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Model, err e
 	var wait fdb.FutureNil
 
 	for len(list) < limit {
-
 		if wait != nil {
 			wc := make(chan struct{}, 1)
 			go func() { defer close(wc); wait.BlockUntilReady(); wc <- struct{}{} }()
@@ -157,7 +154,9 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Model, err e
 			}
 
 			// must lock this range from parallel reads
-			tx.AddWriteConflictRange(kr)
+			if e = tx.AddWriteConflictRange(kr); e != nil {
+				return
+			}
 
 			opts := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: lim}
 

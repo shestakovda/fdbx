@@ -54,35 +54,35 @@ func (db *v610db) Clear() error {
 }
 
 func (db *v610db) Get(ctype uint16, id []byte) (_ []byte, err error) {
-	var key []byte
+	var key fdb.Key
 
 	if key, err = db.conn.Key(ctype, id); err != nil {
 		return
 	}
 
-	return db.tx.Get(fdb.Key(key)).Get()
+	return db.tx.Get(key).Get()
 }
 
 func (db *v610db) Set(ctype uint16, id, value []byte) (err error) {
-	var key []byte
+	var key fdb.Key
 
 	if key, err = db.conn.Key(ctype, id); err != nil {
 		return
 	}
 
-	db.tx.Set(fdb.Key(key), value)
+	db.tx.Set(key, value)
 
 	return nil
 }
 
 func (db *v610db) Del(ctype uint16, id []byte) (err error) {
-	var key []byte
+	var key fdb.Key
 
 	if key, err = db.conn.Key(ctype, id); err != nil {
 		return
 	}
 
-	db.tx.Clear(fdb.Key(key))
+	db.tx.Clear(key)
 
 	return nil
 }
@@ -98,7 +98,7 @@ func (db *v610db) Save(models ...Model) (err error) {
 }
 
 func (db *v610db) Load(models ...Model) (err error) {
-	var key []byte
+	var key fdb.Key
 
 	// query all futures to leverage wait time
 	futures := make([]fdb.FutureByteSlice, 0, len(models))
@@ -108,7 +108,7 @@ func (db *v610db) Load(models ...Model) (err error) {
 			return
 		}
 
-		futures = append(futures, db.tx.Get(fdb.Key(key)))
+		futures = append(futures, db.tx.Get(key))
 	}
 
 	for i := range futures {
@@ -120,9 +120,82 @@ func (db *v610db) Load(models ...Model) (err error) {
 	return nil
 }
 
+func (db *v610db) Drop(models ...Model) (err error) {
+	keys := make(map[int]fdb.Key, len(models))
+	futures := make([]fdb.FutureByteSlice, 0, len(models))
+
+	for i := range models {
+		if keys[i], err = db.conn.MKey(models[i]); err != nil {
+			return
+		}
+
+		futures = append(futures, db.tx.Get(keys[i]))
+	}
+
+	for i := range futures {
+		if err = db.drop(models[i], futures[i]); err != nil {
+			return
+		}
+
+		db.tx.Clear(keys[i])
+	}
+
+	return nil
+}
+
+// *********** private ***********
+
+func (db *v610db) drop(m Model, fb fdb.FutureByteSlice) (err error) {
+	var idx fdb.Key
+	var value, dump []byte
+
+	if value, err = fb.Get(); err != nil {
+		return
+	}
+
+	if len(value) == 0 {
+		return nil
+	}
+
+	flags := value[0]
+	value = value[1:]
+
+	// blob data
+	if flags&flagChunk > 0 {
+		if dump, err = db.loadBlob(value); err != nil {
+			return
+		}
+
+		if err = db.dropBlob(value); err != nil {
+			return
+		}
+	} else {
+		dump = value
+	}
+
+	// gzip data
+	if flags&flagGZip > 0 {
+		if dump, err = db.gunzipValue(dump); err != nil {
+			return
+		}
+	}
+
+	// plain buffer needed for index calc
+	for _, index := range db.conn.Indexes(m.Type()) {
+		if idx, err = index(dump); err != nil {
+			return
+		}
+
+		db.tx.Clear(idx)
+	}
+
+	return nil
+}
+
 func (db *v610db) save(m Model) (err error) {
 	var flags uint8
-	var value, key, idx []byte
+	var value []byte
+	var key, idx fdb.Key
 
 	// basic model key
 	if key, err = db.conn.MKey(m); err != nil {
@@ -139,7 +212,7 @@ func (db *v610db) save(m Model) (err error) {
 				return
 			}
 
-			db.tx.Clear(fdb.Key(idx))
+			db.tx.Clear(idx)
 		}
 	}
 
@@ -154,7 +227,7 @@ func (db *v610db) save(m Model) (err error) {
 			return
 		}
 
-		db.tx.Set(fdb.Key(idx), nil)
+		db.tx.Set(idx, nil)
 	}
 
 	// so long, try to reduce
@@ -171,7 +244,7 @@ func (db *v610db) save(m Model) (err error) {
 		}
 	}
 
-	db.tx.Set(fdb.Key(key), append([]byte{flags}, value...))
+	db.tx.Set(key, append([]byte{flags}, value...))
 	return nil
 }
 
@@ -314,14 +387,14 @@ func (db *v610db) saveBlob(flags *uint8, blob []byte) (value []byte, err error) 
 }
 
 func (db *v610db) loadBlob(value []byte) (blob []byte, err error) {
-	var key []byte
+	var key fdb.Key
 	var kv fdb.KeyValue
 
 	if key, err = db.conn.Key(ChunkType, value); err != nil {
 		return
 	}
 
-	kr := fdb.KeyRange{Begin: fdb.Key(append(key, 0)), End: fdb.Key(append(key, 255))}
+	kr := fdb.KeyRange{Begin: key, End: fdb.Key(append(key, 255))}
 	res := db.tx.GetRange(kr, fdb.RangeOptions{Mode: fdb.StreamingModeIterator}).Iterator()
 
 	for res.Advance() {
@@ -331,4 +404,15 @@ func (db *v610db) loadBlob(value []byte) (blob []byte, err error) {
 		blob = append(blob, kv.Value...)
 	}
 	return blob, nil
+}
+
+func (db *v610db) dropBlob(value []byte) (err error) {
+	var key fdb.Key
+
+	if key, err = db.conn.Key(ChunkType, value); err != nil {
+		return
+	}
+
+	db.tx.ClearRange(fdb.KeyRange{Begin: key, End: fdb.Key(append(key, 255))})
+	return nil
 }

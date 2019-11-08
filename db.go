@@ -10,6 +10,7 @@ type DB interface {
 
 	Save(...Model) error
 	Load(...Model) error
+	Drop(...Model) error
 
 	// Select(ctx context.Context, ctype uint16, c Cursor, opts ...Option) (<-chan Model, error)
 }

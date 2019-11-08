@@ -245,6 +245,10 @@ func TestConn(t *testing.T) {
 	assert.Equal(t, skey2, string(mods[1].ID()))
 	assert.Equal(t, skey3, string(mods[2].ID()))
 
+	// ************ DB.Drop ************
+
+	assert.NoError(t, c1.Tx(func(db fdbx.DB) (e error) { return db.Drop(m1, m2, m3, m4) }))
+
 	// assert.False(t, true)
 }
 
