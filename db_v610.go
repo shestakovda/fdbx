@@ -11,7 +11,7 @@ import (
 )
 
 // ChunkType is collection number for storing blob chunks. Default uint16 max value
-var ChunkType = uint16(65535)
+var ChunkType = uint16(0xFFFF)
 
 // ChunkSize is max chunk length. Default 100 Kb - fdb value limit
 var ChunkSize = 100000
@@ -38,7 +38,7 @@ type v610db struct {
 	tx   fdb.Transaction
 }
 
-func (db *v610db) Clear() error {
+func (db *v610db) ClearAll() error {
 	dbtype := db.conn.DB()
 
 	// all plain data
@@ -143,11 +143,128 @@ func (db *v610db) Drop(models ...Model) (err error) {
 	return nil
 }
 
+func (db *v610db) Select(ctype uint16, fab Fabric, opts ...Option) (list []Model, err error) {
+	var m Model
+	var kr fdb.KeyRange
+	var mid, value []byte
+
+	o := new(options)
+
+	for i := range opts {
+		if err = opts[i](o); err != nil {
+			return
+		}
+	}
+
+	ro := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll}
+
+	if o.limit > 0 {
+		ro.Limit = o.limit
+	}
+
+	gte := []byte{0x00}
+	if o.gte != nil {
+		gte = o.gte
+	}
+
+	if kr.Begin, err = db.conn.Key(ctype, gte); err != nil {
+		return
+	}
+
+	lt := []byte{0xFF}
+	if o.lt != nil {
+		lt = o.lt
+	}
+
+	if kr.End, err = db.conn.Key(ctype, lt); err != nil {
+		return
+	}
+
+	rows := db.tx.GetRange(kr, ro).GetSliceOrPanic()
+	list = make([]Model, 0, len(rows))
+	for i := range rows {
+		if o.idlen > 0 {
+			in := len(rows[i].Key) - o.idlen
+			mid = rows[i].Key[in:]
+		} else if o.pflen > 0 {
+			mid = rows[i].Key[o.pflen:]
+		}
+
+		if _, value, err = db.unpack(rows[i].Value); err != nil {
+			return
+		}
+
+		add := true
+		if o.filter != nil {
+			if add, err = o.filter(value); err != nil {
+				return
+			}
+		}
+
+		if !add {
+			continue
+		}
+
+		m = fab(mid)
+
+		if err = m.Load(value); err != nil {
+			return
+		}
+
+		list = append(list, m)
+
+	}
+	return list, nil
+}
+
 // *********** private ***********
+
+func (db *v610db) pack(buffer []byte) (_ []byte, err error) {
+	var flags uint8
+
+	// so long, try to reduce
+	if len(buffer) > GZipSize {
+		if buffer, err = db.gzipValue(&flags, buffer); err != nil {
+			return
+		}
+	}
+
+	// sooooooo long, we must split and save as blob
+	if len(buffer) > ChunkSize {
+		if buffer, err = db.saveBlob(&flags, buffer); err != nil {
+			return
+		}
+	}
+
+	return append([]byte{flags}, buffer...), nil
+}
+
+func (db *v610db) unpack(value []byte) (blobID, buffer []byte, err error) {
+	flags := value[0]
+	buffer = value[1:]
+
+	// blob data
+	if flags&flagChunk > 0 {
+		blobID = buffer
+
+		if buffer, err = db.loadBlob(buffer); err != nil {
+			return
+		}
+	}
+
+	// gzip data
+	if flags&flagGZip > 0 {
+		if buffer, err = db.gunzipValue(buffer); err != nil {
+			return
+		}
+	}
+
+	return blobID, buffer, nil
+}
 
 func (db *v610db) drop(m Model, fb fdb.FutureByteSlice) (err error) {
 	var idx fdb.Key
-	var value, dump []byte
+	var value, blobID []byte
 
 	if value, err = fb.Get(); err != nil {
 		return
@@ -157,32 +274,18 @@ func (db *v610db) drop(m Model, fb fdb.FutureByteSlice) (err error) {
 		return nil
 	}
 
-	flags := value[0]
-	value = value[1:]
-
-	// blob data
-	if flags&flagChunk > 0 {
-		if dump, err = db.loadBlob(value); err != nil {
-			return
-		}
-
-		if err = db.dropBlob(value); err != nil {
-			return
-		}
-	} else {
-		dump = value
+	if blobID, value, err = db.unpack(value); err != nil {
+		return
 	}
-
-	// gzip data
-	if flags&flagGZip > 0 {
-		if dump, err = db.gunzipValue(dump); err != nil {
+	if blobID != nil {
+		if err = db.dropBlob(blobID); err != nil {
 			return
 		}
 	}
 
 	// plain buffer needed for index calc
 	for _, index := range db.conn.Indexes(m.Type()) {
-		if idx, err = index(dump); err != nil {
+		if idx, err = index(value); err != nil {
 			return
 		}
 
@@ -193,7 +296,7 @@ func (db *v610db) drop(m Model, fb fdb.FutureByteSlice) (err error) {
 }
 
 func (db *v610db) save(m Model) (err error) {
-	var flags uint8
+
 	var value []byte
 	var key, idx fdb.Key
 
@@ -230,21 +333,11 @@ func (db *v610db) save(m Model) (err error) {
 		db.tx.Set(idx, nil)
 	}
 
-	// so long, try to reduce
-	if len(value) > GZipSize {
-		if value, err = db.gzipValue(&flags, value); err != nil {
-			return
-		}
+	if value, err = db.pack(value); err != nil {
+		return
 	}
 
-	// sooooooo long, we must split and save as blob
-	if len(value) > ChunkSize {
-		if value, err = db.saveBlob(&flags, value); err != nil {
-			return
-		}
-	}
-
-	db.tx.Set(key, append([]byte{flags}, value...))
+	db.tx.Set(key, value)
 	return nil
 }
 
@@ -260,34 +353,12 @@ func (db *v610db) load(m Model, fb fdb.FutureByteSlice) (err error) {
 		return nil
 	}
 
-	flags := value[0]
-	value = value[1:]
-
-	// blob data
-	if flags&flagChunk > 0 {
-		if value, err = db.loadBlob(value); err != nil {
-			return
-		}
-	}
-
-	if len(value) == 0 {
-		// it's model responsibility for loading control
-		return nil
-	}
-
-	// gzip data
-	if flags&flagGZip > 0 {
-		if value, err = db.gunzipValue(value); err != nil {
-			return
-		}
-	}
-
-	// plain buffer
-	if err = m.Load(value); err != nil {
+	if _, value, err = db.unpack(value); err != nil {
 		return
 	}
 
-	return nil
+	// plain buffer
+	return m.Load(value)
 }
 
 func (db *v610db) gzipValue(flags *uint8, value []byte) ([]byte, error) {

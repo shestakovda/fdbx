@@ -2,7 +2,7 @@ package fdbx
 
 // DB - database object that holds connection for transaction handler
 type DB interface {
-	Clear() error
+	ClearAll() error
 
 	Set(ctype uint16, id, value []byte) error
 	Get(ctype uint16, id []byte) ([]byte, error)
@@ -12,5 +12,5 @@ type DB interface {
 	Load(...Model) error
 	Drop(...Model) error
 
-	// Select(ctx context.Context, ctype uint16, c Cursor, opts ...Option) (<-chan Model, error)
+	Select(ctype uint16, fab Fabric, opts ...Option) ([]Model, error)
 }

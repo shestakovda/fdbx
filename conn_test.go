@@ -130,7 +130,8 @@ func TestConn(t *testing.T) {
 
 	// ************ Queue Pub/Sub ************
 
-	queue := c1.Queue(qtype, func(id []byte) fdbx.Model { return &testModel{key: string(id), ctype: ctype} })
+	fab := func(id []byte) fdbx.Model { return &testModel{key: string(id), ctype: ctype} }
+	queue := c1.Queue(qtype, fab)
 
 	m3 := &testModel{key: skey3, ctype: ctype, data: tdata3}
 	m4 := &testModel{key: skey4, ctype: ctype, data: tdata4}
@@ -244,6 +245,34 @@ func TestConn(t *testing.T) {
 	assert.Equal(t, skey, string(mods[0].ID()))
 	assert.Equal(t, skey2, string(mods[1].ID()))
 	assert.Equal(t, skey3, string(mods[2].ID()))
+
+	// ************ DB.Select ************
+
+	var list []fdbx.Model
+
+	predicat := func(buf []byte) (bool, error) {
+		if string(buf) == string(tdata2) {
+			return false, nil
+		}
+		return true, nil
+	}
+
+	assert.NoError(t, c1.Tx(func(db fdbx.DB) (e error) {
+		list, e = db.Select(
+			ctype, fab,
+			fdbx.Limit(3),
+			fdbx.PrefixLen(4),
+			fdbx.Filter(predicat),
+			fdbx.GTE([]byte{0x00}),
+			fdbx.LT([]byte{0xFF}),
+		)
+		return
+	}))
+	assert.Len(t, list, 2)
+	assert.Equal(t, skey, string(list[0].ID()))
+	assert.Equal(t, skey3, string(list[1].ID()))
+	assert.Equal(t, string(tdata), string(list[0].Dump()))
+	assert.Equal(t, string(tdata3), string(list[1].Dump()))
 
 	// ************ DB.Drop ************
 
