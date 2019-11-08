@@ -35,12 +35,12 @@ type v610Conn struct {
 
 func (c *v610Conn) DB() uint16 { return c.db }
 
-func (c *v610Conn) Key(ctype uint16, id []byte) ([]byte, error) {
+func (c *v610Conn) Key(ctype uint16, id []byte) (fdb.Key, error) {
 	if len(id) == 0 {
 		return nil, ErrEmptyID.WithStack()
 	}
 
-	key := make([]byte, 4+len(id))
+	key := make(fdb.Key, 4+len(id))
 
 	// zero values is supported
 	binary.BigEndian.PutUint16(key[0:2], c.db)
@@ -53,7 +53,7 @@ func (c *v610Conn) Key(ctype uint16, id []byte) ([]byte, error) {
 	return key, nil
 }
 
-func (c *v610Conn) MKey(m Model) ([]byte, error) {
+func (c *v610Conn) MKey(m Model) (fdb.Key, error) {
 	if m == nil {
 		return nil, ErrNullModel.WithStack()
 	}
@@ -88,4 +88,8 @@ func (c *v610Conn) AddIndex(ctype uint16, index Index) {
 	c.Lock()
 	defer c.Unlock()
 	c.indexes[ctype] = append(c.indexes[ctype], index)
+}
+
+func (c *v610Conn) Queue(qtype uint16, f Fabric) Queue {
+	return newV610queue(c, qtype, f)
 }

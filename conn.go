@@ -1,5 +1,7 @@
 package fdbx
 
+import "github.com/apple/foundationdb/bindings/go/src/fdb"
+
 // Supported FoundationDB client versions
 const (
 	ConnVersion610 = 610
@@ -14,14 +16,16 @@ type Index func([]byte) ([]byte, error)
 // Conn - database connection (as stored database index)
 type Conn interface {
 	DB() uint16
-	Key(ctype uint16, id []byte) ([]byte, error)
-	MKey(Model) ([]byte, error)
+	Key(ctype uint16, id []byte) (fdb.Key, error)
+	MKey(Model) (fdb.Key, error)
 
 	ClearDB() error
 	Tx(TxHandler) error
 
 	Indexes(ctype uint16) []Index
 	AddIndex(ctype uint16, index Index)
+
+	Queue(qtype uint16, f Fabric) Queue
 }
 
 // NewConn - makes new connection with specified client version

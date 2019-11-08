@@ -15,11 +15,3 @@ type Cursor interface {
 	LastKey() []byte
 	Created() time.Time
 }
-
-// Queue -
-type Queue interface {
-	Ack(Model) error
-	Pub(Model, time.Time) error
-	Sub() (<-chan Model, error)
-	Lost() ([]Model, error)
-}

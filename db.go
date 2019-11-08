@@ -1,10 +1,5 @@
 package fdbx
 
-import (
-	"context"
-	"time"
-)
-
 // DB - database object that holds connection for transaction handler
 type DB interface {
 	Clear() error
@@ -17,9 +12,4 @@ type DB interface {
 	Load(...Model) error
 
 	// Select(ctx context.Context, ctype uint16, c Cursor, opts ...Option) (<-chan Model, error)
-
-	Ack(uint16, Model) error
-	Pub(uint16, Model, time.Time) error
-	Sub(context.Context, uint16, int, Fabric) (<-chan Model, <-chan error)
-	Lost(uint16, int, Fabric) ([]Model, error)
 }
