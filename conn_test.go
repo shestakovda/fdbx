@@ -130,7 +130,7 @@ func TestConn(t *testing.T) {
 
 	// ************ Queue Pub/Sub ************
 
-	fab := func(id []byte) fdbx.Model { return &testModel{key: string(id), ctype: ctype} }
+	fab := func(id []byte) (fdbx.Model, error) { return &testModel{key: string(id), ctype: ctype}, nil }
 	queue := c1.Queue(qtype, fab)
 
 	m3 := &testModel{key: skey3, ctype: ctype, data: tdata3}

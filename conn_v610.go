@@ -1,17 +1,11 @@
 package fdbx
 
 import (
-	"encoding/binary"
-	"sync"
-
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
 
 func newV610Conn(db uint16) (conn *v610Conn, err error) {
-	conn = &v610Conn{
-		db:      db,
-		indexes: make(map[uint16][]Index, 8),
-	}
+	conn = &v610Conn{baseConn: newBaseConn(db)}
 
 	// Installed version check
 	if err = fdb.APIVersion(ConnVersion610); err != nil {
@@ -27,38 +21,8 @@ func newV610Conn(db uint16) (conn *v610Conn, err error) {
 }
 
 type v610Conn struct {
-	sync.RWMutex
-	db      uint16
-	fdb     fdb.Database
-	indexes map[uint16][]Index
-}
-
-func (c *v610Conn) DB() uint16 { return c.db }
-
-func (c *v610Conn) Key(ctype uint16, id []byte) (fdb.Key, error) {
-	if len(id) == 0 {
-		return nil, ErrEmptyID.WithStack()
-	}
-
-	key := make(fdb.Key, 4+len(id))
-
-	// zero values is supported
-	binary.BigEndian.PutUint16(key[0:2], c.db)
-	binary.BigEndian.PutUint16(key[2:4], ctype)
-
-	if n := copy(key[4:], id); n != len(id) {
-		return nil, ErrMemFail.WithStack()
-	}
-
-	return key, nil
-}
-
-func (c *v610Conn) MKey(m Model) (fdb.Key, error) {
-	if m == nil {
-		return nil, ErrNullModel.WithStack()
-	}
-
-	return c.Key(m.Type(), m.ID())
+	*baseConn
+	fdb fdb.Database
 }
 
 func (c *v610Conn) ClearDB() error { return c.Tx(func(db DB) error { return db.ClearAll() }) }
@@ -77,19 +41,4 @@ func (c *v610Conn) Tx(h TxHandler) error {
 	return exp
 }
 
-func (c *v610Conn) Indexes(ctype uint16) []Index {
-	c.RLock()
-	defer c.RUnlock()
-
-	return c.indexes[ctype]
-}
-
-func (c *v610Conn) AddIndex(ctype uint16, index Index) {
-	c.Lock()
-	defer c.Unlock()
-	c.indexes[ctype] = append(c.indexes[ctype], index)
-}
-
-func (c *v610Conn) Queue(qtype uint16, f Fabric) Queue {
-	return newV610queue(c, qtype, f)
-}
+func (c *v610Conn) Queue(qtype uint16, f Fabric) Queue { return newV610queue(c, qtype, f) }

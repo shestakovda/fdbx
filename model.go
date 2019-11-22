@@ -1,8 +1,5 @@
 package fdbx
 
-// Fabric - model fabric func
-type Fabric func(id []byte) Model
-
 // Predicat - for query filtering, especially for seq scan queries
 type Predicat func(buf []byte) (bool, error)
 

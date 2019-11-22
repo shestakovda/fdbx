@@ -198,7 +198,9 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Model, err e
 
 		models := make([]Model, len(ids))
 		for i := range ids {
-			models[i] = q.mf(ids[i])
+			if models[i], err = q.mf(ids[i]); err != nil {
+				return
+			}
 		}
 
 		if err = q.cn.Tx(func(db DB) error { return db.Load(models...) }); err != nil {

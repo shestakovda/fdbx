@@ -4,7 +4,8 @@ import "github.com/apple/foundationdb/bindings/go/src/fdb"
 
 // Supported FoundationDB client versions
 const (
-	ConnVersion610 = 610
+	ConnVersionMock = 0xFFFF
+	ConnVersion610  = 610
 )
 
 // TxHandler -
@@ -12,6 +13,9 @@ type TxHandler func(DB) error
 
 // Index - calc index key from model buffer
 type Index func([]byte) (fdb.Key, error)
+
+// Fabric - model fabric func
+type Fabric func(id []byte) (Model, error)
 
 // Conn - database connection (as stored database index)
 type Conn interface {
@@ -36,6 +40,8 @@ func NewConn(db, version uint16) (Conn, error) {
 	}
 
 	switch version {
+	case ConnVersionMock:
+		return newMockConn(db)
 	case ConnVersion610:
 		return newV610Conn(db)
 	}

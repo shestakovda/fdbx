@@ -205,7 +205,9 @@ func (db *v610db) Select(ctype uint16, fab Fabric, opts ...Option) (list []Model
 			continue
 		}
 
-		m = fab(mid)
+		if m, err = fab(mid); err != nil {
+			return
+		}
 
 		if err = m.Load(value); err != nil {
 			return
