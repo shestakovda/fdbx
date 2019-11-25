@@ -9,15 +9,34 @@ type MockConn struct {
 	*baseConn
 
 	FClearDB func() error
-	FTx      func(TxHandler) error
 	FQueue   func(uint16, Fabric) Queue
+
+	FClearAll func() error
+
+	FSet func(ctype uint16, id, value []byte) error
+	FGet func(ctype uint16, id []byte) ([]byte, error)
+	FDel func(ctype uint16, id []byte) error
+
+	FSave func(...Model) error
+	FLoad func(...Model) error
+	FDrop func(...Model) error
+
+	FSelect func(ctype uint16, fab Fabric, opts ...Option) ([]Model, error)
 }
 
 // ClearDB - clear stub, set FClearDB before usage
-func (m *MockConn) ClearDB() error { return m.FClearDB() }
+func (c *MockConn) ClearDB() error { return c.FClearDB() }
 
-// Tx - tx stub, set FTx before usage
-func (m *MockConn) Tx(h TxHandler) error { return m.FTx(h) }
+// Tx - tx stub, create MockDB object
+func (c *MockConn) Tx(h TxHandler) (err error) {
+	var db DB
+
+	if db, err = newMockDB(c); err != nil {
+		return
+	}
+
+	return h(db)
+}
 
 // Queue - clear stub, set FQueue before usage
-func (m *MockConn) Queue(qtype uint16, f Fabric) Queue { return m.FQueue(qtype, f) }
+func (c *MockConn) Queue(qtype uint16, f Fabric) Queue { return c.FQueue(qtype, f) }

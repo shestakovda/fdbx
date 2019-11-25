@@ -4,8 +4,8 @@ import "github.com/apple/foundationdb/bindings/go/src/fdb"
 
 // Supported FoundationDB client versions
 const (
-	ConnVersionMock = 0xFFFF
 	ConnVersion610  = 610
+	ConnVersionMock = 0xFFFF
 )
 
 // TxHandler -
@@ -40,10 +40,10 @@ func NewConn(db, version uint16) (Conn, error) {
 	}
 
 	switch version {
-	case ConnVersionMock:
-		return newMockConn(db)
 	case ConnVersion610:
 		return newV610Conn(db)
+	case ConnVersionMock:
+		return newMockConn(db)
 	}
 
 	return nil, ErrUnknownVersion
