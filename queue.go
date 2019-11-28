@@ -16,4 +16,6 @@ type Queue interface {
 	SubList(ctx context.Context, limit int) ([]Model, error)
 
 	GetLost(limit int) ([]Model, error)
+
+	Settings() (uint16, Fabric)
 }

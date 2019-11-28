@@ -216,3 +216,5 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Model, err e
 func (q *v610queue) GetLost(limit int) ([]Model, error) {
 	return nil, nil
 }
+
+func (q *v610queue) Settings() (uint16, Fabric) { return q.id, q.mf }

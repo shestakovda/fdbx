@@ -31,6 +31,16 @@ func TestConn(t *testing.T) {
 	var tdata4 = []byte("test data 4")
 	var terr = errors.New("test err")
 
+	// ************ MockConn ************
+
+	mc, err := fdbx.NewConn(db, fdbx.ConnVersionMock)
+	assert.NoError(t, err)
+	assert.NotNil(t, mc)
+	assert.NoError(t, mc.Tx(func(db fdbx.DB) error { return nil }))
+	assert.NotNil(t, mc.Queue(0, nil))
+
+	// ************ v610Conn ************
+
 	c1, err := fdbx.NewConn(db, fdbx.ConnVersion610)
 	assert.NoError(t, err)
 	assert.NotNil(t, c1)
