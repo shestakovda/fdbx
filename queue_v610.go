@@ -137,7 +137,7 @@ func (q *v610queue) nextTaskDistance() (d time.Duration, err error) {
 	_, err = q.cn.fdb.ReadTransact(func(tx fdb.ReadTransaction) (_ interface{}, e error) {
 		rows := tx.GetRange(q.kr, fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: 1}).GetSliceOrPanic()
 		if len(rows) > 0 {
-			if wait := time.Since(time.Unix(0, int64(binary.BigEndian.Uint64(rows[0].Key[4:12])))); wait > 0 {
+			if wait := time.Unix(0, int64(binary.BigEndian.Uint64(rows[0].Key[4:12]))).Sub(time.Now()); wait > 0 {
 				d = wait + time.Millisecond
 			}
 		}
