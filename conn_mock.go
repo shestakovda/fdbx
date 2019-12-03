@@ -45,4 +45,4 @@ func (c *MockConn) ClearDB() error { return c.FClearDB() }
 func (c *MockConn) Tx(h TxHandler) error { return h(newMockDB(c)) }
 
 // Queue - clear stub, set FQueue before usage
-func (c *MockConn) Queue(qtype uint16, f Fabric) Queue { return newMockQueue(c, qtype, f) }
+func (c *MockConn) Queue(qtype uint16, f Fabric) (Queue, error) { return newMockQueue(c, qtype, f) }

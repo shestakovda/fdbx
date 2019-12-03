@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-func newMockQueue(conn *MockConn, qtype uint16, f Fabric) *mockQueue {
-	return &mockQueue{MockConn: conn, id: qtype, mf: f}
+func newMockQueue(conn *MockConn, qtype uint16, f Fabric) (*mockQueue, error) {
+	return &mockQueue{MockConn: conn, id: qtype, mf: f}, nil
 }
 
 type mockQueue struct {

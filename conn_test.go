@@ -37,7 +37,9 @@ func TestConn(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, mc)
 	assert.NoError(t, mc.Tx(func(db fdbx.DB) error { return nil }))
-	assert.NotNil(t, mc.Queue(0, nil))
+	q, err := mc.Queue(0, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, q)
 
 	// ************ v610Conn ************
 
@@ -140,8 +142,11 @@ func TestConn(t *testing.T) {
 
 	// ************ Queue Pub/Sub ************
 
+	fdbx.PunchSize = 50 * time.Millisecond
+
 	fab := func(id []byte) (fdbx.Model, error) { return &testModel{key: string(id), ctype: ctype}, nil }
-	queue := c1.Queue(qtype, fab)
+	queue, err := c1.Queue(qtype, fab)
+	assert.NoError(t, err)
 
 	m3 := &testModel{key: skey3, ctype: ctype, data: tdata3}
 	m4 := &testModel{key: skey4, ctype: ctype, data: tdata4}

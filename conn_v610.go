@@ -41,4 +41,4 @@ func (c *v610Conn) Tx(h TxHandler) error {
 	return exp
 }
 
-func (c *v610Conn) Queue(qtype uint16, f Fabric) Queue { return newV610queue(c, qtype, f) }
+func (c *v610Conn) Queue(qtype uint16, f Fabric) (Queue, error) { return newV610queue(c, qtype, f) }

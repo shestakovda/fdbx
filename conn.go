@@ -29,7 +29,7 @@ type Conn interface {
 	Indexes(ctype uint16) []Index
 	AddIndex(ctype uint16, index Index)
 
-	Queue(qtype uint16, f Fabric) Queue
+	Queue(qtype uint16, f Fabric) (Queue, error)
 }
 
 // NewConn - makes new connection with specified client version
