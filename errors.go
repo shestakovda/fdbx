@@ -22,6 +22,7 @@ var (
 	ErrEmptyValue     = newError("empty value")
 	ErrInvalidGZ      = newError("invalid gzip value")
 	ErrQueuePanic     = newError("unknown panic in queue")
+	ErrIncompatibleDB = newError("incompatible DB object")
 )
 
 func newError(msg string) *fdbxError { return &fdbxError{message: msg} }

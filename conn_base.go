@@ -45,7 +45,7 @@ func (c *baseConn) MKey(m Model) (fdb.Key, error) {
 		return nil, ErrNullModel.WithStack()
 	}
 
-	return c.Key(m.Type(), m.ID())
+	return c.Key(m.Collection(), m.ID())
 }
 
 func (c *baseConn) Indexes(ctype uint16) []Index {

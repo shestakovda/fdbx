@@ -10,18 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// ChunkType is collection number for storing blob chunks. Default uint16 max value
-var ChunkType = uint16(0xFFFF)
-
-// ChunkSize is max chunk length. Default 100 Kb - fdb value limit
-var ChunkSize = 100000
-
-// MaxChunkSize is max possible chunk size.
-const MaxChunkSize = 100000
-
-// GZipSize is a value len more then GZipSize cause gzip processing
-var GZipSize = 860
-
 const (
 	flagGZip  = uint8(1 << 6)
 	flagChunk = uint8(1 << 7)
@@ -209,7 +197,7 @@ func (db *v610db) Select(ctype uint16, fab Fabric, opts ...Option) (list []Model
 			return
 		}
 
-		if err = m.Load(value); err != nil {
+		if err = m.UnmarshalFdbx(value); err != nil {
 			return
 		}
 
@@ -286,7 +274,7 @@ func (db *v610db) drop(m Model, fb fdb.FutureByteSlice) (err error) {
 	}
 
 	// plain buffer needed for index calc
-	for _, index := range db.conn.Indexes(m.Type()) {
+	for _, index := range db.conn.Indexes(m.Collection()) {
 		if idx, err = index(value); err != nil {
 			return
 		}
@@ -308,21 +296,21 @@ func (db *v610db) save(m Model) (err error) {
 	}
 
 	// type index list
-	indexes := db.conn.Indexes(m.Type())
+	indexes := db.conn.Indexes(m.Collection())
 
-	// old data dump for index invalidate
-	if dump := m.Dump(); len(dump) > 0 {
-		for _, index := range indexes {
-			if idx, err = index(dump); err != nil {
-				return
-			}
+	// // old data dump for index invalidate
+	// if dump := m.Dump(); len(dump) > 0 {
+	// 	for _, index := range indexes {
+	// 		if idx, err = index(dump); err != nil {
+	// 			return
+	// 		}
 
-			db.tx.Clear(idx)
-		}
-	}
+	// 		db.tx.Clear(idx)
+	// 	}
+	// }
 
 	// plain object buffer
-	if value, err = m.Pack(); err != nil {
+	if value, err = m.MarshalFdbx(); err != nil {
 		return
 	}
 
@@ -360,7 +348,7 @@ func (db *v610db) load(m Model, fb fdb.FutureByteSlice) (err error) {
 	}
 
 	// plain buffer
-	return m.Load(value)
+	return m.UnmarshalFdbx(value)
 }
 
 func (db *v610db) gzipValue(flags *uint8, value []byte) ([]byte, error) {
@@ -488,4 +476,50 @@ func (db *v610db) dropBlob(value []byte) (err error) {
 
 	db.tx.ClearRange(fdb.KeyRange{Begin: key, End: fdb.Key(append(key, 255))})
 	return nil
+}
+
+func (db *v610db) getRange(
+	rng fdb.Range,
+	opt fdb.RangeOptions,
+	fab Fabric,
+	chk Predicat,
+) (list []Record, err error) {
+	var rec Record
+
+	rows := db.tx.GetRange(rng, opt).GetSliceOrPanic()
+	list = make([]Model, 0, len(rows))
+
+	for i := range rows {
+		klen := len(rows[i].Key)
+		idlen := rows[i].Key[klen-1]
+		recid = rows[i].Key[klen-idlen-1 : klen-2]
+
+		if _, value, err = db.unpack(rows[i].Value); err != nil {
+			return
+		}
+
+		skip := false
+		if chk != nil {
+			if skip, err = chk(value); err != nil {
+				return
+			}
+		}
+
+		if skip {
+			continue
+		}
+
+		if rec, err = fab(recid); err != nil {
+			return
+		}
+
+		if err = rec.UnmarshalFdbx(value); err != nil {
+			return
+		}
+
+		list = append(list, rec)
+
+	}
+
+	return list, nil
 }

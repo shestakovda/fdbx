@@ -42,6 +42,8 @@ type v610queue struct {
 	kr fdb.KeyRange
 }
 
+func (q *v610queue) Settings() (uint16, Fabric) { return q.id, q.mf }
+
 func (q *v610queue) Ack(db DB, m Model) error {
 	if db == nil {
 		return ErrNullDB.WithStack()
@@ -258,4 +260,3 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Model, err e
 }
 
 func (q *v610queue) GetLost(limit int) ([]Model, error) { return nil, nil }
-func (q *v610queue) Settings() (uint16, Fabric)         { return q.id, q.mf }
