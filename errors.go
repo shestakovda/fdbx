@@ -12,17 +12,18 @@ const stackTpl = "%s:%d -> %s()"
 
 // All package errors
 var (
-	ErrMemFail        = newError("Системная ошибка в работе памяти")
-	ErrUnknownVersion = newError("Запрос на подключение к неизвестной версии клиента")
-	ErrOldVersion     = newError("Подключение к устаревшей версии клиента")
-	ErrConnect        = newError("Ошибка подключения к СУБД")
-	ErrNullModel      = newError("undefined model")
+	ErrMemFail        = newError("memory error")
+	ErrUnknownVersion = newError("unknown client version")
+	ErrOldVersion     = newError("old client version")
+	ErrConnect        = newError("connection error")
+	ErrNullRecord     = newError("undefined record")
 	ErrNullDB         = newError("undefined db connection")
 	ErrEmptyID        = newError("empty identifier")
 	ErrEmptyValue     = newError("empty value")
 	ErrInvalidGZ      = newError("invalid gzip value")
 	ErrQueuePanic     = newError("unknown panic in queue")
 	ErrIncompatibleDB = newError("incompatible DB object")
+	ErrRecordNotFound = newError("record not found")
 )
 
 func newError(msg string) *fdbxError { return &fdbxError{message: msg} }

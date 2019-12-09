@@ -5,8 +5,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
 
 // Supported FoundationDB client versions
@@ -21,6 +19,9 @@ const (
 )
 
 var (
+	// CursorType is collection number for storing cursors
+	CursorType = uint16(0)
+
 	// ChunkType is collection number for storing blob chunks. Default uint16 max value
 	ChunkType = uint16(0xFFFF)
 
@@ -36,26 +37,26 @@ var (
 // TxHandler -
 type TxHandler func(DB) error
 
-// RecordIndexes - calc index keys from model buffer
-type RecordIndexes func(buffer []byte) (map[uint16][]byte, error)
+// IndexFunc - calc index keys from model buffer
+type IndexFunc func(buffer []byte) (map[uint16][]byte, error)
 
 // Fabric - model fabric func
 type Fabric func(id []byte) (Record, error)
 
 // Predicat - for query filtering, especially for seq scan queries
-type Predicat func(buf []byte) (bool, error)
+type Predicat func(Record) (bool, error)
 
 // Option -
 type Option func(*options) error
 
 // Conn - database connection (as stored database index)
 type Conn interface {
-	DB() uint16
-	Key(typeID uint16, id []byte) (fdb.Key, error)
-	MKey(Record) (fdb.Key, error)
+	RegisterIndex(recordTypeID uint16, idxFunc IndexFunc)
 
-	RecordIndexes(recordType uint16) RecordIndexes
-	RegisterIndexFabric(recordType uint16, index RecordIndexes)
+	// DB() uint16
+
+	// Key(typeID uint16, id []byte) (fdb.Key, error)
+	// MKey(Record) (fdb.Key, error)
 
 	ClearDB() error
 	Tx(TxHandler) error

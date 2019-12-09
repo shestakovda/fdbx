@@ -12,26 +12,17 @@ import (
 // PunchSize - размер ожидания в случае отсутствия задач
 var PunchSize = time.Minute
 
-func newV610queue(c *v610Conn, qtype uint16, f Fabric) (q *v610queue, err error) {
-	q = &v610queue{
-		id: qtype,
-		cn: c,
-		mf: f,
-	}
-
-	if q.kr.Begin, err = c.Key(qtype, []byte{0x00}); err != nil {
-		return
-	}
-
-	if q.kr.End, err = c.Key(qtype, []byte{0xFF}); err != nil {
-		return
-	}
-
-	if q.wk, err = q.cn.Key(qtype, []byte{0xFF, 0xFF}); err != nil {
-		return
-	}
-
-	return q, nil
+func newV610queue(conn *v610Conn, typeID uint16, fab Fabric) (*v610queue, error) {
+	return &v610queue{
+		id: typeID,
+		cn: conn,
+		mf: fab,
+		wk: conn.key(typeID, []byte{0xFF, 0xFF}),
+		kr: fdb.KeyRange{
+			Begin: conn.key(typeID, []byte{0x00}),
+			End:   conn.key(typeID, []byte{0xFF}),
+		},
+	}, nil
 }
 
 type v610queue struct {
@@ -44,32 +35,32 @@ type v610queue struct {
 
 func (q *v610queue) Settings() (uint16, Fabric) { return q.id, q.mf }
 
-func (q *v610queue) Ack(db DB, m Model) error {
+func (q *v610queue) Ack(db DB, rec Record) error {
 	if db == nil {
 		return ErrNullDB.WithStack()
 	}
 
-	if m == nil {
-		return ErrNullModel.WithStack()
+	if rec == nil {
+		return ErrNullRecord.WithStack()
 	}
 
-	return db.Del(q.id, append([]byte{0xFF}, m.ID()...))
+	return db.Del(q.id, append([]byte{0xFF}, rec.FdbxID()...))
 }
 
-func (q *v610queue) Pub(db DB, m Model, t time.Time) (err error) {
+func (q *v610queue) Pub(db DB, rec Record, t time.Time) (err error) {
 	if db == nil {
 		return ErrNullDB.WithStack()
 	}
 
-	if m == nil {
-		return ErrNullModel.WithStack()
+	if rec == nil {
+		return ErrNullRecord.WithStack()
 	}
 
 	if t.IsZero() {
 		t = time.Now()
 	}
 
-	mid := m.ID()
+	mid := rec.FdbxID()
 	key := make([]byte, 8+len(mid))
 	binary.BigEndian.PutUint64(key[:8], uint64(t.UnixNano()))
 
@@ -85,12 +76,12 @@ func (q *v610queue) Pub(db DB, m Model, t time.Time) (err error) {
 	return db.Set(q.id, []byte{0xFF, 0xFF}, key[:8])
 }
 
-func (q *v610queue) Sub(ctx context.Context) (<-chan Model, <-chan error) {
-	modc := make(chan Model)
+func (q *v610queue) Sub(ctx context.Context) (<-chan Record, <-chan error) {
+	modc := make(chan Record)
 	errc := make(chan error, 1)
 
 	go func() {
-		var m Model
+		var m Record
 		var err error
 
 		defer close(errc)
@@ -125,8 +116,8 @@ func (q *v610queue) Sub(ctx context.Context) (<-chan Model, <-chan error) {
 	return modc, errc
 }
 
-func (q *v610queue) SubOne(ctx context.Context) (_ Model, err error) {
-	var list []Model
+func (q *v610queue) SubOne(ctx context.Context) (_ Record, err error) {
+	var list []Record
 
 	if list, err = q.SubList(ctx, 1); err != nil {
 		return
@@ -148,7 +139,7 @@ func (q *v610queue) nextTaskDistance() (d time.Duration, err error) {
 	return d, err
 }
 
-func (q *v610queue) SubList(ctx context.Context, limit int) (list []Model, err error) {
+func (q *v610queue) SubList(ctx context.Context, limit int) (list []Record, err error) {
 	var ids [][]byte
 	var wait fdb.FutureNil
 	var punch time.Duration
@@ -182,26 +173,17 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Model, err e
 
 		// select ids in self tx
 		_, err = q.cn.fdb.Transact(func(tx fdb.Transaction) (_ interface{}, e error) {
-			ids = make([][]byte, 0, limit)
-
-			var kr fdb.KeyRange
 			var rows []fdb.KeyValue
 
 			now := make([]byte, 8)
+			ids = make([][]byte, 0, limit)
 			binary.BigEndian.PutUint64(now, uint64(time.Now().UnixNano()))
 
-			if kr.Begin, e = q.cn.Key(q.id, []byte{0x00}); e != nil {
-				return
-			}
-
-			if kr.End, e = q.cn.Key(q.id, now); e != nil {
-				return
-			}
+			kr := fdb.KeyRange{Begin: q.cn.key(q.id, []byte{0x00}), End: q.cn.key(q.id, now)}
 
 			lim := limit - len(list)
 
 			if lim < 1 {
-
 				return nil, nil
 			}
 
@@ -217,18 +199,12 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Model, err e
 				return nil, nil
 			}
 
-			var ack fdb.Key
-
 			for i := range rows {
 				mid := rows[i].Key[12:]
 				ids = append(ids, mid)
 
-				if ack, e = q.cn.Key(q.id, append([]byte{0xFF}, mid...)); e != nil {
-					return
-				}
-
 				// move to lost
-				tx.Set(ack, nil)
+				tx.Set(q.cn.key(q.id, []byte{0xFF}, mid), nil)
 				tx.Clear(rows[i].Key)
 			}
 
@@ -242,7 +218,7 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Model, err e
 			continue
 		}
 
-		models := make([]Model, len(ids))
+		models := make([]Record, len(ids))
 		for i := range ids {
 			if models[i], err = q.mf(ids[i]); err != nil {
 				return
@@ -259,4 +235,4 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Model, err e
 	return list, nil
 }
 
-func (q *v610queue) GetLost(limit int) ([]Model, error) { return nil, nil }
+func (q *v610queue) GetLost(limit int) ([]Record, error) { return nil, nil }

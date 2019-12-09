@@ -4,8 +4,6 @@ type options struct {
 	lt     []byte
 	gte    []byte
 	limit  int
-	idlen  int
-	pflen  int
 	filter Predicat
 }
 
@@ -13,22 +11,6 @@ type options struct {
 func Limit(n int) Option {
 	return func(o *options) error {
 		o.limit = n
-		return nil
-	}
-}
-
-// IDLen -
-func IDLen(n int) Option {
-	return func(o *options) error {
-		o.idlen = n
-		return nil
-	}
-}
-
-// PrefixLen -
-func PrefixLen(n int) Option {
-	return func(o *options) error {
-		o.pflen = n
 		return nil
 	}
 }

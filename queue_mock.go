@@ -15,12 +15,12 @@ type mockQueue struct {
 	mf Fabric
 }
 
-func (q *mockQueue) Ack(db DB, m Model) error                             { return q.FAck(db, m) }
-func (q *mockQueue) Pub(db DB, m Model, t time.Time) error                { return q.FPub(db, m, t) }
-func (q *mockQueue) Sub(ctx context.Context) (<-chan Model, <-chan error) { return q.FSub(ctx) }
-func (q *mockQueue) SubOne(ctx context.Context) (Model, error)            { return q.FSubOne(ctx) }
-func (q *mockQueue) SubList(ctx context.Context, limit int) ([]Model, error) {
+func (q *mockQueue) Ack(db DB, m Record) error                             { return q.FAck(db, m) }
+func (q *mockQueue) Pub(db DB, m Record, t time.Time) error                { return q.FPub(db, m, t) }
+func (q *mockQueue) Sub(ctx context.Context) (<-chan Record, <-chan error) { return q.FSub(ctx) }
+func (q *mockQueue) SubOne(ctx context.Context) (Record, error)            { return q.FSubOne(ctx) }
+func (q *mockQueue) SubList(ctx context.Context, limit int) ([]Record, error) {
 	return q.FSubList(ctx, limit)
 }
-func (q *mockQueue) GetLost(limit int) ([]Model, error) { return q.FGetLost(limit) }
-func (q *mockQueue) Settings() (uint16, Fabric)         { return q.id, q.mf }
+func (q *mockQueue) GetLost(limit int) ([]Record, error) { return q.FGetLost(limit) }
+func (q *mockQueue) Settings() (uint16, Fabric)          { return q.id, q.mf }

@@ -22,19 +22,19 @@ type MockConn struct {
 	FSet      func(ctype uint16, id, value []byte) error
 	FGet      func(ctype uint16, id []byte) ([]byte, error)
 	FDel      func(ctype uint16, id []byte) error
-	FSave     func(...Model) error
-	FLoad     func(...Model) error
-	FDrop     func(...Model) error
-	FSelect   func(ctype uint16, fab Fabric, opts ...Option) ([]Model, error)
+	FSave     func(...Record) error
+	FLoad     func(...Record) error
+	FDrop     func(...Record) error
+	FSelect   func(ctype uint16, fab Fabric, opts ...Option) ([]Record, error)
 
 	// ***** Queue *****
 
-	FAck      func(DB, Model) error
-	FPub      func(DB, Model, time.Time) error
-	FSub      func(ctx context.Context) (<-chan Model, <-chan error)
-	FSubOne   func(ctx context.Context) (Model, error)
-	FSubList  func(ctx context.Context, limit int) ([]Model, error)
-	FGetLost  func(limit int) ([]Model, error)
+	FAck      func(DB, Record) error
+	FPub      func(DB, Record, time.Time) error
+	FSub      func(ctx context.Context) (<-chan Record, <-chan error)
+	FSubOne   func(ctx context.Context) (Record, error)
+	FSubList  func(ctx context.Context, limit int) ([]Record, error)
+	FGetLost  func(limit int) ([]Record, error)
 	FSettings func() (uint16, Fabric)
 }
 

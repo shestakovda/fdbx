@@ -15,10 +15,8 @@ const (
 	flagChunk = uint8(1 << 7)
 )
 
-func newV610db(c *v610Conn, tx fdb.Transaction) (db *v610db, err error) {
-	db = &v610db{conn: c, tx: tx}
-
-	return db, nil
+func newV610db(c *v610Conn, tx fdb.Transaction) (*v610db, error) {
+	return &v610db{conn: c, tx: tx}, nil
 }
 
 type v610db struct {
@@ -26,56 +24,23 @@ type v610db struct {
 	tx   fdb.Transaction
 }
 
-func (db *v610db) ClearAll() error {
-	dbtype := db.conn.DB()
+// ********************** Public **********************
 
-	// all plain data
-	begin := make(fdb.Key, 2)
-	binary.BigEndian.PutUint16(begin[0:2], dbtype)
-	end := make(fdb.Key, 5)
-	binary.BigEndian.PutUint16(end[0:2], dbtype)
-	binary.BigEndian.PutUint16(end[2:4], 0xFFFF)
-	end[4] = 0xFF
-	db.tx.ClearRange(fdb.KeyRange{Begin: begin, End: end})
+func (db *v610db) Get(typeID uint16, id []byte) ([]byte, error) {
+	return db.tx.Get(db.conn.key(typeID, id)).Get()
+}
 
+func (db *v610db) Set(typeID uint16, id, value []byte) error {
+	db.tx.Set(db.conn.key(typeID, id), value)
 	return nil
 }
 
-func (db *v610db) Get(ctype uint16, id []byte) (_ []byte, err error) {
-	var key fdb.Key
-
-	if key, err = db.conn.Key(ctype, id); err != nil {
-		return
-	}
-
-	return db.tx.Get(key).Get()
-}
-
-func (db *v610db) Set(ctype uint16, id, value []byte) (err error) {
-	var key fdb.Key
-
-	if key, err = db.conn.Key(ctype, id); err != nil {
-		return
-	}
-
-	db.tx.Set(key, value)
-
+func (db *v610db) Del(typeID uint16, id []byte) error {
+	db.tx.Clear(db.conn.key(typeID, id))
 	return nil
 }
 
-func (db *v610db) Del(ctype uint16, id []byte) (err error) {
-	var key fdb.Key
-
-	if key, err = db.conn.Key(ctype, id); err != nil {
-		return
-	}
-
-	db.tx.Clear(key)
-
-	return nil
-}
-
-func (db *v610db) Save(models ...Model) (err error) {
+func (db *v610db) Save(models ...Record) (err error) {
 	for i := range models {
 		if err = db.save(models[i]); err != nil {
 			return
@@ -85,22 +50,15 @@ func (db *v610db) Save(models ...Model) (err error) {
 	return nil
 }
 
-func (db *v610db) Load(models ...Model) (err error) {
-	var key fdb.Key
-
+func (db *v610db) Load(recs ...Record) (err error) {
 	// query all futures to leverage wait time
-	futures := make([]fdb.FutureByteSlice, 0, len(models))
-
-	for i := range models {
-		if key, err = db.conn.MKey(models[i]); err != nil {
-			return
-		}
-
-		futures = append(futures, db.tx.Get(key))
+	futures := make([]fdb.FutureByteSlice, len(recs))
+	for i := range recs {
+		futures[i] = db.tx.Get(db.conn.key(recs[i].FdbxType(), recs[i].FdbxID()))
 	}
 
 	for i := range futures {
-		if err = db.load(models[i], futures[i]); err != nil {
+		if err = db.load(recs[i], futures[i]); err != nil {
 			return
 		}
 	}
@@ -108,20 +66,17 @@ func (db *v610db) Load(models ...Model) (err error) {
 	return nil
 }
 
-func (db *v610db) Drop(models ...Model) (err error) {
-	keys := make(map[int]fdb.Key, len(models))
-	futures := make([]fdb.FutureByteSlice, 0, len(models))
+func (db *v610db) Drop(recs ...Record) (err error) {
+	keys := make(map[int]fdb.Key, len(recs))
+	futures := make([]fdb.FutureByteSlice, len(recs))
 
-	for i := range models {
-		if keys[i], err = db.conn.MKey(models[i]); err != nil {
-			return
-		}
-
-		futures = append(futures, db.tx.Get(keys[i]))
+	for i := range recs {
+		keys[i] = db.conn.key(recs[i].FdbxType(), recs[i].FdbxID())
+		futures[i] = db.tx.Get(keys[i])
 	}
 
 	for i := range futures {
-		if err = db.drop(models[i], futures[i]); err != nil {
+		if err = db.drop(recs[i], futures[i]); err != nil {
 			return
 		}
 
@@ -131,23 +86,19 @@ func (db *v610db) Drop(models ...Model) (err error) {
 	return nil
 }
 
-func (db *v610db) Select(ctype uint16, fab Fabric, opts ...Option) (list []Model, err error) {
-	var m Model
-	var kr fdb.KeyRange
-	var mid, value []byte
-
+func (db *v610db) Select(typeID uint16, fab Fabric, opts ...Option) ([]Record, error) {
 	o := new(options)
 
 	for i := range opts {
-		if err = opts[i](o); err != nil {
-			return
+		if err := opts[i](o); err != nil {
+			return nil, err
 		}
 	}
 
-	ro := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll}
+	opt := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll}
 
 	if o.limit > 0 {
-		ro.Limit = o.limit
+		opt.Limit = o.limit
 	}
 
 	gte := []byte{0x00}
@@ -155,56 +106,12 @@ func (db *v610db) Select(ctype uint16, fab Fabric, opts ...Option) (list []Model
 		gte = o.gte
 	}
 
-	if kr.Begin, err = db.conn.Key(ctype, gte); err != nil {
-		return
-	}
-
 	lt := []byte{0xFF}
 	if o.lt != nil {
 		lt = o.lt
 	}
 
-	if kr.End, err = db.conn.Key(ctype, lt); err != nil {
-		return
-	}
-
-	rows := db.tx.GetRange(kr, ro).GetSliceOrPanic()
-	list = make([]Model, 0, len(rows))
-	for i := range rows {
-		if o.idlen > 0 {
-			in := len(rows[i].Key) - o.idlen
-			mid = rows[i].Key[in:]
-		} else if o.pflen > 0 {
-			mid = rows[i].Key[o.pflen:]
-		}
-
-		if _, value, err = db.unpack(rows[i].Value); err != nil {
-			return
-		}
-
-		add := true
-		if o.filter != nil {
-			if add, err = o.filter(value); err != nil {
-				return
-			}
-		}
-
-		if !add {
-			continue
-		}
-
-		if m, err = fab(mid); err != nil {
-			return
-		}
-
-		if err = m.UnmarshalFdbx(value); err != nil {
-			return
-		}
-
-		list = append(list, m)
-
-	}
-	return list, nil
+	return db.getRange(fdb.KeyRange{Begin: db.conn.key(typeID, gte), End: db.conn.key(typeID, lt)}, opt, fab, o.filter)
 }
 
 // *********** private ***********
@@ -252,103 +159,101 @@ func (db *v610db) unpack(value []byte) (blobID, buffer []byte, err error) {
 	return blobID, buffer, nil
 }
 
-func (db *v610db) drop(m Model, fb fdb.FutureByteSlice) (err error) {
-	var idx fdb.Key
-	var value, blobID []byte
+func (db *v610db) setIndexes(rec Record, buf []byte, drop bool) (err error) {
+	var idxMap map[uint16][]byte
 
-	if value, err = fb.Get(); err != nil {
+	rid := rec.FdbxID()
+	rln := []byte{byte(len(rid))}
+
+	if fnc := db.conn.indexes[rec.FdbxType()]; fnc != nil {
+		if idxMap, err = fnc(buf); err != nil {
+			return
+		}
+
+		for indexID, indexKey := range idxMap {
+			if drop {
+				db.tx.Clear(db.conn.key(indexID, indexKey, rid, rln))
+			} else {
+				db.tx.Set(db.conn.key(indexID, indexKey, rid, rln), nil)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (db *v610db) drop(rec Record, fb fdb.FutureByteSlice) (err error) {
+	var idx fdb.Key
+	var fnc IndexFunc
+	var buf, blobID []byte
+
+	if buf, err = fb.Get(); err != nil {
 		return
 	}
 
-	if len(value) == 0 {
+	if len(buf) == 0 {
 		return nil
 	}
 
-	if blobID, value, err = db.unpack(value); err != nil {
+	if blobID, buf, err = db.unpack(buf); err != nil {
 		return
 	}
+
 	if blobID != nil {
 		if err = db.dropBlob(blobID); err != nil {
 			return
 		}
 	}
 
-	// plain buffer needed for index calc
-	for _, index := range db.conn.Indexes(m.Collection()) {
-		if idx, err = index(value); err != nil {
+	return db.setIndexes(rec, buf, true)
+}
+
+func (db *v610db) save(rec Record) (err error) {
+	var buf []byte
+
+	if buf, err = db.tx.Get(db.conn.key(rec.FdbxType(), rec.FdbxID())).Get(); err != nil {
+		return
+	}
+
+	if len(buf) > 0 {
+		if _, buf, err = db.unpack(buf); err != nil {
 			return
 		}
 
-		db.tx.Clear(idx)
-	}
-
-	return nil
-}
-
-func (db *v610db) save(m Model) (err error) {
-
-	var value []byte
-	var key, idx fdb.Key
-
-	// basic model key
-	if key, err = db.conn.MKey(m); err != nil {
-		return
-	}
-
-	// type index list
-	indexes := db.conn.Indexes(m.Collection())
-
-	// // old data dump for index invalidate
-	// if dump := m.Dump(); len(dump) > 0 {
-	// 	for _, index := range indexes {
-	// 		if idx, err = index(dump); err != nil {
-	// 			return
-	// 		}
-
-	// 		db.tx.Clear(idx)
-	// 	}
-	// }
-
-	// plain object buffer
-	if value, err = m.MarshalFdbx(); err != nil {
-		return
-	}
-
-	// new index keys
-	for _, index := range indexes {
-		if idx, err = index(value); err != nil {
+		if err = db.setIndexes(rec, buf, true); err != nil {
 			return
 		}
-
-		db.tx.Set(idx, nil)
 	}
 
-	if value, err = db.pack(value); err != nil {
+	if buf, err = rec.FdbxMarshal(); err != nil {
 		return
 	}
 
-	db.tx.Set(key, value)
-	return nil
+	if buf, err = db.pack(buf); err != nil {
+		return
+	}
+
+	db.tx.Set(db.conn.key(rec.FdbxType(), rec.FdbxID()), buf)
+
+	return db.setIndexes(rec, buf, false)
 }
 
-func (db *v610db) load(m Model, fb fdb.FutureByteSlice) (err error) {
-	var value []byte
+func (db *v610db) load(m Record, fb fdb.FutureByteSlice) (err error) {
+	var buf []byte
 
-	if value, err = fb.Get(); err != nil {
+	if buf, err = fb.Get(); err != nil {
 		return
 	}
 
-	if len(value) == 0 {
-		// it's model responsibility for loading control
-		return nil
+	if len(buf) == 0 {
+		return ErrRecordNotFound.WithStack()
 	}
 
-	if _, value, err = db.unpack(value); err != nil {
+	if _, buf, err = db.unpack(buf); err != nil {
 		return
 	}
 
-	// plain buffer
-	return m.UnmarshalFdbx(value)
+	return m.FdbxUnmarshal(buf)
 }
 
 func (db *v610db) gzipValue(flags *uint8, value []byte) ([]byte, error) {
@@ -416,15 +321,11 @@ func (db *v610db) gunzip(w io.Writer, r io.Reader) (err error) {
 func (db *v610db) saveBlob(flags *uint8, blob []byte) (value []byte, err error) {
 	var i uint16
 	var last bool
-	var part, key []byte
+	var part []byte
 	var index [2]byte
 
 	*flags |= flagChunk
 	blobID := uuid.New()
-
-	if key, err = db.conn.Key(ChunkType, blobID[:]); err != nil {
-		return
-	}
 
 	// TODO: only up to 10M (transaction size)
 	// split into multiple goroutines for speed
@@ -440,7 +341,7 @@ func (db *v610db) saveBlob(flags *uint8, blob []byte) (value []byte, err error) 
 
 		// save part
 		binary.BigEndian.PutUint16(index[:], i)
-		db.tx.Set(fdb.Key(append(key, index[0], index[1])), part)
+		db.tx.Set(db.conn.key(ChunkType, blobID[:], index[:]), part)
 		i++
 	}
 
@@ -448,15 +349,12 @@ func (db *v610db) saveBlob(flags *uint8, blob []byte) (value []byte, err error) 
 }
 
 func (db *v610db) loadBlob(value []byte) (blob []byte, err error) {
-	var key fdb.Key
 	var kv fdb.KeyValue
 
-	if key, err = db.conn.Key(ChunkType, value); err != nil {
-		return
-	}
-
-	kr := fdb.KeyRange{Begin: key, End: fdb.Key(append(key, 255))}
-	res := db.tx.GetRange(kr, fdb.RangeOptions{Mode: fdb.StreamingModeIterator}).Iterator()
+	res := db.tx.GetRange(fdb.KeyRange{
+		Begin: db.conn.key(ChunkType, value),
+		End:   db.conn.key(ChunkType, value, []byte{0xFF}),
+	}, fdb.RangeOptions{Mode: fdb.StreamingModeIterator}).Iterator()
 
 	for res.Advance() {
 		if kv, err = res.Get(); err != nil {
@@ -467,14 +365,11 @@ func (db *v610db) loadBlob(value []byte) (blob []byte, err error) {
 	return blob, nil
 }
 
-func (db *v610db) dropBlob(value []byte) (err error) {
-	var key fdb.Key
-
-	if key, err = db.conn.Key(ChunkType, value); err != nil {
-		return
-	}
-
-	db.tx.ClearRange(fdb.KeyRange{Begin: key, End: fdb.Key(append(key, 255))})
+func (db *v610db) dropBlob(value []byte) error {
+	db.tx.ClearRange(fdb.KeyRange{
+		Begin: db.conn.key(ChunkType, value),
+		End:   db.conn.key(ChunkType, value, []byte{0xFF}),
+	})
 	return nil
 }
 
@@ -485,40 +380,62 @@ func (db *v610db) getRange(
 	chk Predicat,
 ) (list []Record, err error) {
 	var rec Record
+	var buf []byte
 
 	rows := db.tx.GetRange(rng, opt).GetSliceOrPanic()
-	list = make([]Model, 0, len(rows))
+	list = make([]Record, 0, len(rows))
+	load := make([]Record, 0, len(rows))
 
 	for i := range rows {
 		klen := len(rows[i].Key)
-		idlen := rows[i].Key[klen-1]
-		recid = rows[i].Key[klen-idlen-1 : klen-2]
+		idlen := int(rows[i].Key[klen-1])
 
-		if _, value, err = db.unpack(rows[i].Value); err != nil {
+		if rec, err = fab(rows[i].Key[klen-idlen-1 : klen-2]); err != nil {
 			return
 		}
 
-		skip := false
+		if len(rows[i].Value) == 0 {
+			load = append(load, rec)
+			continue
+		}
+
+		if _, buf, err = db.unpack(rows[i].Value); err != nil {
+			return
+		}
+
+		if err = rec.FdbxUnmarshal(buf); err != nil {
+			return
+		}
+
+		add := true
 		if chk != nil {
-			if skip, err = chk(value); err != nil {
+			if add, err = chk(rec); err != nil {
 				return
 			}
 		}
 
-		if skip {
-			continue
+		if add {
+			list = append(list, rec)
 		}
+	}
 
-		if rec, err = fab(recid); err != nil {
+	if len(load) > 0 {
+		if err = db.Load(load...); err != nil {
 			return
 		}
 
-		if err = rec.UnmarshalFdbx(value); err != nil {
-			return
+		for i := range load {
+			add := true
+			if chk != nil {
+				if add, err = chk(load[i]); err != nil {
+					return
+				}
+			}
+
+			if add {
+				list = append(list, load[i])
+			}
 		}
-
-		list = append(list, rec)
-
 	}
 
 	return list, nil

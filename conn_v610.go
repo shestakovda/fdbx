@@ -1,8 +1,6 @@
 package fdbx
 
 import (
-	"encoding/binary"
-
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
 
@@ -24,23 +22,18 @@ func newV610Conn(db uint16) (conn *v610Conn, err error) {
 
 type v610Conn struct {
 	*baseConn
+
 	fdb fdb.Database
 }
 
+// ********************** Public **********************
+
 func (c *v610Conn) ClearDB() error {
-	// all plain data
-	begin := make(fdb.Key, 2)
-	binary.BigEndian.PutUint16(begin[0:2], c.db)
-
-	end := make(fdb.Key, 4)
-	binary.BigEndian.PutUint16(end[0:2], c.db)
-	binary.BigEndian.PutUint16(end[2:4], 0xFFFF)
-	end[4] = 0xFF
-
-	return c.fdb.Transact(func(tx fdb.Transaction) (interface{}, error) {
-		tx.ClearRange(fdb.KeyRange{Begin: begin, End: end})
-		return nil
+	_, exp := c.fdb.Transact(func(tx fdb.Transaction) (_ interface{}, err error) {
+		tx.ClearRange(fdb.KeyRange{Begin: c.key(0), End: c.key(0xFFFF, []byte{0xFF})})
+		return
 	})
+	return exp
 }
 
 func (c *v610Conn) Tx(h TxHandler) error {
