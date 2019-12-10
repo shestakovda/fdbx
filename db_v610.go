@@ -101,17 +101,17 @@ func (db *v610db) Select(typeID uint16, fab Fabric, opts ...Option) ([]Record, e
 		opt.Limit = o.limit
 	}
 
-	gte := []byte{0x00}
-	if o.gte != nil {
-		gte = o.gte
+	from := []byte{0x00}
+	if o.from != nil {
+		from = o.from
 	}
 
-	lt := []byte{0xFF}
-	if o.lt != nil {
-		lt = o.lt
+	to := []byte{0xFF}
+	if o.to != nil {
+		to = o.to
 	}
 
-	return db.getRange(fdb.KeyRange{Begin: db.conn.key(typeID, gte), End: db.conn.key(typeID, lt)}, opt, fab, o.filter)
+	return db.getRange(fdb.KeyRange{Begin: db.conn.key(typeID, from), End: db.conn.key(typeID, to)}, opt, fab, o.filter)
 }
 
 // *********** private ***********

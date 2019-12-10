@@ -72,6 +72,13 @@ func TestDB(t *testing.T) {
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Load(rec2, rec4) }))
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Load(rec4, rec2) }))
 
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
+		list, err := db.Select(TestCollection, testRecordFabric)
+		assert.NoError(t, err)
+		assert.Len(t, list, 2)
+		return err
+	}))
+
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Drop(rec1, rec3) }))
 
 	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(rec2, rec4) }), fdbx.ErrRecordNotFound))

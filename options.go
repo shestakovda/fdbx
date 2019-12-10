@@ -1,8 +1,9 @@
 package fdbx
 
 type options struct {
-	lt     []byte
-	gte    []byte
+	to     []byte
+	from   []byte
+	page   int
 	limit  int
 	filter Predicat
 }
@@ -23,18 +24,18 @@ func Filter(f Predicat) Option {
 	}
 }
 
-// GTE - greater then or equal
-func GTE(q []byte) Option {
+// From - greater then or equal
+func From(value []byte) Option {
 	return func(o *options) error {
-		o.gte = q
+		o.from = value
 		return nil
 	}
 }
 
-// LT - less then
-func LT(q []byte) Option {
+// To - less then
+func To(value []byte) Option {
 	return func(o *options) error {
-		o.lt = q
+		o.to = value
 		return nil
 	}
 }
