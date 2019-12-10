@@ -2,7 +2,6 @@ package fdbx
 
 import (
 	"encoding/binary"
-	"sync"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
@@ -15,16 +14,13 @@ func newBaseConn(db uint16) *baseConn {
 }
 
 type baseConn struct {
-	sync.RWMutex
 	db      uint16
 	indexes map[uint16]IndexFunc
 }
 
 // ********************** Public **********************
 
-func (c *baseConn) RegisterIndex(recordTypeID uint16, idxFunc IndexFunc) {
-	c.indexes[recordTypeID] = idxFunc
-}
+func (c *baseConn) RegisterIndex(typeID uint16, idxFunc IndexFunc) { c.indexes[typeID] = idxFunc }
 
 // ********************** Private **********************
 
@@ -32,7 +28,7 @@ func (c *baseConn) key(typeID uint16, parts ...[]byte) fdb.Key {
 	mem := 4
 
 	for i := range parts {
-		mem += len(parts)
+		mem += len(parts[i])
 	}
 
 	key := make(fdb.Key, 4, mem)
@@ -45,4 +41,10 @@ func (c *baseConn) key(typeID uint16, parts ...[]byte) fdb.Key {
 	}
 
 	return key
+}
+
+func (c *baseConn) rkey(rec Record) fdb.Key {
+	rid := rec.FdbxID()
+	rln := []byte{byte(len(rid))}
+	return c.key(rec.FdbxType(), rid, rln)
 }

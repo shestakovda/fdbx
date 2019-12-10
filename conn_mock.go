@@ -13,8 +13,8 @@ func newMockConn(db uint16) (conn *MockConn, err error) {
 type MockConn struct {
 	*baseConn
 
-	FClearDB func() error
-	FQueue   func(uint16, Fabric) Queue
+	FClearDB    func() error
+	FLoadCursor func(id []byte, page int) (Cursor, error)
 
 	// ***** DB *****
 
@@ -36,13 +36,40 @@ type MockConn struct {
 	FSubList  func(ctx context.Context, limit int) ([]Record, error)
 	FGetLost  func(limit int) ([]Record, error)
 	FSettings func() (uint16, Fabric)
+
+	// ***** Cursor *****
+
+	FEmpty        func() bool
+	FClose        func() error
+	FNext         func(db DB, skip uint8) ([]Record, error)
+	FPrev         func(db DB, skip uint8) ([]Record, error)
+	FCursorSelect func(ctx context.Context) (<-chan Record, <-chan error)
+
+	// ***** Record *****
+
+	FFdbxID        func() []byte
+	FFdbxType      func() uint16
+	FFdbxMarshal   func() ([]byte, error)
+	FFdbxUnmarshal func([]byte) error
 }
 
 // ClearDB - clear stub, set FClearDB before usage
 func (c *MockConn) ClearDB() error { return c.FClearDB() }
 
-// Tx - tx stub, create MockDB object
+// Tx - tx stub, create mock object
 func (c *MockConn) Tx(h TxHandler) error { return h(newMockDB(c)) }
 
-// Queue - clear stub, set FQueue before usage
-func (c *MockConn) Queue(qtype uint16, f Fabric) (Queue, error) { return newMockQueue(c, qtype, f) }
+// Queue - queue stub, create mock object
+func (c *MockConn) Queue(typeID uint16, fab Fabric) (Queue, error) {
+	return newMockQueue(c, typeID, fab)
+}
+
+// Cursor - cursor stub, create mock object
+func (c *MockConn) Cursor(typeID uint16, fab Fabric, start []byte, page int) (Cursor, error) {
+	return newMockCursor(c, typeID, fab, start, page)
+}
+
+// LoadCursor - load cursor stub
+func (c *MockConn) LoadCursor(id []byte, page int) (Cursor, error) {
+	return c.FLoadCursor(id, page)
+}

@@ -8,7 +8,7 @@ func newV610Conn(db uint16) (conn *v610Conn, err error) {
 	conn = &v610Conn{baseConn: newBaseConn(db)}
 
 	// Installed version check
-	if err = fdb.APIVersion(ConnVersion610); err != nil {
+	if err = fdb.APIVersion(int(ConnVersion610)); err != nil {
 		return nil, ErrOldVersion.WithReason(err)
 	}
 
@@ -50,4 +50,28 @@ func (c *v610Conn) Tx(h TxHandler) error {
 	return exp
 }
 
-func (c *v610Conn) Queue(qtype uint16, f Fabric) (Queue, error) { return newV610queue(c, qtype, f) }
+func (c *v610Conn) Queue(typeID uint16, fab Fabric) (Queue, error) {
+	return newV610queue(c, typeID, fab)
+}
+
+func (c *v610Conn) Cursor(typeID uint16, fab Fabric, start []byte, page int) (Cursor, error) {
+	return newV610cursor(c, typeID, fab, start, page)
+}
+
+func (c *v610Conn) LoadCursor(id []byte, page int) (_ Cursor, err error) {
+	var cur *v610cursor
+
+	if cur, err = v610CursorFabric(id); err != nil {
+		return
+	}
+
+	if err = c.Tx(func(db DB) error { return db.Load(cur) }); err != nil {
+		return
+	}
+
+	if page > 0 {
+		cur.page = int(page)
+	}
+
+	return cur, nil
+}

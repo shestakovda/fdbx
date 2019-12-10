@@ -54,7 +54,7 @@ func (db *v610db) Load(recs ...Record) (err error) {
 	// query all futures to leverage wait time
 	futures := make([]fdb.FutureByteSlice, len(recs))
 	for i := range recs {
-		futures[i] = db.tx.Get(db.conn.key(recs[i].FdbxType(), recs[i].FdbxID()))
+		futures[i] = db.tx.Get(db.conn.rkey(recs[i]))
 	}
 
 	for i := range futures {
@@ -71,7 +71,7 @@ func (db *v610db) Drop(recs ...Record) (err error) {
 	futures := make([]fdb.FutureByteSlice, len(recs))
 
 	for i := range recs {
-		keys[i] = db.conn.key(recs[i].FdbxType(), recs[i].FdbxID())
+		keys[i] = db.conn.rkey(recs[i])
 		futures[i] = db.tx.Get(keys[i])
 	}
 
@@ -160,22 +160,30 @@ func (db *v610db) unpack(value []byte) (blobID, buffer []byte, err error) {
 }
 
 func (db *v610db) setIndexes(rec Record, buf []byte, drop bool) (err error) {
-	var idxMap map[uint16][]byte
+	var fnc IndexFunc
+	var idx *v610Indexer
 
-	rid := rec.FdbxID()
-	rln := []byte{byte(len(rid))}
+	if fnc = db.conn.indexes[rec.FdbxType()]; fnc == nil {
+		return nil
+	}
 
-	if fnc := db.conn.indexes[rec.FdbxType()]; fnc != nil {
-		if idxMap, err = fnc(buf); err != nil {
-			return
-		}
+	if idx, err = newV610Indexer(); err != nil {
+		return
+	}
 
-		for indexID, indexKey := range idxMap {
-			if drop {
-				db.tx.Clear(db.conn.key(indexID, indexKey, rid, rln))
-			} else {
-				db.tx.Set(db.conn.key(indexID, indexKey, rid, rln), nil)
-			}
+	if err = fnc(idx, buf); err != nil {
+		return
+	}
+
+	for i := range idx.list {
+		rid := rec.FdbxID()
+		rln := []byte{byte(len(rid))}
+		key := db.conn.key(idx.list[i].typeID, idx.list[i].value, rid, rln)
+
+		if drop {
+			db.tx.Clear(key)
+		} else {
+			db.tx.Set(key, nil)
 		}
 	}
 
@@ -183,8 +191,6 @@ func (db *v610db) setIndexes(rec Record, buf []byte, drop bool) (err error) {
 }
 
 func (db *v610db) drop(rec Record, fb fdb.FutureByteSlice) (err error) {
-	var idx fdb.Key
-	var fnc IndexFunc
 	var buf, blobID []byte
 
 	if buf, err = fb.Get(); err != nil {
@@ -211,7 +217,7 @@ func (db *v610db) drop(rec Record, fb fdb.FutureByteSlice) (err error) {
 func (db *v610db) save(rec Record) (err error) {
 	var buf []byte
 
-	if buf, err = db.tx.Get(db.conn.key(rec.FdbxType(), rec.FdbxID())).Get(); err != nil {
+	if buf, err = db.tx.Get(db.conn.rkey(rec)).Get(); err != nil {
 		return
 	}
 
@@ -233,7 +239,7 @@ func (db *v610db) save(rec Record) (err error) {
 		return
 	}
 
-	db.tx.Set(db.conn.key(rec.FdbxType(), rec.FdbxID()), buf)
+	db.tx.Set(db.conn.rkey(rec), buf)
 
 	return db.setIndexes(rec, buf, false)
 }

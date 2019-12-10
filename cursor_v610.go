@@ -2,14 +2,32 @@ package fdbx
 
 import (
 	"context"
-
-	"github.com/google/uuid"
+	"encoding/json"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/golang/glog"
+	"github.com/google/uuid"
 )
 
-func newV610cursor(conn *v610Conn, typeID uint16, fab Fabric) (*v610cursor, error) {
+func v610CursorFabric(id []byte) (*v610cursor, error) {
+	return &v610cursor{id: id}, nil
+}
+
+func newV610cursor(conn *v610Conn, typeID uint16, fab Fabric, start []byte, pageSize int) (*v610cursor, error) {
+	uid := uuid.New()
+
+	if len(start) == 0 {
+		start = []byte{0x00}
+	}
+
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+
 	return &v610cursor{
+		id:     uid[:],
+		pos:    conn.key(typeID, start),
+		page:   pageSize,
 		conn:   conn,
 		fabric: fab,
 		typeID: typeID,
@@ -17,7 +35,7 @@ func newV610cursor(conn *v610Conn, typeID uint16, fab Fabric) (*v610cursor, erro
 }
 
 type v610cursor struct {
-	id uuid.UUID
+	id []byte
 
 	pos   fdb.Key
 	page  int
@@ -31,10 +49,10 @@ type v610cursor struct {
 
 // ********************** As Record **********************
 
-func (cur *v610cursor) FdbxID() []byte               { return cur.id[:] }
-func (cur *v610cursor) FdbxType() uint16             { return CursorType }
-func (cur *v610cursor) FdbxMarshal() ([]byte, error) { return nil, nil }
-func (cur *v610cursor) FdbxUnmarshal([]byte) error   { return nil }
+func (cur *v610cursor) FdbxID() []byte                 { return cur.id[:] }
+func (cur *v610cursor) FdbxType() uint16               { return CursorType }
+func (cur *v610cursor) FdbxMarshal() ([]byte, error)   { return json.Marshal(cur) }
+func (cur *v610cursor) FdbxUnmarshal(buf []byte) error { return json.Unmarshal(buf, cur) }
 
 // ********************** Public **********************
 
@@ -70,6 +88,8 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool) (list []Record, 
 		return nil, ErrIncompatibleDB.WithStack()
 	}
 
+	defer glog.Flush()
+
 	opt := fdb.RangeOptions{Limit: cur.page, Mode: fdb.StreamingModeWantAll, Reverse: reverse}
 
 	if reverse {
@@ -82,22 +102,26 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool) (list []Record, 
 
 	if skip > 0 {
 		opt.Limit = int(skip) * cur.page
+		if reverse {
+			opt.Limit++
+		}
+
 		rows := db610.tx.GetRange(rng, opt).GetSliceOrPanic()
 		rlen := len(rows)
-		cur.pos = append(rows[rlen-1].Key, 0xFF)
-
-		if reverse {
-			rng.End = cur.pos
-		} else {
-			rng.Begin = cur.pos
-		}
 
 		if rlen < opt.Limit {
 			cur.empty = true
 			return nil, nil
 		}
 
+		cur.pos = append(rows[rlen-1].Key, 0xFF)
 		opt.Limit = cur.page
+
+		if reverse {
+			rng.End = cur.pos
+		} else {
+			rng.Begin = cur.pos
+		}
 	}
 
 	if list, err = db610.getRange(rng, opt, cur.fabric, nil); err != nil {
@@ -107,11 +131,29 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool) (list []Record, 
 	llen := len(list)
 
 	if llen > 0 {
+
+		if reverse {
+			reverseList(list)
+		}
+
 		cur.pos = cur.conn.key(cur.typeID, list[llen-1].FdbxID(), []byte{0xFF})
 	}
 
 	cur.empty = !reverse && llen < cur.page
 	return list, nil
+}
+
+func reverseList(list []Record) {
+	llen := len(list)
+
+	if llen == 0 {
+		return
+	}
+
+	for i := llen/2 - 1; i >= 0; i-- {
+		opp := llen - 1 - i
+		list[i], list[opp] = list[opp], list[i]
+	}
 }
 
 func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan error) {

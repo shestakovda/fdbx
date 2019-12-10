@@ -3,14 +3,12 @@ package fdbx
 import (
 	"context"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Supported FoundationDB client versions
 const (
-	ConnVersion610  = 610
-	ConnVersionMock = 0xFFFF
+	ConnVersion610  = uint16(610)
+	ConnVersionMock = uint16(0xFFFF)
 )
 
 const (
@@ -38,7 +36,7 @@ var (
 type TxHandler func(DB) error
 
 // IndexFunc - calc index keys from model buffer
-type IndexFunc func(buffer []byte) (map[uint16][]byte, error)
+type IndexFunc func(idx Indexer, buf []byte) error
 
 // Fabric - model fabric func
 type Fabric func(id []byte) (Record, error)
@@ -51,35 +49,16 @@ type Option func(*options) error
 
 // Conn - database connection (as stored database index)
 type Conn interface {
+	ClearDB() error
+
 	RegisterIndex(recordTypeID uint16, idxFunc IndexFunc)
 
-	// DB() uint16
-
-	// Key(typeID uint16, id []byte) (fdb.Key, error)
-	// MKey(Record) (fdb.Key, error)
-
-	ClearDB() error
 	Tx(TxHandler) error
 
-	Queue(qtype uint16, f Fabric) (Queue, error)
+	Queue(typeID uint16, f Fabric) (Queue, error)
 
-	Cursor(qtype uint16, f Fabric, start []byte, size uint32) (Cursor, error)
-	LoadCursor(id uuid.UUID, size uint32) (Cursor, error)
-}
-
-// Queue -
-type Queue interface {
-	Ack(DB, Record) error
-
-	Pub(DB, Record, time.Time) error
-
-	Sub(ctx context.Context) (<-chan Record, <-chan error)
-	SubOne(ctx context.Context) (Record, error)
-	SubList(ctx context.Context, limit int) ([]Record, error)
-
-	GetLost(limit int) ([]Record, error)
-
-	Settings() (uint16, Fabric)
+	Cursor(typeID uint16, f Fabric, start []byte, pageSize int) (Cursor, error)
+	LoadCursor(id []byte, pageSize int) (Cursor, error)
 }
 
 // DB - database object that holds connection for transaction handler
@@ -93,18 +72,6 @@ type DB interface {
 	Drop(...Record) error
 
 	Select(indexID uint16, fab Fabric, opts ...Option) ([]Record, error)
-}
-
-// Record - database record object (user model, collection item)
-type Record interface {
-	// object identifier in any format
-	FdbxID() []byte
-	// type identifier (collection id)
-	FdbxType() uint16
-	// make new buffer from object fields
-	FdbxMarshal() ([]byte, error)
-	// fill object fields from buffer
-	FdbxUnmarshal([]byte) error
 }
 
 // Cursor - helper for long seq scan queries or pagination
@@ -123,10 +90,38 @@ type Cursor interface {
 	Prev(db DB, skip uint8) ([]Record, error)
 
 	// select all records from current position to the end of collection
-	Select() (<-chan Record, <-chan error)
+	Select(ctx context.Context) (<-chan Record, <-chan error)
+}
 
-	// current settings
-	Settings() (uint16, Fabric)
+// Queue -
+type Queue interface {
+	Ack(DB, Record) error
+
+	Pub(DB, Record, time.Time) error
+
+	Sub(ctx context.Context) (<-chan Record, <-chan error)
+	SubOne(ctx context.Context) (Record, error)
+	SubList(ctx context.Context, limit int) ([]Record, error)
+
+	GetLost(limit int) ([]Record, error)
+}
+
+// Record - database record object (user model, collection item)
+type Record interface {
+	// object identifier in any format
+	FdbxID() []byte
+	// type identifier (collection id)
+	FdbxType() uint16
+	// make new buffer from object fields
+	FdbxMarshal() ([]byte, error)
+	// fill object fields from buffer
+	FdbxUnmarshal([]byte) error
+}
+
+// Indexer - for record indexing
+type Indexer interface {
+	// append key for indexing as idxTypeID
+	Index(idxTypeID uint16, value []byte)
 }
 
 // NewConn - makes new connection with specified client version

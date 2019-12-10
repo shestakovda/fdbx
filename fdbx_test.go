@@ -1,5 +1,206 @@
 package fdbx_test
 
+import (
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/shestakovda/fdbx"
+	"github.com/stretchr/testify/assert"
+)
+
+// current test settings
+var (
+	TestVersion    = fdbx.ConnVersion610
+	TestDatabase   = uint16(0x0102)
+	TestCollection = uint16(0x0304)
+)
+
+func TestDB(t *testing.T) {
+	conn, err := fdbx.NewConn(TestDatabase, TestVersion)
+	assert.NoError(t, err)
+	assert.NotNil(t, conn)
+
+	defer conn.ClearDB()
+
+	rec1 := newTestRecord()
+	rec2 := &testRecord{ID: rec1.ID}
+
+	rec3 := newTestRecord()
+	rec4 := &testRecord{ID: rec3.ID}
+
+	// ******** Key/Value ********
+
+	uid := uuid.New()
+	key := uid[:8]
+	val := uid[8:16]
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
+		v, e := db.Get(TestCollection, key)
+		assert.Empty(t, v)
+		return e
+	}))
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Set(TestCollection, key, val) }))
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
+		v, e := db.Get(TestCollection, key)
+		assert.Equal(t, val, v)
+		return e
+	}))
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Del(TestCollection, key) }))
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
+		v, e := db.Get(TestCollection, key)
+		assert.Empty(t, v)
+		return e
+	}))
+
+	// ******** Record ********
+
+	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(rec1, rec3) }), fdbx.ErrRecordNotFound))
+	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(rec3, rec1) }), fdbx.ErrRecordNotFound))
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(rec1, rec3) }))
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Load(rec2, rec4) }))
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Load(rec4, rec2) }))
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Drop(rec1, rec3) }))
+
+	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(rec2, rec4) }), fdbx.ErrRecordNotFound))
+	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(rec4, rec2) }), fdbx.ErrRecordNotFound))
+
+	assert.Equal(t, rec1, rec2)
+	assert.Equal(t, rec3, rec4)
+}
+
+func TestCursor(t *testing.T) {
+	conn, err := fdbx.NewConn(TestDatabase, TestVersion)
+	assert.NoError(t, err)
+	assert.NotNil(t, conn)
+
+	defer conn.ClearDB()
+
+	records := make([]fdbx.Record, 10)
+	for i := range records {
+		records[i] = newTestRecord()
+	}
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
+
+	cur, err := conn.Cursor(TestCollection, testRecordFabric, nil, 3)
+	assert.NoError(t, err)
+	assert.NotNil(t, cur)
+	assert.False(t, cur.Empty())
+
+	defer func() { assert.NoError(t, cur.Close()) }()
+
+	// ********* all in *********
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	recc, errc := cur.Select(ctx)
+
+	recs := make([]fdbx.Record, 0, 10)
+	for rec := range recc {
+		recs = append(recs, rec)
+	}
+
+	errs := make([]error, 0)
+	for err := range errc {
+		errs = append(errs, err)
+	}
+
+	assert.Len(t, errs, 0)
+	assert.Len(t, recs, 10)
+	assert.True(t, cur.Empty())
+	assert.NoError(t, cur.Close())
+
+	// ********* steps *********
+
+	recl := make([]fdbx.Record, 0, 10)
+	rect := make([]fdbx.Record, 0, 10)
+
+	// page size = 3
+	cur, err = conn.Cursor(TestCollection, testRecordFabric, nil, 3)
+	assert.NoError(t, err)
+	assert.NotNil(t, cur)
+	assert.False(t, cur.Empty())
+
+	// pos: 0 -> (load 3) -> 3
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl, err = cur.Next(db, 0); return err }))
+	assert.Len(t, recl, 3)
+	assert.False(t, cur.Empty())
+	rect = append(rect, recl...)
+
+	// pos: 3 -> (skip 3) -> 6 -> (load 3) -> 9
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl, err = cur.Next(db, 1); return err }))
+	assert.Len(t, recl, 3)
+	assert.False(t, cur.Empty())
+
+	// pos: 9 -> (skip -6) -> 3 -> (load 3) -> 6
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl, err = cur.Prev(db, 1); return err }))
+	assert.Len(t, recl, 3)
+	assert.False(t, cur.Empty())
+	rect = append(rect, recl...)
+
+	// pos: 6 -> (load 3) -> 9
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl, err = cur.Next(db, 0); return err }))
+	assert.Len(t, recl, 3)
+	assert.False(t, cur.Empty())
+	rect = append(rect, recl...)
+
+	// pos: 9 -> (load 3) -> 10
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl, err = cur.Next(db, 0); return err }))
+	assert.Len(t, recl, 1)
+	assert.True(t, cur.Empty())
+	rect = append(rect, recl...)
+
+	assert.Equal(t, recs, rect)
+}
+
+func testRecordFabric(id []byte) (fdbx.Record, error) { return &testRecord{ID: id}, nil }
+
+func newTestRecord() *testRecord {
+	uid := uuid.New()
+	str := uid.String()
+	num := binary.BigEndian.Uint64(uid[:8])
+	flt := float64(binary.BigEndian.Uint64(uid[8:16]))
+
+	return &testRecord{
+		ID:      uid[:],
+		Name:    str,
+		Number:  num,
+		Decimal: flt,
+		Logic:   flt > float64(num),
+		Data:    uid[:],
+		Strs:    []string{str, str, str},
+	}
+}
+
+type testRecord struct {
+	ID      []byte   `json:"id"`
+	Name    string   `json:"name"`
+	Number  uint64   `json:"number"`
+	Decimal float64  `json:"decimal"`
+	Logic   bool     `json:"logic"`
+	Data    []byte   `json:"data"`
+	Strs    []string `json:"strs"`
+}
+
+func (r *testRecord) FdbxID() []byte               { return r.ID }
+func (r *testRecord) FdbxType() uint16             { return TestCollection }
+func (r *testRecord) FdbxMarshal() ([]byte, error) { return json.Marshal(r) }
+func (r *testRecord) FdbxUnmarshal(b []byte) error { return json.Unmarshal(b, r) }
+
 // func TestConn(t *testing.T) {
 // 	const db = 1
 // 	const skey = "test key"
