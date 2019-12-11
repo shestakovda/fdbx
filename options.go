@@ -39,3 +39,12 @@ func To(value []byte) Option {
 		return nil
 	}
 }
+
+// Query - rows by prefix
+func Query(value []byte) Option {
+	return func(o *options) error {
+		o.from = value
+		o.to = append(value, 0xFF)
+		return nil
+	}
+}
