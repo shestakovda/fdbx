@@ -58,16 +58,22 @@ func (cur *v610cursor) FdbxUnmarshal(buf []byte) error { return json.Unmarshal(b
 
 // ********************** Public **********************
 
-func (cur *v610cursor) Empty() bool                              { return cur.empty }
-func (cur *v610cursor) Close() error                             { cur.empty = true; return cur.drop() }
-func (cur *v610cursor) Settings() (uint16, Fabric)               { return cur.typeID, cur.fabric }
-func (cur *v610cursor) Next(db DB, skip uint8) ([]Record, error) { return cur.getPage(db, skip, false) }
-func (cur *v610cursor) Prev(db DB, skip uint8) ([]Record, error) { return cur.getPage(db, skip, true) }
+func (cur *v610cursor) Empty() bool                { return cur.empty }
+func (cur *v610cursor) Close() error               { cur.empty = true; return cur.drop() }
+func (cur *v610cursor) Settings() (uint16, Fabric) { return cur.typeID, cur.fabric }
 
-func (cur *v610cursor) Select(ctx context.Context) (<-chan Record, <-chan error) {
+func (cur *v610cursor) Next(db DB, skip uint8) ([]Record, error) {
+	return cur.getPage(db, skip, false, nil)
+}
+
+func (cur *v610cursor) Prev(db DB, skip uint8) ([]Record, error) {
+	return cur.getPage(db, skip, true, nil)
+}
+
+func (cur *v610cursor) Select(ctx context.Context, opts ...Option) (<-chan Record, <-chan error) {
 	recs := make(chan Record)
 	errs := make(chan error, 1)
-	go cur.readAll(ctx, recs, errs)
+	go cur.readAll(ctx, recs, errs, opts...)
 	return recs, errs
 }
 
@@ -75,7 +81,7 @@ func (cur *v610cursor) Select(ctx context.Context) (<-chan Record, <-chan error)
 
 func (cur *v610cursor) drop() error { return cur.conn.Tx(func(db DB) error { return db.Drop(cur) }) }
 
-func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool) (list []Record, err error) {
+func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat) (list []Record, err error) {
 	var ok bool
 	var rng fdb.KeyRange
 	var db610 *v610db
@@ -126,7 +132,7 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool) (list []Record, 
 
 	var lastKey fdb.Key
 
-	if list, lastKey, err = db610.getRange(rng, opt, cur.fabric, nil); err != nil {
+	if list, lastKey, err = db610.getRange(rng, opt, cur.fabric, filter); err != nil {
 		return
 	}
 
@@ -155,16 +161,26 @@ func reverseList(list []Record) {
 	}
 }
 
-func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan error) {
+func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan error, opts ...Option) {
 	var err error
 	var list []Record
 
 	defer close(recs)
 	defer close(errs)
 
-	for !cur.empty && ctx.Err() == nil {
+	o := new(options)
+
+	for i := range opts {
+		if err = opts[i](o); err != nil {
+			errs <- err
+			return
+		}
+	}
+
+	count := 0
+	for !cur.empty && ctx.Err() == nil && (o.limit == 0 || count < o.limit) {
 		if err = cur.conn.Tx(func(db DB) (exp error) {
-			list, exp = cur.Next(db, 0)
+			list, exp = cur.getPage(db, 0, false, o.filter)
 			return
 		}); err != nil {
 			errs <- err
@@ -174,6 +190,11 @@ func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan 
 		for i := range list {
 			select {
 			case recs <- list[i]:
+				count++
+				if o.limit > 0 && count >= o.limit {
+					cur.empty = true
+					return
+				}
 			case <-ctx.Done():
 				errs <- ctx.Err()
 				return

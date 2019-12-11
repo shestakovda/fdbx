@@ -394,38 +394,85 @@ func (db *v610db) getRange(
 	fab Fabric,
 	chk Predicat,
 ) (list []Record, lastKey fdb.Key, err error) {
-	var rec Record
 	var buf []byte
+	var rec Record
+	batchSize := 1000
 
-	rows := db.tx.GetRange(rng, opt).GetSliceOrPanic()
-	list = make([]Record, 0, len(rows))
-	load := make([]Record, 0, len(rows))
+	lim := opt.Limit
+	opt.Mode = fdb.StreamingModeIterator
 
-	for i := range rows {
-		if opt.Reverse {
-			if i == 0 {
-				lastKey = rows[i].Key
+	// disable fdb limit if there are our limit with filter
+	if chk != nil {
+		opt.Limit = 0
+	}
+
+	iter := db.tx.GetRange(rng, opt).Iterator()
+	list = make([]Record, 0, lim)
+	load := make([]Record, 0, batchSize)
+
+	loadByID := func() (exp error) {
+		if len(load) == 0 {
+			return
+		}
+
+		if exp = db.Load(load...); exp != nil {
+			return
+		}
+
+		for i := range load {
+			add := true
+			if chk != nil {
+				if add, exp = chk(load[i]); exp != nil {
+					return
+				}
 			}
-		} else {
-			if i == len(rows)-1 {
-				lastKey = rows[i].Key
+
+			if add {
+				list = append(list, load[i])
 			}
 		}
 
-		klen := len(rows[i].Key)
-		idlen := int(rows[i].Key[klen-1])
-		rid := rows[i].Key[klen-idlen-1 : klen-1]
+		load = make([]Record, 0, batchSize)
+		return nil
+	}
+
+	index := 0
+	for iter.Advance() && (lim == 0 || len(list) < lim) {
+		row := iter.MustGet()
+
+		if opt.Reverse {
+			// first key is the last key for reverse
+			if index == 0 {
+				lastKey = row.Key
+			}
+		} else {
+			lastKey = row.Key
+		}
+
+		index++
+
+		klen := len(row.Key)
+		idlen := int(row.Key[klen-1])
+		rid := row.Key[klen-idlen-1 : klen-1]
 
 		if rec, err = fab(rid); err != nil {
 			return
 		}
 
-		if len(rows[i].Value) == 0 {
+		if len(row.Value) == 0 {
 			load = append(load, rec)
+
+			// buffered load
+			if len(load) >= batchSize {
+				if err = loadByID(); err != nil {
+					return
+				}
+			}
+
 			continue
 		}
 
-		if _, buf, err = db.unpack(rows[i].Value); err != nil {
+		if _, buf, err = db.unpack(row.Value); err != nil {
 			return
 		}
 
@@ -445,23 +492,8 @@ func (db *v610db) getRange(
 		}
 	}
 
-	if len(load) > 0 {
-		if err = db.Load(load...); err != nil {
-			return
-		}
-
-		for i := range load {
-			add := true
-			if chk != nil {
-				if add, err = chk(load[i]); err != nil {
-					return
-				}
-			}
-
-			if add {
-				list = append(list, load[i])
-			}
-		}
+	if err = loadByID(); err != nil {
+		return
 	}
 
 	return list, lastKey, nil

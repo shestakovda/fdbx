@@ -90,7 +90,7 @@ type Cursor interface {
 	Prev(db DB, skip uint8) ([]Record, error)
 
 	// select all records from current position to the end of collection
-	Select(ctx context.Context) (<-chan Record, <-chan error)
+	Select(ctx context.Context, opts ...Option) (<-chan Record, <-chan error)
 }
 
 // Queue -

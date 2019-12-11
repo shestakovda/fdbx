@@ -1,11 +1,13 @@
 package fdbx_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -123,7 +125,7 @@ func TestSelect(t *testing.T) {
 
 	// ********* all in *********
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	recc, errc := cur.Select(ctx)
@@ -313,6 +315,112 @@ func TestIndex(t *testing.T) {
 		assert.Equal(t, rec, list[0])
 		return nil
 	}))
+}
+
+func TestLongValuesCollection(t *testing.T) {
+	conn, err := fdbx.NewConn(TestDatabase, TestVersion)
+	assert.NoError(t, err)
+	assert.NotNil(t, conn)
+	assert.NoError(t, conn.ClearDB())
+
+	records := make([]fdbx.Record, 3)
+	for i := range records {
+		records[i] = newTestRecord()
+	}
+
+	guid := records[1].(*testRecord).Name
+	records[1].(*testRecord).Name = strings.Repeat(guid, 10000)
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
+
+	cur, err := conn.Cursor(TestCollection, recordFabric, nil, 3)
+	assert.NoError(t, err)
+	assert.NotNil(t, cur)
+	assert.False(t, cur.Empty())
+
+	defer func() { assert.NoError(t, cur.Close()) }()
+
+	// ********* filter *********
+
+	filter := fdbx.Filter(func(rec fdbx.Record) (bool, error) {
+		if len(rec.(*testRecord).Name) > 1000 {
+			return false, nil
+		}
+		return true, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	recc, errc := cur.Select(ctx, filter)
+
+	recs := make([]fdbx.Record, 0, 2)
+	for rec := range recc {
+		recs = append(recs, rec)
+	}
+
+	errs := make([]error, 0)
+	for err := range errc {
+		errs = append(errs, err)
+	}
+
+	assert.Len(t, errs, 0)
+	assert.Len(t, recs, 2)
+	assert.True(t, cur.Empty())
+}
+
+func TestLongValuesIndex(t *testing.T) {
+	conn, err := fdbx.NewConn(TestDatabase, TestVersion)
+	assert.NoError(t, err)
+	assert.NotNil(t, conn)
+	assert.NoError(t, conn.ClearDB())
+
+	records := make([]fdbx.Record, 3)
+	for i := range records {
+		records[i] = newTestRecord()
+	}
+
+	guid := records[1].(*testRecord).Data
+	records[1].(*testRecord).Data = bytes.Repeat(guid, 10000)
+
+	conn.RegisterIndex(TestCollection, testRecordIdx)
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
+
+	cur, err := conn.Cursor(TestIndexName, recordFabric, nil, 3)
+	assert.NoError(t, err)
+	assert.NotNil(t, cur)
+	assert.False(t, cur.Empty())
+
+	defer func() { assert.NoError(t, cur.Close()) }()
+
+	// ********* filter *********
+
+	filter := fdbx.Filter(func(rec fdbx.Record) (bool, error) {
+		if len(rec.(*testRecord).Data) > 1000 {
+			return false, nil
+		}
+		return true, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	recc, errc := cur.Select(ctx, filter)
+
+	recs := make([]fdbx.Record, 0, 2)
+	for rec := range recc {
+		recs = append(recs, rec)
+	}
+
+	errs := make([]error, 0)
+	for err := range errc {
+		errs = append(errs, err)
+	}
+
+	assert.Len(t, errs, 0)
+	assert.Len(t, recs, 2)
+	assert.True(t, cur.Empty())
 }
 
 func TestQueue(t *testing.T) {

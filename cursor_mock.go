@@ -39,7 +39,7 @@ func (m *mockCursor) Next(db DB, skip uint8) ([]Record, error) { return m.FNext(
 func (m *mockCursor) Prev(db DB, skip uint8) ([]Record, error) { return m.FPrev(db, skip) }
 
 // Select all records from current position to the end of collection
-func (m *mockCursor) Select(ctx context.Context) (<-chan Record, <-chan error) {
+func (m *mockCursor) Select(ctx context.Context, opts ...Option) (<-chan Record, <-chan error) {
 	return m.FCursorSelect(ctx)
 }
 

@@ -9,6 +9,10 @@ type v610Indexer struct {
 }
 
 func (i *v610Indexer) Index(idxTypeID uint16, value []byte) {
+	if len(value) == 0 {
+		return
+	}
+
 	i.list = append(i.list, &v610Index{
 		typeID: idxTypeID,
 		value:  value,
