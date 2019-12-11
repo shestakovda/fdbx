@@ -8,14 +8,17 @@ import (
 	"github.com/google/uuid"
 )
 
-func v610CursorFabric(conn *v610Conn, id []byte) (*v610cursor, error) {
+func v610CursorFabric(conn *v610Conn, id []byte, fab Fabric) (*v610cursor, error) {
 	return &v610cursor{
-		id:   id,
-		conn: conn,
+		id:     id,
+		fabric: fab,
+		conn:   conn,
+		From:   []byte{0x00},
+		To:     []byte{0xFF},
 	}, nil
 }
 
-func newV610cursor(conn *v610Conn, typeID uint16, fab Fabric, start []byte, pageSize int) (*v610cursor, error) {
+func newV610cursor(conn *v610Conn, TypeID uint16, fab Fabric, start []byte, pageSize int) (*v610cursor, error) {
 	uid := uuid.New()
 
 	if len(start) == 0 {
@@ -28,25 +31,28 @@ func newV610cursor(conn *v610Conn, typeID uint16, fab Fabric, start []byte, page
 
 	return &v610cursor{
 		id:     uid[:],
-		pos:    conn.key(typeID, start),
-		page:   pageSize,
+		Pos:    conn.key(TypeID, start),
+		Page:   pageSize,
 		conn:   conn,
 		fabric: fab,
-		typeID: typeID,
+		TypeID: TypeID,
+		From:   []byte{0x00},
+		To:     []byte{0xFF},
 	}, nil
 }
 
 type v610cursor struct {
 	id []byte
 
-	pos   fdb.Key
-	page  int
-	empty bool
+	From    []byte  `json:"from"`
+	To      []byte  `json:"to"`
+	Pos     fdb.Key `json:"pos"`
+	Page    int     `json:"page"`
+	IsEmpty bool    `json:"empty"`
+	TypeID  uint16  `json:"type"`
 
-	typeID uint16
 	fabric Fabric
-
-	conn *v610Conn
+	conn   *v610Conn
 }
 
 // ********************** As Record **********************
@@ -58,9 +64,9 @@ func (cur *v610cursor) FdbxUnmarshal(buf []byte) error { return json.Unmarshal(b
 
 // ********************** Public **********************
 
-func (cur *v610cursor) Empty() bool                { return cur.empty }
-func (cur *v610cursor) Close() error               { cur.empty = true; return cur.drop() }
-func (cur *v610cursor) Settings() (uint16, Fabric) { return cur.typeID, cur.fabric }
+func (cur *v610cursor) Empty() bool                { return cur.IsEmpty }
+func (cur *v610cursor) Close() error               { cur.IsEmpty = true; return cur.drop() }
+func (cur *v610cursor) Settings() (uint16, Fabric) { return cur.TypeID, cur.fabric }
 
 func (cur *v610cursor) Next(db DB, skip uint8) ([]Record, error) {
 	return cur.getPage(db, skip, false, nil)
@@ -96,18 +102,18 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 		return nil, ErrIncompatibleDB.WithStack()
 	}
 
-	opt := fdb.RangeOptions{Limit: cur.page, Mode: fdb.StreamingModeWantAll, Reverse: reverse}
+	opt := fdb.RangeOptions{Limit: cur.Page, Mode: fdb.StreamingModeWantAll, Reverse: reverse}
 
 	if reverse {
-		rng.Begin = cur.conn.key(cur.typeID)
-		rng.End = cur.pos
+		rng.Begin = cur.conn.key(cur.TypeID, cur.From)
+		rng.End = cur.Pos
 	} else {
-		rng.Begin = cur.pos
-		rng.End = cur.conn.key(cur.typeID, []byte{0xFF})
+		rng.Begin = cur.Pos
+		rng.End = cur.conn.key(cur.TypeID, cur.To)
 	}
 
 	if skip > 0 {
-		opt.Limit = int(skip) * cur.page
+		opt.Limit = int(skip) * cur.Page
 		if reverse {
 			opt.Limit++
 		}
@@ -116,17 +122,17 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 		rlen := len(rows)
 
 		if rlen < opt.Limit {
-			cur.empty = true
+			cur.IsEmpty = true
 			return nil, nil
 		}
 
-		cur.pos = append(rows[rlen-1].Key, 0xFF)
-		opt.Limit = cur.page
+		cur.Pos = append(rows[rlen-1].Key, 0xFF)
+		opt.Limit = cur.Page
 
 		if reverse {
-			rng.End = cur.pos
+			rng.End = cur.Pos
 		} else {
-			rng.Begin = cur.pos
+			rng.Begin = cur.Pos
 		}
 	}
 
@@ -141,10 +147,10 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 	}
 
 	if len(lastKey) > 0 {
-		cur.pos = append(lastKey, 0xFF)
+		cur.Pos = append(lastKey, 0xFF)
 	}
 
-	cur.empty = !reverse && len(list) < cur.page
+	cur.IsEmpty = len(list) < cur.Page
 	return list, nil
 }
 
@@ -177,8 +183,18 @@ func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan 
 		}
 	}
 
+	cur.From = []byte{0x00}
+	if len(o.from) > 0 {
+		cur.From = o.from
+	}
+
+	cur.To = []byte{0xFF}
+	if len(o.to) > 0 {
+		cur.To = o.to
+	}
+
 	count := 0
-	for !cur.empty && ctx.Err() == nil && (o.limit == 0 || count < o.limit) {
+	for !cur.IsEmpty && ctx.Err() == nil && (o.limit == 0 || count < o.limit) {
 		if err = cur.conn.Tx(func(db DB) (exp error) {
 			list, exp = cur.getPage(db, 0, false, o.filter)
 			return
@@ -192,7 +208,7 @@ func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan 
 			case recs <- list[i]:
 				count++
 				if o.limit > 0 && count >= o.limit {
-					cur.empty = true
+					cur.IsEmpty = true
 					return
 				}
 			case <-ctx.Done():

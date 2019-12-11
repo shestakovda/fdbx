@@ -33,6 +33,7 @@ func TestCrud(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, conn)
 	assert.NoError(t, conn.ClearDB())
+	defer conn.ClearDB()
 
 	rec1 := newTestRecord()
 	rec2 := &testRecord{ID: rec1.ID}
@@ -108,6 +109,7 @@ func TestSelect(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, conn)
 	assert.NoError(t, conn.ClearDB())
+	defer conn.ClearDB()
 
 	records := make([]fdbx.Record, 10)
 	for i := range records {
@@ -204,6 +206,7 @@ func TestIndex(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, conn)
 	assert.NoError(t, conn.ClearDB())
+	defer conn.ClearDB()
 
 	records := make([]fdbx.Record, 10)
 	for i := range records {
@@ -271,6 +274,10 @@ func TestIndex(t *testing.T) {
 	assert.False(t, cur.Empty())
 	rect = append(rect, recl...)
 
+	cur, err = conn.LoadCursor(recordFabric, cur.FdbxID(), 3)
+	assert.NoError(t, err)
+	assert.NotNil(t, cur)
+
 	// pos: 6 -> (load 3) -> 9
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl, err = cur.Next(db, 0); return err }))
 	assert.Len(t, recl, 3)
@@ -322,6 +329,7 @@ func TestLongValuesCollection(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, conn)
 	assert.NoError(t, conn.ClearDB())
+	defer conn.ClearDB()
 
 	records := make([]fdbx.Record, 3)
 	for i := range records {
@@ -367,6 +375,7 @@ func TestLongValuesCollection(t *testing.T) {
 	assert.Len(t, errs, 0)
 	assert.Len(t, recs, 2)
 	assert.True(t, cur.Empty())
+	assert.NoError(t, cur.Close())
 }
 
 func TestLongValuesIndex(t *testing.T) {
@@ -374,6 +383,7 @@ func TestLongValuesIndex(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, conn)
 	assert.NoError(t, conn.ClearDB())
+	defer conn.ClearDB()
 
 	records := make([]fdbx.Record, 3)
 	for i := range records {
@@ -428,6 +438,7 @@ func TestQueue(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, conn)
 	assert.NoError(t, conn.ClearDB())
+	defer conn.ClearDB()
 
 	records := make([]fdbx.Record, 3)
 	for i := range records {
@@ -459,7 +470,7 @@ func TestQueue(t *testing.T) {
 		for rec := range recc {
 			recs = append(recs, rec)
 
-			assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return queue.Ack(db, rec) }))
+			assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return queue.Ack(db, rec.FdbxID()) }))
 		}
 
 		errs := make([]error, 0, 3)
@@ -476,7 +487,7 @@ func TestQueue(t *testing.T) {
 		time.Sleep(2 * fdbx.PunchSize)
 
 		assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
-			return queue.Pub(db, records[i], time.Now().Add(2*fdbx.PunchSize))
+			return queue.Pub(db, records[i].FdbxID(), time.Now().Add(2*fdbx.PunchSize))
 		}))
 	}
 

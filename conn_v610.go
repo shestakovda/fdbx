@@ -58,10 +58,10 @@ func (c *v610Conn) Cursor(typeID uint16, fab Fabric, start []byte, page int) (Cu
 	return newV610cursor(c, typeID, fab, start, page)
 }
 
-func (c *v610Conn) LoadCursor(id []byte, page int) (_ Cursor, err error) {
+func (c *v610Conn) LoadCursor(fab Fabric, id []byte, page int) (_ Cursor, err error) {
 	var cur *v610cursor
 
-	if cur, err = v610CursorFabric(c, id); err != nil {
+	if cur, err = v610CursorFabric(c, id, fab); err != nil {
 		return
 	}
 
@@ -70,7 +70,7 @@ func (c *v610Conn) LoadCursor(id []byte, page int) (_ Cursor, err error) {
 	}
 
 	if page > 0 {
-		cur.page = int(page)
+		cur.Page = int(page)
 	}
 
 	return cur, nil

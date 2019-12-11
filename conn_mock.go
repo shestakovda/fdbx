@@ -14,7 +14,7 @@ type MockConn struct {
 	*baseConn
 
 	FClearDB    func() error
-	FLoadCursor func(id []byte, page int) (Cursor, error)
+	FLoadCursor func(fab Fabric, id []byte, page int) (Cursor, error)
 
 	// ***** DB *****
 
@@ -29,8 +29,8 @@ type MockConn struct {
 
 	// ***** Queue *****
 
-	FAck      func(DB, Record) error
-	FPub      func(DB, Record, time.Time) error
+	FAck      func(DB, []byte) error
+	FPub      func(DB, []byte, time.Time) error
 	FSub      func(ctx context.Context) (<-chan Record, <-chan error)
 	FSubOne   func(ctx context.Context) (Record, error)
 	FSubList  func(ctx context.Context, limit int) ([]Record, error)
@@ -70,6 +70,6 @@ func (c *MockConn) Cursor(typeID uint16, fab Fabric, start []byte, page int) (Cu
 }
 
 // LoadCursor - load cursor stub
-func (c *MockConn) LoadCursor(id []byte, page int) (Cursor, error) {
-	return c.FLoadCursor(id, page)
+func (c *MockConn) LoadCursor(fab Fabric, id []byte, page int) (Cursor, error) {
+	return c.FLoadCursor(fab, id, page)
 }

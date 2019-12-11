@@ -58,7 +58,7 @@ type Conn interface {
 	Queue(typeID uint16, f Fabric, prefix []byte) (Queue, error)
 
 	Cursor(typeID uint16, f Fabric, start []byte, pageSize int) (Cursor, error)
-	LoadCursor(id []byte, pageSize int) (Cursor, error)
+	LoadCursor(f Fabric, id []byte, pageSize int) (Cursor, error)
 }
 
 // DB - database object that holds connection for transaction handler
@@ -95,9 +95,9 @@ type Cursor interface {
 
 // Queue -
 type Queue interface {
-	Ack(DB, Record) error
+	Ack(db DB, id []byte) error
 
-	Pub(DB, Record, time.Time) error
+	Pub(db DB, id []byte, when time.Time) error
 
 	Sub(ctx context.Context) (<-chan Record, <-chan error)
 	SubOne(ctx context.Context) (Record, error)

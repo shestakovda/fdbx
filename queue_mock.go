@@ -16,8 +16,8 @@ type mockQueue struct {
 	mf Fabric
 }
 
-func (q *mockQueue) Ack(db DB, m Record) error                             { return q.FAck(db, m) }
-func (q *mockQueue) Pub(db DB, m Record, t time.Time) error                { return q.FPub(db, m, t) }
+func (q *mockQueue) Ack(db DB, id []byte) error                            { return q.FAck(db, id) }
+func (q *mockQueue) Pub(db DB, id []byte, t time.Time) error               { return q.FPub(db, id, t) }
 func (q *mockQueue) Sub(ctx context.Context) (<-chan Record, <-chan error) { return q.FSub(ctx) }
 func (q *mockQueue) SubOne(ctx context.Context) (Record, error)            { return q.FSubOne(ctx) }
 func (q *mockQueue) SubList(ctx context.Context, limit int) ([]Record, error) {

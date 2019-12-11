@@ -37,39 +37,28 @@ type v610queue struct {
 
 func (q *v610queue) Settings() (uint16, Fabric) { return q.id, q.mf }
 
-func (q *v610queue) Ack(db DB, rec Record) error {
+func (q *v610queue) Ack(db DB, id []byte) error {
 	var ok bool
 	var db610 *v610db
 
 	if db == nil {
 		return ErrNullDB.WithStack()
-	}
-
-	if rec == nil {
-		return ErrNullRecord.WithStack()
 	}
 
 	if db610, ok = db.(*v610db); !ok {
 		return ErrIncompatibleDB.WithStack()
 	}
 
-	rid := rec.FdbxID()
-	rln := []byte{byte(len(rid))}
-
-	db610.tx.Clear(q.cn.key(q.id, q.pf, []byte{0xFF}, rid, rln))
+	db610.tx.Clear(q.cn.key(q.id, q.pf, []byte{0xFF}, id, []byte{byte(len(id))}))
 	return nil
 }
 
-func (q *v610queue) Pub(db DB, rec Record, t time.Time) (err error) {
+func (q *v610queue) Pub(db DB, id []byte, t time.Time) (err error) {
 	var ok bool
 	var db610 *v610db
 
 	if db == nil {
 		return ErrNullDB.WithStack()
-	}
-
-	if rec == nil {
-		return ErrNullRecord.WithStack()
 	}
 
 	if db610, ok = db.(*v610db); !ok {
@@ -80,14 +69,11 @@ func (q *v610queue) Pub(db DB, rec Record, t time.Time) (err error) {
 		t = time.Now()
 	}
 
-	rid := rec.FdbxID()
-	rln := []byte{byte(len(rid))}
-
 	when := make([]byte, 8)
 	binary.BigEndian.PutUint64(when, uint64(t.UnixNano()))
 
 	// set task
-	db610.tx.Set(q.cn.key(q.id, q.pf, when, rid, rln), nil)
+	db610.tx.Set(q.cn.key(q.id, q.pf, when, id, []byte{byte(len(id))}), nil)
 
 	// update watch
 	db610.tx.Set(q.wk, when)
