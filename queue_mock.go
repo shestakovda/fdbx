@@ -5,13 +5,14 @@ import (
 	"time"
 )
 
-func newMockQueue(conn *MockConn, qtype uint16, f Fabric) (*mockQueue, error) {
-	return &mockQueue{MockConn: conn, id: qtype, mf: f}, nil
+func newMockQueue(conn *MockConn, qtype uint16, f Fabric, prefix []byte) (*mockQueue, error) {
+	return &mockQueue{MockConn: conn, id: qtype, mf: f, pf: prefix}, nil
 }
 
 type mockQueue struct {
 	*MockConn
 	id uint16
+	pf []byte
 	mf Fabric
 }
 

@@ -60,8 +60,8 @@ func (c *MockConn) ClearDB() error { return c.FClearDB() }
 func (c *MockConn) Tx(h TxHandler) error { return h(newMockDB(c)) }
 
 // Queue - queue stub, create mock object
-func (c *MockConn) Queue(typeID uint16, fab Fabric) (Queue, error) {
-	return newMockQueue(c, typeID, fab)
+func (c *MockConn) Queue(typeID uint16, fab Fabric, prefix []byte) (Queue, error) {
+	return newMockQueue(c, typeID, fab, prefix)
 }
 
 // Cursor - cursor stub, create mock object

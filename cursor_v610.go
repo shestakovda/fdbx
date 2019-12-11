@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/golang/glog"
 	"github.com/google/uuid"
 )
 
-func v610CursorFabric(id []byte) (*v610cursor, error) {
-	return &v610cursor{id: id}, nil
+func v610CursorFabric(conn *v610Conn, id []byte) (*v610cursor, error) {
+	return &v610cursor{
+		id:   id,
+		conn: conn,
+	}, nil
 }
 
 func newV610cursor(conn *v610Conn, typeID uint16, fab Fabric, start []byte, pageSize int) (*v610cursor, error) {
@@ -88,8 +90,6 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool) (list []Record, 
 		return nil, ErrIncompatibleDB.WithStack()
 	}
 
-	defer glog.Flush()
-
 	opt := fdb.RangeOptions{Limit: cur.page, Mode: fdb.StreamingModeWantAll, Reverse: reverse}
 
 	if reverse {
@@ -124,22 +124,21 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool) (list []Record, 
 		}
 	}
 
-	if list, err = db610.getRange(rng, opt, cur.fabric, nil); err != nil {
+	var lastKey fdb.Key
+
+	if list, lastKey, err = db610.getRange(rng, opt, cur.fabric, nil); err != nil {
 		return
 	}
 
-	llen := len(list)
-
-	if llen > 0 {
-
-		if reverse {
-			reverseList(list)
-		}
-
-		cur.pos = cur.conn.key(cur.typeID, list[llen-1].FdbxID(), []byte{0xFF})
+	if reverse {
+		reverseList(list)
 	}
 
-	cur.empty = !reverse && llen < cur.page
+	if len(lastKey) > 0 {
+		cur.pos = append(lastKey, 0xFF)
+	}
+
+	cur.empty = !reverse && len(list) < cur.page
 	return list, nil
 }
 

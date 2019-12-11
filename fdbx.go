@@ -55,7 +55,7 @@ type Conn interface {
 
 	Tx(TxHandler) error
 
-	Queue(typeID uint16, f Fabric) (Queue, error)
+	Queue(typeID uint16, f Fabric, prefix []byte) (Queue, error)
 
 	Cursor(typeID uint16, f Fabric, start []byte, pageSize int) (Cursor, error)
 	LoadCursor(id []byte, pageSize int) (Cursor, error)

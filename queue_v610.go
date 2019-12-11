@@ -12,21 +12,23 @@ import (
 // PunchSize - размер ожидания в случае отсутствия задач
 var PunchSize = time.Minute
 
-func newV610queue(conn *v610Conn, typeID uint16, fab Fabric) (*v610queue, error) {
+func newV610queue(conn *v610Conn, typeID uint16, fab Fabric, prefix []byte) (*v610queue, error) {
 	return &v610queue{
 		id: typeID,
 		cn: conn,
 		mf: fab,
-		wk: conn.key(typeID, []byte{0xFF, 0xFF}),
+		pf: prefix,
+		wk: conn.key(typeID, prefix, []byte{0xFF, 0xFF}),
 		kr: fdb.KeyRange{
-			Begin: conn.key(typeID, []byte{0x00}),
-			End:   conn.key(typeID, []byte{0xFF}),
+			Begin: conn.key(typeID, prefix, []byte{0x00}),
+			End:   conn.key(typeID, prefix, []byte{0xFF}),
 		},
 	}, nil
 }
 
 type v610queue struct {
 	id uint16
+	pf []byte
 	mf Fabric
 	cn *v610Conn
 	wk fdb.Key
@@ -36,6 +38,9 @@ type v610queue struct {
 func (q *v610queue) Settings() (uint16, Fabric) { return q.id, q.mf }
 
 func (q *v610queue) Ack(db DB, rec Record) error {
+	var ok bool
+	var db610 *v610db
+
 	if db == nil {
 		return ErrNullDB.WithStack()
 	}
@@ -44,36 +49,49 @@ func (q *v610queue) Ack(db DB, rec Record) error {
 		return ErrNullRecord.WithStack()
 	}
 
-	return db.Del(q.id, append([]byte{0xFF}, rec.FdbxID()...))
+	if db610, ok = db.(*v610db); !ok {
+		return ErrIncompatibleDB.WithStack()
+	}
+
+	rid := rec.FdbxID()
+	rln := []byte{byte(len(rid))}
+
+	db610.tx.Clear(q.cn.key(q.id, q.pf, []byte{0xFF}, rid, rln))
+	return nil
 }
 
 func (q *v610queue) Pub(db DB, rec Record, t time.Time) (err error) {
+	var ok bool
+	var db610 *v610db
+
 	if db == nil {
 		return ErrNullDB.WithStack()
 	}
 
 	if rec == nil {
 		return ErrNullRecord.WithStack()
+	}
+
+	if db610, ok = db.(*v610db); !ok {
+		return ErrIncompatibleDB.WithStack()
 	}
 
 	if t.IsZero() {
 		t = time.Now()
 	}
 
-	mid := rec.FdbxID()
-	key := make([]byte, 8+len(mid))
-	binary.BigEndian.PutUint64(key[:8], uint64(t.UnixNano()))
+	rid := rec.FdbxID()
+	rln := []byte{byte(len(rid))}
 
-	if n := copy(key[8:], mid); n != len(mid) {
-		return ErrMemFail.WithStack()
-	}
+	when := make([]byte, 8)
+	binary.BigEndian.PutUint64(when, uint64(t.UnixNano()))
 
-	if err = db.Set(q.id, key, nil); err != nil {
-		return
-	}
+	// set task
+	db610.tx.Set(q.cn.key(q.id, q.pf, when, rid, rln), nil)
 
 	// update watch
-	return db.Set(q.id, []byte{0xFF, 0xFF}, key[:8])
+	db610.tx.Set(q.wk, when)
+	return nil
 }
 
 func (q *v610queue) Sub(ctx context.Context) (<-chan Record, <-chan error) {
@@ -104,6 +122,10 @@ func (q *v610queue) Sub(ctx context.Context) (<-chan Record, <-chan error) {
 				return
 			}
 
+			if m == nil {
+				continue
+			}
+
 			select {
 			case modc <- m:
 			case <-ctx.Done():
@@ -122,7 +144,12 @@ func (q *v610queue) SubOne(ctx context.Context) (_ Record, err error) {
 	if list, err = q.SubList(ctx, 1); err != nil {
 		return
 	}
-	return list[0], nil
+
+	if len(list) > 0 {
+		return list[0], nil
+	}
+
+	return nil, ErrRecordNotFound.WithStack()
 }
 
 func (q *v610queue) nextTaskDistance() (d time.Duration, err error) {
@@ -130,7 +157,9 @@ func (q *v610queue) nextTaskDistance() (d time.Duration, err error) {
 	_, err = q.cn.fdb.ReadTransact(func(tx fdb.ReadTransaction) (_ interface{}, e error) {
 		rows := tx.GetRange(q.kr, fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: 1}).GetSliceOrPanic()
 		if len(rows) > 0 {
-			if wait := time.Unix(0, int64(binary.BigEndian.Uint64(rows[0].Key[4:12]))).Sub(time.Now()); wait > 0 {
+			pflen := 4 + len(q.pf)
+			iwhen := int64(binary.BigEndian.Uint64(rows[0].Key[pflen : pflen+8]))
+			if wait := time.Unix(0, iwhen).Sub(time.Now()); wait > 0 {
 				d = wait + time.Millisecond
 			}
 		}
@@ -179,7 +208,7 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Record, err 
 			ids = make([][]byte, 0, limit)
 			binary.BigEndian.PutUint64(now, uint64(time.Now().UnixNano()))
 
-			kr := fdb.KeyRange{Begin: q.cn.key(q.id, []byte{0x00}), End: q.cn.key(q.id, now)}
+			kr := fdb.KeyRange{Begin: q.cn.key(q.id, q.pf, []byte{0x00}), End: q.cn.key(q.id, q.pf, now)}
 
 			lim := limit - len(list)
 
@@ -200,11 +229,13 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Record, err 
 			}
 
 			for i := range rows {
-				mid := rows[i].Key[12:]
-				ids = append(ids, mid)
+				klen := len(rows[i].Key)
+				rln := rows[i].Key[klen-1 : klen]
+				rid := rows[i].Key[klen-int(rln[0])-1 : klen-1]
+				ids = append(ids, rid)
 
 				// move to lost
-				tx.Set(q.cn.key(q.id, []byte{0xFF}, mid), nil)
+				tx.Set(q.cn.key(q.id, q.pf, []byte{0xFF}, rid, rln), nil)
 				tx.Clear(rows[i].Key)
 			}
 
@@ -218,18 +249,18 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Record, err 
 			continue
 		}
 
-		models := make([]Record, len(ids))
+		recs := make([]Record, len(ids))
 		for i := range ids {
-			if models[i], err = q.mf(ids[i]); err != nil {
+			if recs[i], err = q.mf(ids[i]); err != nil {
 				return
 			}
 		}
 
-		if err = q.cn.Tx(func(db DB) error { return db.Load(models...) }); err != nil {
+		if err = q.cn.Tx(func(db DB) error { return db.Load(recs...) }); err != nil {
 			return
 		}
 
-		list = append(list, models...)
+		list = append(list, recs...)
 	}
 
 	return list, nil

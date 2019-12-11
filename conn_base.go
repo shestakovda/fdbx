@@ -37,7 +37,9 @@ func (c *baseConn) key(typeID uint16, parts ...[]byte) fdb.Key {
 	binary.BigEndian.PutUint16(key[2:4], typeID)
 
 	for i := range parts {
-		key = append(key, parts[i]...)
+		if len(parts[i]) > 0 {
+			key = append(key, parts[i]...)
+		}
 	}
 
 	return key

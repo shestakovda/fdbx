@@ -40,9 +40,9 @@ func (db *v610db) Del(typeID uint16, id []byte) error {
 	return nil
 }
 
-func (db *v610db) Save(models ...Record) (err error) {
-	for i := range models {
-		if err = db.save(models[i]); err != nil {
+func (db *v610db) Save(recs ...Record) (err error) {
+	for i := range recs {
+		if err = db.save(recs[i]); err != nil {
 			return
 		}
 	}
@@ -86,12 +86,12 @@ func (db *v610db) Drop(recs ...Record) (err error) {
 	return nil
 }
 
-func (db *v610db) Select(typeID uint16, fab Fabric, opts ...Option) ([]Record, error) {
+func (db *v610db) Select(typeID uint16, fab Fabric, opts ...Option) (list []Record, err error) {
 	o := new(options)
 
 	for i := range opts {
-		if err := opts[i](o); err != nil {
-			return nil, err
+		if err = opts[i](o); err != nil {
+			return
 		}
 	}
 
@@ -111,7 +111,13 @@ func (db *v610db) Select(typeID uint16, fab Fabric, opts ...Option) ([]Record, e
 		to = o.to
 	}
 
-	return db.getRange(fdb.KeyRange{Begin: db.conn.key(typeID, from), End: db.conn.key(typeID, to)}, opt, fab, o.filter)
+	rng := fdb.KeyRange{Begin: db.conn.key(typeID, from), End: db.conn.key(typeID, to)}
+
+	if list, _, err = db.getRange(rng, opt, fab, o.filter); err != nil {
+		return
+	}
+
+	return list, err
 }
 
 // *********** private ***********
@@ -235,13 +241,16 @@ func (db *v610db) save(rec Record) (err error) {
 		return
 	}
 
+	if err = db.setIndexes(rec, buf, false); err != nil {
+		return
+	}
+
 	if buf, err = db.pack(buf); err != nil {
 		return
 	}
 
 	db.tx.Set(db.conn.rkey(rec), buf)
-
-	return db.setIndexes(rec, buf, false)
+	return nil
 }
 
 func (db *v610db) load(m Record, fb fdb.FutureByteSlice) (err error) {
@@ -384,7 +393,7 @@ func (db *v610db) getRange(
 	opt fdb.RangeOptions,
 	fab Fabric,
 	chk Predicat,
-) (list []Record, err error) {
+) (list []Record, lastKey fdb.Key, err error) {
 	var rec Record
 	var buf []byte
 
@@ -393,10 +402,21 @@ func (db *v610db) getRange(
 	load := make([]Record, 0, len(rows))
 
 	for i := range rows {
+		if opt.Reverse {
+			if i == 0 {
+				lastKey = rows[i].Key
+			}
+		} else {
+			if i == len(rows)-1 {
+				lastKey = rows[i].Key
+			}
+		}
+
 		klen := len(rows[i].Key)
 		idlen := int(rows[i].Key[klen-1])
+		rid := rows[i].Key[klen-idlen-1 : klen-1]
 
-		if rec, err = fab(rows[i].Key[klen-idlen-1 : klen-2]); err != nil {
+		if rec, err = fab(rid); err != nil {
 			return
 		}
 
@@ -444,5 +464,5 @@ func (db *v610db) getRange(
 		}
 	}
 
-	return list, nil
+	return list, lastKey, nil
 }
