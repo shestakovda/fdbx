@@ -452,7 +452,7 @@ func TestQueue(t *testing.T) {
 	assert.NotNil(t, queue)
 
 	// to accelerate tasks
-	fdbx.PunchSize = 100 * time.Millisecond
+	fdbx.PunchSize = 10 * time.Millisecond
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -461,7 +461,7 @@ func TestQueue(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
 		recc, errc := queue.Sub(ctx)
@@ -484,10 +484,10 @@ func TestQueue(t *testing.T) {
 	}()
 
 	for i := 0; i < 3; i++ {
-		time.Sleep(2 * fdbx.PunchSize)
+		time.Sleep(fdbx.PunchSize)
 
 		assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
-			return queue.Pub(db, records[i].FdbxID(), time.Now().Add(2*fdbx.PunchSize))
+			return queue.Pub(db, records[i].FdbxID(), time.Now().Add(fdbx.PunchSize))
 		}))
 	}
 

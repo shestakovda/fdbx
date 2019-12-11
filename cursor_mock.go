@@ -2,7 +2,7 @@ package fdbx
 
 import "context"
 
-func newMockCursor(conn *MockConn, typeID uint16, fab Fabric, start []byte, page int) (*mockCursor, error) {
+func newMockCursor(conn *MockConn, typeID uint16, fab Fabric, start []byte, page uint) (*mockCursor, error) {
 	return &mockCursor{MockConn: conn, id: typeID, mf: fab, st: start, pg: page}, nil
 }
 
@@ -10,7 +10,7 @@ type mockCursor struct {
 	*MockConn
 	id uint16
 	mf Fabric
-	pg int
+	pg uint
 	st []byte
 }
 

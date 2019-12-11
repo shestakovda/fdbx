@@ -154,12 +154,12 @@ func (q *v610queue) nextTaskDistance() (d time.Duration, err error) {
 	return d, err
 }
 
-func (q *v610queue) SubList(ctx context.Context, limit int) (list []Record, err error) {
+func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err error) {
 	var ids [][]byte
 	var wait fdb.FutureNil
 	var punch time.Duration
 
-	for len(list) < limit {
+	for len(list) == 0 {
 
 		if wait != nil {
 			if punch, err = q.nextTaskDistance(); err != nil {
@@ -196,7 +196,7 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Record, err 
 
 			kr := fdb.KeyRange{Begin: q.cn.key(q.id, q.pf, []byte{0x00}), End: q.cn.key(q.id, q.pf, now)}
 
-			lim := limit - len(list)
+			lim := int(limit) - len(list)
 
 			if lim < 1 {
 				return nil, nil
@@ -252,4 +252,4 @@ func (q *v610queue) SubList(ctx context.Context, limit int) (list []Record, err 
 	return list, nil
 }
 
-func (q *v610queue) GetLost(limit int) ([]Record, error) { return nil, nil }
+func (q *v610queue) GetLost(limit uint) ([]Record, error) { return nil, nil }

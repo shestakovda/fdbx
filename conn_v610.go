@@ -54,11 +54,11 @@ func (c *v610Conn) Queue(typeID uint16, fab Fabric, prefix []byte) (Queue, error
 	return newV610queue(c, typeID, fab, prefix)
 }
 
-func (c *v610Conn) Cursor(typeID uint16, fab Fabric, start []byte, page int) (Cursor, error) {
+func (c *v610Conn) Cursor(typeID uint16, fab Fabric, start []byte, page uint) (Cursor, error) {
 	return newV610cursor(c, typeID, fab, start, page)
 }
 
-func (c *v610Conn) LoadCursor(fab Fabric, id []byte, page int) (_ Cursor, err error) {
+func (c *v610Conn) LoadCursor(fab Fabric, id []byte, page uint) (_ Cursor, err error) {
 	var cur *v610cursor
 
 	if cur, err = v610CursorFabric(c, id, fab); err != nil {

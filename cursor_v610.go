@@ -13,12 +13,12 @@ func v610CursorFabric(conn *v610Conn, id []byte, fab Fabric) (*v610cursor, error
 		id:     id,
 		fabric: fab,
 		conn:   conn,
-		From:   []byte{0x00},
+		From:   nil,
 		To:     []byte{0xFF},
 	}, nil
 }
 
-func newV610cursor(conn *v610Conn, TypeID uint16, fab Fabric, start []byte, pageSize int) (*v610cursor, error) {
+func newV610cursor(conn *v610Conn, TypeID uint16, fab Fabric, start []byte, pageSize uint) (*v610cursor, error) {
 	uid := uuid.New()
 
 	if len(start) == 0 {
@@ -32,11 +32,11 @@ func newV610cursor(conn *v610Conn, TypeID uint16, fab Fabric, start []byte, page
 	return &v610cursor{
 		id:     uid[:],
 		Pos:    conn.key(TypeID, start),
-		Page:   pageSize,
+		Page:   int(pageSize),
 		conn:   conn,
 		fabric: fab,
 		TypeID: TypeID,
-		From:   []byte{0x00},
+		From:   nil,
 		To:     []byte{0xFF},
 	}, nil
 }
@@ -183,7 +183,7 @@ func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan 
 		}
 	}
 
-	cur.From = []byte{0x00}
+	cur.From = nil
 	if len(o.from) > 0 {
 		cur.From = o.from
 	}

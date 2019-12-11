@@ -57,8 +57,8 @@ type Conn interface {
 
 	Queue(typeID uint16, f Fabric, prefix []byte) (Queue, error)
 
-	Cursor(typeID uint16, f Fabric, start []byte, pageSize int) (Cursor, error)
-	LoadCursor(f Fabric, id []byte, pageSize int) (Cursor, error)
+	Cursor(typeID uint16, f Fabric, start []byte, pageSize uint) (Cursor, error)
+	LoadCursor(f Fabric, id []byte, pageSize uint) (Cursor, error)
 }
 
 // DB - database object that holds connection for transaction handler
@@ -101,9 +101,9 @@ type Queue interface {
 
 	Sub(ctx context.Context) (<-chan Record, <-chan error)
 	SubOne(ctx context.Context) (Record, error)
-	SubList(ctx context.Context, limit int) ([]Record, error)
+	SubList(ctx context.Context, limit uint) ([]Record, error)
 
-	GetLost(limit int) ([]Record, error)
+	GetLost(limit uint) ([]Record, error)
 }
 
 // Record - database record object (user model, collection item)

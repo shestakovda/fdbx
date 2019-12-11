@@ -14,7 +14,7 @@ type MockConn struct {
 	*baseConn
 
 	FClearDB    func() error
-	FLoadCursor func(fab Fabric, id []byte, page int) (Cursor, error)
+	FLoadCursor func(fab Fabric, id []byte, page uint) (Cursor, error)
 
 	// ***** DB *****
 
@@ -33,8 +33,8 @@ type MockConn struct {
 	FPub      func(DB, []byte, time.Time) error
 	FSub      func(ctx context.Context) (<-chan Record, <-chan error)
 	FSubOne   func(ctx context.Context) (Record, error)
-	FSubList  func(ctx context.Context, limit int) ([]Record, error)
-	FGetLost  func(limit int) ([]Record, error)
+	FSubList  func(ctx context.Context, limit uint) ([]Record, error)
+	FGetLost  func(limit uint) ([]Record, error)
 	FSettings func() (uint16, Fabric)
 
 	// ***** Cursor *****
@@ -65,11 +65,11 @@ func (c *MockConn) Queue(typeID uint16, fab Fabric, prefix []byte) (Queue, error
 }
 
 // Cursor - cursor stub, create mock object
-func (c *MockConn) Cursor(typeID uint16, fab Fabric, start []byte, page int) (Cursor, error) {
+func (c *MockConn) Cursor(typeID uint16, fab Fabric, start []byte, page uint) (Cursor, error) {
 	return newMockCursor(c, typeID, fab, start, page)
 }
 
 // LoadCursor - load cursor stub
-func (c *MockConn) LoadCursor(fab Fabric, id []byte, page int) (Cursor, error) {
+func (c *MockConn) LoadCursor(fab Fabric, id []byte, page uint) (Cursor, error) {
 	return c.FLoadCursor(fab, id, page)
 }
