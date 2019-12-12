@@ -3,13 +3,12 @@ package fdbx
 type options struct {
 	to     []byte
 	from   []byte
-	page   int
-	limit  int
+	limit  uint
 	filter Predicat
 }
 
 // Limit - max count of selected models
-func Limit(n int) Option {
+func Limit(n uint) Option {
 	return func(o *options) error {
 		o.limit = n
 		return nil

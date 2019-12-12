@@ -27,16 +27,16 @@ type v610db struct {
 // ********************** Public **********************
 
 func (db *v610db) Get(typeID uint16, id []byte) ([]byte, error) {
-	return db.tx.Get(db.conn.key(typeID, id)).Get()
+	return db.tx.Get(fdbKey(db.conn.db, typeID, id)).Get()
 }
 
 func (db *v610db) Set(typeID uint16, id, value []byte) error {
-	db.tx.Set(db.conn.key(typeID, id), value)
+	db.tx.Set(fdbKey(db.conn.db, typeID, id), value)
 	return nil
 }
 
 func (db *v610db) Del(typeID uint16, id []byte) error {
-	db.tx.Clear(db.conn.key(typeID, id))
+	db.tx.Clear(fdbKey(db.conn.db, typeID, id))
 	return nil
 }
 
@@ -54,7 +54,7 @@ func (db *v610db) Load(recs ...Record) (err error) {
 	// query all futures to leverage wait time
 	futures := make([]fdb.FutureByteSlice, len(recs))
 	for i := range recs {
-		futures[i] = db.tx.Get(db.conn.rkey(recs[i]))
+		futures[i] = db.tx.Get(recKey(db.conn.db, recs[i]))
 	}
 
 	for i := range futures {
@@ -71,7 +71,7 @@ func (db *v610db) Drop(recs ...Record) (err error) {
 	futures := make([]fdb.FutureByteSlice, len(recs))
 
 	for i := range recs {
-		keys[i] = db.conn.rkey(recs[i])
+		keys[i] = recKey(db.conn.db, recs[i])
 		futures[i] = db.tx.Get(keys[i])
 	}
 
@@ -98,7 +98,7 @@ func (db *v610db) Select(rtp RecordType, opts ...Option) (list []Record, err err
 	opt := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll}
 
 	if o.limit > 0 {
-		opt.Limit = o.limit
+		opt.Limit = int(o.limit)
 	}
 
 	from := []byte{0x00}
@@ -110,8 +110,9 @@ func (db *v610db) Select(rtp RecordType, opts ...Option) (list []Record, err err
 	if o.to != nil {
 		to = o.to
 	}
+	to = append(to, bytes.Repeat([]byte{0xFF}, 17)...)
 
-	rng := fdb.KeyRange{Begin: db.conn.key(rtp.ID, from), End: db.conn.key(rtp.ID, to)}
+	rng := fdb.KeyRange{Begin: fdbKey(db.conn.db, rtp.ID, from), End: fdbKey(db.conn.db, rtp.ID, to)}
 
 	if list, _, err = db.getRange(rng, opt, rtp, o.filter); err != nil {
 		return
@@ -193,7 +194,7 @@ func (db *v610db) setIndexes(rec Record, buf []byte, drop bool) (err error) {
 	}
 
 	for i := range idx.list {
-		key := db.conn.key(idx.list[i].typeID, idx.list[i].value, rid, rln)
+		key := fdbKey(db.conn.db, idx.list[i].typeID, idx.list[i].value, rid, rln)
 
 		if drop {
 			db.tx.Clear(key)
@@ -232,7 +233,7 @@ func (db *v610db) drop(rec Record, fb fdb.FutureByteSlice) (err error) {
 func (db *v610db) save(rec Record) (err error) {
 	var buf []byte
 
-	if buf, err = db.tx.Get(db.conn.rkey(rec)).Get(); err != nil {
+	if buf, err = db.tx.Get(recKey(db.conn.db, rec)).Get(); err != nil {
 		return
 	}
 
@@ -258,7 +259,7 @@ func (db *v610db) save(rec Record) (err error) {
 		return
 	}
 
-	db.tx.Set(db.conn.rkey(rec), buf)
+	db.tx.Set(recKey(db.conn.db, rec), buf)
 	return nil
 }
 
@@ -365,7 +366,7 @@ func (db *v610db) saveBlob(flags *uint8, blob []byte) (value []byte, err error) 
 
 		// save part
 		binary.BigEndian.PutUint16(index[:], i)
-		db.tx.Set(db.conn.key(ChunkTypeID, blobID[:], index[:]), part)
+		db.tx.Set(fdbKey(db.conn.db, ChunkTypeID, blobID[:], index[:]), part)
 		i++
 	}
 
@@ -376,8 +377,8 @@ func (db *v610db) loadBlob(value []byte) (blob []byte, err error) {
 	var kv fdb.KeyValue
 
 	res := db.tx.GetRange(fdb.KeyRange{
-		Begin: db.conn.key(ChunkTypeID, value),
-		End:   db.conn.key(ChunkTypeID, value, []byte{0xFF}),
+		Begin: fdbKey(db.conn.db, ChunkTypeID, value),
+		End:   fdbKey(db.conn.db, ChunkTypeID, value, []byte{0xFF}),
 	}, fdb.RangeOptions{Mode: fdb.StreamingModeIterator}).Iterator()
 
 	for res.Advance() {
@@ -391,8 +392,8 @@ func (db *v610db) loadBlob(value []byte) (blob []byte, err error) {
 
 func (db *v610db) dropBlob(value []byte) error {
 	db.tx.ClearRange(fdb.KeyRange{
-		Begin: db.conn.key(ChunkTypeID, value),
-		End:   db.conn.key(ChunkTypeID, value, []byte{0xFF}),
+		Begin: fdbKey(db.conn.db, ChunkTypeID, value),
+		End:   fdbKey(db.conn.db, ChunkTypeID, value, []byte{0xFF}),
 	})
 	return nil
 }

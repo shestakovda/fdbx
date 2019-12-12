@@ -35,6 +35,9 @@ var (
 // TxHandler -
 type TxHandler func(DB) error
 
+// IndexHandler -
+type IndexHandler func(Indexer) error
+
 // Predicat - for query filtering, especially for seq scan queries
 type Predicat func(Record) (bool, error)
 
@@ -69,6 +72,8 @@ type DB interface {
 	Load(...Record) error
 	Drop(...Record) error
 
+	// Index(IndexHandler) error
+
 	Select(rtp RecordType, opts ...Option) ([]Record, error)
 }
 
@@ -101,7 +106,7 @@ type Queue interface {
 	SubOne(ctx context.Context) (Record, error)
 	SubList(ctx context.Context, limit uint) ([]Record, error)
 
-	GetLost(limit uint) ([]Record, error)
+	GetLost(limit uint, filter Predicat) ([]Record, error)
 }
 
 // Record - database record object (user model, collection item)

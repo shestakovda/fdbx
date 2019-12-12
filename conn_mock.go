@@ -6,12 +6,12 @@ import (
 )
 
 func newMockConn(db uint16) (conn *MockConn, err error) {
-	return &MockConn{baseConn: newBaseConn(db)}, nil
+	return &MockConn{db: db}, nil
 }
 
 // MockConn - stub conn for unit testing
 type MockConn struct {
-	*baseConn
+	db uint16
 
 	FClearDB    func() error
 	FLoadCursor func(rtp RecordType, id []byte, page uint) (Cursor, error)
@@ -34,7 +34,7 @@ type MockConn struct {
 	FSub     func(ctx context.Context) (<-chan Record, <-chan error)
 	FSubOne  func(ctx context.Context) (Record, error)
 	FSubList func(ctx context.Context, limit uint) ([]Record, error)
-	FGetLost func(limit uint) ([]Record, error)
+	FGetLost func(limit uint, filter Predicat) ([]Record, error)
 
 	// ***** Cursor *****
 

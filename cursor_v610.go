@@ -1,6 +1,7 @@
 package fdbx
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 
@@ -13,7 +14,6 @@ func v610CursorFabric(conn *v610Conn, id []byte, rtp RecordType) (*v610cursor, e
 		id:   id,
 		rtp:  rtp,
 		conn: conn,
-		From: nil,
 		To:   []byte{0xFF},
 	}, nil
 }
@@ -31,12 +31,11 @@ func newV610cursor(conn *v610Conn, rtp RecordType, start []byte, pageSize uint) 
 
 	return &v610cursor{
 		id:   uid[:],
-		Pos:  conn.key(rtp.ID, start),
+		Pos:  fdbKey(conn.db, rtp.ID, start),
 		Page: int(pageSize),
 		conn: conn,
 		rtp:  rtp,
-		From: nil,
-		To:   []byte{0xFF},
+		To:   []byte{0xFF, 0xFF},
 	}, nil
 }
 
@@ -105,14 +104,16 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 		return nil, ErrIncompatibleDB.WithStack()
 	}
 
+	tail := bytes.Repeat([]byte{0xFF}, 17)
+
 	opt := fdb.RangeOptions{Limit: cur.Page, Mode: fdb.StreamingModeWantAll, Reverse: reverse}
 
 	if reverse {
-		rng.Begin = cur.conn.key(cur.rtp.ID, cur.From)
+		rng.Begin = fdbKey(cur.conn.db, cur.rtp.ID, cur.From)
 		rng.End = cur.Pos
 	} else {
 		rng.Begin = cur.Pos
-		rng.End = cur.conn.key(cur.rtp.ID, cur.To)
+		rng.End = fdbKey(cur.conn.db, cur.rtp.ID, cur.To, tail)
 	}
 
 	if skip > 0 {
@@ -129,7 +130,7 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 			return nil, nil
 		}
 
-		cur.Pos = append(rows[rlen-1].Key, 0xFF)
+		cur.Pos = append(rows[rlen-1].Key, tail...)
 		opt.Limit = cur.Page
 
 		if reverse {
@@ -150,7 +151,7 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 	}
 
 	if len(lastKey) > 0 {
-		cur.Pos = append(lastKey, 0xFF)
+		cur.Pos = append(lastKey, tail...)
 	}
 
 	cur.IsEmpty = len(list) < cur.Page
@@ -196,7 +197,7 @@ func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan 
 		cur.To = o.to
 	}
 
-	count := 0
+	count := uint(0)
 	for !cur.IsEmpty && ctx.Err() == nil && (o.limit == 0 || count < o.limit) {
 		if err = cur.conn.Tx(func(db DB) (exp error) {
 			list, exp = cur.getPage(db, 0, false, o.filter)

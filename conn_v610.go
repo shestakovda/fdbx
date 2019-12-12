@@ -1,11 +1,13 @@
 package fdbx
 
 import (
+	"encoding/binary"
+
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
 
 func newV610Conn(db uint16) (conn *v610Conn, err error) {
-	conn = &v610Conn{baseConn: newBaseConn(db)}
+	conn = &v610Conn{db: db}
 
 	// Installed version check
 	if err = fdb.APIVersion(int(ConnVersion610)); err != nil {
@@ -21,17 +23,19 @@ func newV610Conn(db uint16) (conn *v610Conn, err error) {
 }
 
 type v610Conn struct {
-	*baseConn
-
+	db  uint16
 	fdb fdb.Database
 }
 
 // ********************** Public **********************
 
 func (c *v610Conn) ClearDB() error {
-	_, exp := c.fdb.Transact(func(tx fdb.Transaction) (_ interface{}, err error) {
-		tx.ClearRange(fdb.KeyRange{Begin: c.key(0), End: c.key(0xFFFF, []byte{0xFF})})
-		return
+	_, exp := c.fdb.Transact(func(tx fdb.Transaction) (interface{}, error) {
+		tx.ClearRange(fdb.KeyRange{
+			Begin: fdbKey(c.db, 0x0000),
+			End:   fdbKey(c.db, 0xFFFF, []byte{0xFF}),
+		})
+		return nil, nil
 	})
 	return exp
 }
@@ -74,4 +78,33 @@ func (c *v610Conn) LoadCursor(rtp RecordType, id []byte, page uint) (_ Cursor, e
 	}
 
 	return cur, nil
+}
+
+// ********************** Private **********************
+
+func fdbKey(dbID, typeID uint16, parts ...[]byte) fdb.Key {
+	mem := 4
+
+	for i := range parts {
+		mem += len(parts[i])
+	}
+
+	key := make(fdb.Key, 4, mem)
+
+	binary.BigEndian.PutUint16(key[0:2], dbID)
+	binary.BigEndian.PutUint16(key[2:4], typeID)
+
+	for i := range parts {
+		if len(parts[i]) > 0 {
+			key = append(key, parts[i]...)
+		}
+	}
+
+	return key
+}
+
+func recKey(dbID uint16, rec Record) fdb.Key {
+	rid := rec.FdbxID()
+	rln := []byte{byte(len(rid))}
+	return fdbKey(dbID, rec.FdbxType().ID, rid, rln)
 }

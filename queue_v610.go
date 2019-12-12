@@ -17,10 +17,10 @@ func newV610queue(conn *v610Conn, rtp RecordType, prefix []byte) (*v610queue, er
 		cn:  conn,
 		rtp: rtp,
 		pf:  prefix,
-		wk:  conn.key(rtp.ID, prefix, []byte{0xFF, 0xFF}),
+		wk:  fdbKey(conn.db, rtp.ID, prefix, []byte{0xFF, 0xFF}),
 		kr: fdb.KeyRange{
-			Begin: conn.key(rtp.ID, prefix, []byte{0x00}),
-			End:   conn.key(rtp.ID, prefix, []byte{0xFF}),
+			Begin: fdbKey(conn.db, rtp.ID, prefix, []byte{0x00}),
+			End:   fdbKey(conn.db, rtp.ID, prefix, []byte{0xFF}),
 		},
 	}, nil
 }
@@ -45,7 +45,7 @@ func (q *v610queue) Ack(db DB, id []byte) error {
 		return ErrIncompatibleDB.WithStack()
 	}
 
-	db610.tx.Clear(q.cn.key(q.rtp.ID, q.pf, []byte{0xFF}, id, []byte{byte(len(id))}))
+	db610.tx.Clear(fdbKey(q.cn.db, q.rtp.ID, q.pf, []byte{0xFF}, id, []byte{byte(len(id))}))
 	return nil
 }
 
@@ -69,7 +69,7 @@ func (q *v610queue) Pub(db DB, id []byte, t time.Time) (err error) {
 	binary.BigEndian.PutUint64(when, uint64(t.UnixNano()))
 
 	// set task
-	db610.tx.Set(q.cn.key(q.rtp.ID, q.pf, when, id, []byte{byte(len(id))}), nil)
+	db610.tx.Set(fdbKey(q.cn.db, q.rtp.ID, q.pf, when, id, []byte{byte(len(id))}), nil)
 
 	// update watch
 	db610.tx.Set(q.wk, when)
@@ -190,7 +190,7 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 			ids = make([][]byte, 0, limit)
 			binary.BigEndian.PutUint64(now, uint64(time.Now().UnixNano()))
 
-			kr := fdb.KeyRange{Begin: q.cn.key(q.rtp.ID, q.pf, []byte{0x00}), End: q.cn.key(q.rtp.ID, q.pf, now)}
+			kr := fdb.KeyRange{Begin: fdbKey(q.cn.db, q.rtp.ID, q.pf, []byte{0x00}), End: fdbKey(q.cn.db, q.rtp.ID, q.pf, now)}
 
 			lim := int(limit) - len(list)
 
@@ -217,7 +217,7 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 				ids = append(ids, rid)
 
 				// move to lost
-				tx.Set(q.cn.key(q.rtp.ID, q.pf, []byte{0xFF}, rid, rln), nil)
+				tx.Set(fdbKey(q.cn.db, q.rtp.ID, q.pf, []byte{0xFF}, rid, rln), nil)
 				tx.Clear(rows[i].Key)
 			}
 
@@ -248,4 +248,22 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 	return list, nil
 }
 
-func (q *v610queue) GetLost(limit uint) ([]Record, error) { return nil, nil }
+func (q *v610queue) GetLost(limit uint, filter Predicat) (list []Record, err error) {
+	opt := fdb.RangeOptions{Limit: int(limit)}
+	rng := fdb.KeyRange{
+		Begin: fdbKey(q.cn.db, q.rtp.ID, q.pf, []byte{0xFF, 0x00}),
+		End:   fdbKey(q.cn.db, q.rtp.ID, q.pf, []byte{0xFF, 0xFF}),
+	}
+
+	_, err = q.cn.fdb.Transact(func(tx fdb.Transaction) (_ interface{}, exp error) {
+		var db *v610db
+
+		if db, exp = newV610db(q.cn, tx); exp != nil {
+			return
+		}
+
+		list, _, exp = db.getRange(rng, opt, q.rtp, filter)
+		return
+	})
+	return list, err
+}

@@ -6,6 +6,8 @@
 
 FoundationDB **object storage** and **queue manager** for golang projects
 
+**Project in active development! Production-fatality**
+
 ### About
 
 This project aims to help you use FoundationDB in your project by providing high-level interfaces for storing objects. 
