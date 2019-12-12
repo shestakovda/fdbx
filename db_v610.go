@@ -86,7 +86,7 @@ func (db *v610db) Drop(recs ...Record) (err error) {
 	return nil
 }
 
-func (db *v610db) Select(typeID uint16, fab Fabric, opts ...Option) (list []Record, err error) {
+func (db *v610db) Select(rtp RecordType, opts ...Option) (list []Record, err error) {
 	o := new(options)
 
 	for i := range opts {
@@ -111,9 +111,9 @@ func (db *v610db) Select(typeID uint16, fab Fabric, opts ...Option) (list []Reco
 		to = o.to
 	}
 
-	rng := fdb.KeyRange{Begin: db.conn.key(typeID, from), End: db.conn.key(typeID, to)}
+	rng := fdb.KeyRange{Begin: db.conn.key(rtp.ID, from), End: db.conn.key(rtp.ID, to)}
 
-	if list, _, err = db.getRange(rng, opt, fab, o.filter); err != nil {
+	if list, _, err = db.getRange(rng, opt, rtp, o.filter); err != nil {
 		return
 	}
 
@@ -166,24 +166,33 @@ func (db *v610db) unpack(value []byte) (blobID, buffer []byte, err error) {
 }
 
 func (db *v610db) setIndexes(rec Record, buf []byte, drop bool) (err error) {
-	var fnc IndexFunc
+	var rcp Record
 	var idx *v610Indexer
 
-	if fnc = db.conn.indexes[rec.FdbxType()]; fnc == nil {
-		return nil
-	}
+	rid := rec.FdbxID()
+	rln := []byte{byte(len(rid))}
 
 	if idx, err = newV610Indexer(); err != nil {
 		return
 	}
 
-	if err = fnc(idx, buf); err != nil {
+	if drop {
+		if rcp, err = rec.FdbxType().New(rid); err != nil {
+			return
+		}
+
+		if err = rcp.FdbxUnmarshal(buf); err != nil {
+			return
+		}
+	} else {
+		rcp = rec
+	}
+
+	if err = rcp.FdbxIndex(idx); err != nil {
 		return
 	}
 
 	for i := range idx.list {
-		rid := rec.FdbxID()
-		rln := []byte{byte(len(rid))}
 		key := db.conn.key(idx.list[i].typeID, idx.list[i].value, rid, rln)
 
 		if drop {
@@ -356,7 +365,7 @@ func (db *v610db) saveBlob(flags *uint8, blob []byte) (value []byte, err error) 
 
 		// save part
 		binary.BigEndian.PutUint16(index[:], i)
-		db.tx.Set(db.conn.key(ChunkType, blobID[:], index[:]), part)
+		db.tx.Set(db.conn.key(ChunkTypeID, blobID[:], index[:]), part)
 		i++
 	}
 
@@ -367,8 +376,8 @@ func (db *v610db) loadBlob(value []byte) (blob []byte, err error) {
 	var kv fdb.KeyValue
 
 	res := db.tx.GetRange(fdb.KeyRange{
-		Begin: db.conn.key(ChunkType, value),
-		End:   db.conn.key(ChunkType, value, []byte{0xFF}),
+		Begin: db.conn.key(ChunkTypeID, value),
+		End:   db.conn.key(ChunkTypeID, value, []byte{0xFF}),
 	}, fdb.RangeOptions{Mode: fdb.StreamingModeIterator}).Iterator()
 
 	for res.Advance() {
@@ -382,8 +391,8 @@ func (db *v610db) loadBlob(value []byte) (blob []byte, err error) {
 
 func (db *v610db) dropBlob(value []byte) error {
 	db.tx.ClearRange(fdb.KeyRange{
-		Begin: db.conn.key(ChunkType, value),
-		End:   db.conn.key(ChunkType, value, []byte{0xFF}),
+		Begin: db.conn.key(ChunkTypeID, value),
+		End:   db.conn.key(ChunkTypeID, value, []byte{0xFF}),
 	})
 	return nil
 }
@@ -391,7 +400,7 @@ func (db *v610db) dropBlob(value []byte) error {
 func (db *v610db) getRange(
 	rng fdb.Range,
 	opt fdb.RangeOptions,
-	fab Fabric,
+	rtp RecordType,
 	chk Predicat,
 ) (list []Record, lastKey fdb.Key, err error) {
 	var buf []byte
@@ -455,7 +464,7 @@ func (db *v610db) getRange(
 		idlen := int(row.Key[klen-1])
 		rid := row.Key[klen-idlen-1 : klen-1]
 
-		if rec, err = fab(rid); err != nil {
+		if rec, err = rtp.New(rid); err != nil {
 			return
 		}
 

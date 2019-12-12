@@ -14,7 +14,7 @@ type MockConn struct {
 	*baseConn
 
 	FClearDB    func() error
-	FLoadCursor func(fab Fabric, id []byte, page uint) (Cursor, error)
+	FLoadCursor func(rtp RecordType, id []byte, page uint) (Cursor, error)
 
 	// ***** DB *****
 
@@ -25,17 +25,16 @@ type MockConn struct {
 	FSave     func(...Record) error
 	FLoad     func(...Record) error
 	FDrop     func(...Record) error
-	FSelect   func(ctype uint16, fab Fabric, opts ...Option) ([]Record, error)
+	FSelect   func(rtp RecordType, opts ...Option) ([]Record, error)
 
 	// ***** Queue *****
 
-	FAck      func(DB, []byte) error
-	FPub      func(DB, []byte, time.Time) error
-	FSub      func(ctx context.Context) (<-chan Record, <-chan error)
-	FSubOne   func(ctx context.Context) (Record, error)
-	FSubList  func(ctx context.Context, limit uint) ([]Record, error)
-	FGetLost  func(limit uint) ([]Record, error)
-	FSettings func() (uint16, Fabric)
+	FAck     func(DB, []byte) error
+	FPub     func(DB, []byte, time.Time) error
+	FSub     func(ctx context.Context) (<-chan Record, <-chan error)
+	FSubOne  func(ctx context.Context) (Record, error)
+	FSubList func(ctx context.Context, limit uint) ([]Record, error)
+	FGetLost func(limit uint) ([]Record, error)
 
 	// ***** Cursor *****
 
@@ -48,7 +47,8 @@ type MockConn struct {
 	// ***** Record *****
 
 	FFdbxID        func() []byte
-	FFdbxType      func() uint16
+	FFdbxType      func() RecordType
+	FFdbxIndex     func(Indexer) error
 	FFdbxMarshal   func() ([]byte, error)
 	FFdbxUnmarshal func([]byte) error
 }
@@ -60,16 +60,16 @@ func (c *MockConn) ClearDB() error { return c.FClearDB() }
 func (c *MockConn) Tx(h TxHandler) error { return h(newMockDB(c)) }
 
 // Queue - queue stub, create mock object
-func (c *MockConn) Queue(typeID uint16, fab Fabric, prefix []byte) (Queue, error) {
-	return newMockQueue(c, typeID, fab, prefix)
+func (c *MockConn) Queue(rtp RecordType, prefix []byte) (Queue, error) {
+	return newMockQueue(c, rtp, prefix)
 }
 
 // Cursor - cursor stub, create mock object
-func (c *MockConn) Cursor(typeID uint16, fab Fabric, start []byte, page uint) (Cursor, error) {
-	return newMockCursor(c, typeID, fab, start, page)
+func (c *MockConn) Cursor(rtp RecordType, start []byte, page uint) (Cursor, error) {
+	return newMockCursor(c, rtp, start, page)
 }
 
 // LoadCursor - load cursor stub
-func (c *MockConn) LoadCursor(fab Fabric, id []byte, page uint) (Cursor, error) {
-	return c.FLoadCursor(fab, id, page)
+func (c *MockConn) LoadCursor(rtp RecordType, id []byte, page uint) (Cursor, error) {
+	return c.FLoadCursor(rtp, id, page)
 }

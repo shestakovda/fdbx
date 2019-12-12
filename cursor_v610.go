@@ -8,17 +8,17 @@ import (
 	"github.com/google/uuid"
 )
 
-func v610CursorFabric(conn *v610Conn, id []byte, fab Fabric) (*v610cursor, error) {
+func v610CursorFabric(conn *v610Conn, id []byte, rtp RecordType) (*v610cursor, error) {
 	return &v610cursor{
-		id:     id,
-		fabric: fab,
-		conn:   conn,
-		From:   nil,
-		To:     []byte{0xFF},
+		id:   id,
+		rtp:  rtp,
+		conn: conn,
+		From: nil,
+		To:   []byte{0xFF},
 	}, nil
 }
 
-func newV610cursor(conn *v610Conn, TypeID uint16, fab Fabric, start []byte, pageSize uint) (*v610cursor, error) {
+func newV610cursor(conn *v610Conn, rtp RecordType, start []byte, pageSize uint) (*v610cursor, error) {
 	uid := uuid.New()
 
 	if len(start) == 0 {
@@ -30,14 +30,13 @@ func newV610cursor(conn *v610Conn, TypeID uint16, fab Fabric, start []byte, page
 	}
 
 	return &v610cursor{
-		id:     uid[:],
-		Pos:    conn.key(TypeID, start),
-		Page:   int(pageSize),
-		conn:   conn,
-		fabric: fab,
-		TypeID: TypeID,
-		From:   nil,
-		To:     []byte{0xFF},
+		id:   uid[:],
+		Pos:  conn.key(rtp.ID, start),
+		Page: int(pageSize),
+		conn: conn,
+		rtp:  rtp,
+		From: nil,
+		To:   []byte{0xFF},
 	}, nil
 }
 
@@ -49,24 +48,28 @@ type v610cursor struct {
 	Pos     fdb.Key `json:"pos"`
 	Page    int     `json:"page"`
 	IsEmpty bool    `json:"empty"`
-	TypeID  uint16  `json:"type"`
 
-	fabric Fabric
-	conn   *v610Conn
+	rtp  RecordType
+	conn *v610Conn
 }
 
 // ********************** As Record **********************
 
-func (cur *v610cursor) FdbxID() []byte                 { return cur.id[:] }
-func (cur *v610cursor) FdbxType() uint16               { return CursorType }
+func (cur *v610cursor) FdbxID() []byte { return cur.id[:] }
+func (cur *v610cursor) FdbxType() RecordType {
+	return RecordType{
+		ID:  CursorTypeID,
+		New: func(id []byte) (Record, error) { return &v610cursor{id: id}, nil },
+	}
+}
+func (cur *v610cursor) FdbxIndex(Indexer) error        { return nil }
 func (cur *v610cursor) FdbxMarshal() ([]byte, error)   { return json.Marshal(cur) }
 func (cur *v610cursor) FdbxUnmarshal(buf []byte) error { return json.Unmarshal(buf, cur) }
 
 // ********************** Public **********************
 
-func (cur *v610cursor) Empty() bool                { return cur.IsEmpty }
-func (cur *v610cursor) Close() error               { cur.IsEmpty = true; return cur.drop() }
-func (cur *v610cursor) Settings() (uint16, Fabric) { return cur.TypeID, cur.fabric }
+func (cur *v610cursor) Empty() bool  { return cur.IsEmpty }
+func (cur *v610cursor) Close() error { cur.IsEmpty = true; return cur.drop() }
 
 func (cur *v610cursor) Next(db DB, skip uint8) ([]Record, error) {
 	return cur.getPage(db, skip, false, nil)
@@ -105,11 +108,11 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 	opt := fdb.RangeOptions{Limit: cur.Page, Mode: fdb.StreamingModeWantAll, Reverse: reverse}
 
 	if reverse {
-		rng.Begin = cur.conn.key(cur.TypeID, cur.From)
+		rng.Begin = cur.conn.key(cur.rtp.ID, cur.From)
 		rng.End = cur.Pos
 	} else {
 		rng.Begin = cur.Pos
-		rng.End = cur.conn.key(cur.TypeID, cur.To)
+		rng.End = cur.conn.key(cur.rtp.ID, cur.To)
 	}
 
 	if skip > 0 {
@@ -138,7 +141,7 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 
 	var lastKey fdb.Key
 
-	if list, lastKey, err = db610.getRange(rng, opt, cur.fabric, filter); err != nil {
+	if list, lastKey, err = db610.getRange(rng, opt, cur.rtp, filter); err != nil {
 		return
 	}
 

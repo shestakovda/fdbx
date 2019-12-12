@@ -12,30 +12,26 @@ import (
 // PunchSize - размер ожидания в случае отсутствия задач
 var PunchSize = time.Minute
 
-func newV610queue(conn *v610Conn, typeID uint16, fab Fabric, prefix []byte) (*v610queue, error) {
+func newV610queue(conn *v610Conn, rtp RecordType, prefix []byte) (*v610queue, error) {
 	return &v610queue{
-		id: typeID,
-		cn: conn,
-		mf: fab,
-		pf: prefix,
-		wk: conn.key(typeID, prefix, []byte{0xFF, 0xFF}),
+		cn:  conn,
+		rtp: rtp,
+		pf:  prefix,
+		wk:  conn.key(rtp.ID, prefix, []byte{0xFF, 0xFF}),
 		kr: fdb.KeyRange{
-			Begin: conn.key(typeID, prefix, []byte{0x00}),
-			End:   conn.key(typeID, prefix, []byte{0xFF}),
+			Begin: conn.key(rtp.ID, prefix, []byte{0x00}),
+			End:   conn.key(rtp.ID, prefix, []byte{0xFF}),
 		},
 	}, nil
 }
 
 type v610queue struct {
-	id uint16
-	pf []byte
-	mf Fabric
-	cn *v610Conn
-	wk fdb.Key
-	kr fdb.KeyRange
+	pf  []byte
+	rtp RecordType
+	cn  *v610Conn
+	wk  fdb.Key
+	kr  fdb.KeyRange
 }
-
-func (q *v610queue) Settings() (uint16, Fabric) { return q.id, q.mf }
 
 func (q *v610queue) Ack(db DB, id []byte) error {
 	var ok bool
@@ -49,7 +45,7 @@ func (q *v610queue) Ack(db DB, id []byte) error {
 		return ErrIncompatibleDB.WithStack()
 	}
 
-	db610.tx.Clear(q.cn.key(q.id, q.pf, []byte{0xFF}, id, []byte{byte(len(id))}))
+	db610.tx.Clear(q.cn.key(q.rtp.ID, q.pf, []byte{0xFF}, id, []byte{byte(len(id))}))
 	return nil
 }
 
@@ -73,7 +69,7 @@ func (q *v610queue) Pub(db DB, id []byte, t time.Time) (err error) {
 	binary.BigEndian.PutUint64(when, uint64(t.UnixNano()))
 
 	// set task
-	db610.tx.Set(q.cn.key(q.id, q.pf, when, id, []byte{byte(len(id))}), nil)
+	db610.tx.Set(q.cn.key(q.rtp.ID, q.pf, when, id, []byte{byte(len(id))}), nil)
 
 	// update watch
 	db610.tx.Set(q.wk, when)
@@ -194,7 +190,7 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 			ids = make([][]byte, 0, limit)
 			binary.BigEndian.PutUint64(now, uint64(time.Now().UnixNano()))
 
-			kr := fdb.KeyRange{Begin: q.cn.key(q.id, q.pf, []byte{0x00}), End: q.cn.key(q.id, q.pf, now)}
+			kr := fdb.KeyRange{Begin: q.cn.key(q.rtp.ID, q.pf, []byte{0x00}), End: q.cn.key(q.rtp.ID, q.pf, now)}
 
 			lim := int(limit) - len(list)
 
@@ -221,7 +217,7 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 				ids = append(ids, rid)
 
 				// move to lost
-				tx.Set(q.cn.key(q.id, q.pf, []byte{0xFF}, rid, rln), nil)
+				tx.Set(q.cn.key(q.rtp.ID, q.pf, []byte{0xFF}, rid, rln), nil)
 				tx.Clear(rows[i].Key)
 			}
 
@@ -237,7 +233,7 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 
 		recs := make([]Record, len(ids))
 		for i := range ids {
-			if recs[i], err = q.mf(ids[i]); err != nil {
+			if recs[i], err = q.rtp.New(ids[i]); err != nil {
 				return
 			}
 		}

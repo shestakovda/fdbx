@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -80,7 +79,7 @@ func TestCrud(t *testing.T) {
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Load(rec4, rec2) }))
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
-		list, err := db.Select(TestCollection, recordFabric)
+		list, err := db.Select(fdbx.RecordType{ID: TestCollection, New: recordFabric})
 		assert.NoError(t, err)
 		assert.Len(t, list, 2)
 
@@ -118,7 +117,7 @@ func TestSelect(t *testing.T) {
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
 
-	cur, err := conn.Cursor(TestCollection, recordFabric, nil, 3)
+	cur, err := conn.Cursor(fdbx.RecordType{ID: TestCollection, New: recordFabric}, nil, 3)
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
@@ -153,7 +152,7 @@ func TestSelect(t *testing.T) {
 	rect := make([]fdbx.Record, 0, 10)
 
 	// page size = 3
-	cur, err = conn.Cursor(TestCollection, recordFabric, nil, 3)
+	cur, err = conn.Cursor(fdbx.RecordType{ID: TestCollection, New: recordFabric}, nil, 3)
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
@@ -213,11 +212,9 @@ func TestIndex(t *testing.T) {
 		records[i] = newTestRecord()
 	}
 
-	conn.RegisterIndex(TestCollection, testRecordIdx)
-
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
 
-	cur, err := conn.Cursor(TestIndexName, recordFabric, nil, 3)
+	cur, err := conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, nil, 3)
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
@@ -252,7 +249,7 @@ func TestIndex(t *testing.T) {
 	rect := make([]fdbx.Record, 0, 10)
 
 	// page size = 3
-	cur, err = conn.Cursor(TestIndexName, recordFabric, nil, 3)
+	cur, err = conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, nil, 3)
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
@@ -274,7 +271,7 @@ func TestIndex(t *testing.T) {
 	assert.False(t, cur.Empty())
 	rect = append(rect, recl...)
 
-	cur, err = conn.LoadCursor(recordFabric, cur.FdbxID(), 3)
+	cur, err = conn.LoadCursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, cur.FdbxID(), 3)
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 
@@ -316,7 +313,7 @@ func TestIndex(t *testing.T) {
 			}
 		}
 
-		list, err := db.Select(TestIndexName, recordFabric, fdbx.From([]byte(max)))
+		list, err := db.Select(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, fdbx.From([]byte(max)))
 		assert.NoError(t, err)
 		assert.Len(t, list, 1)
 		assert.Equal(t, rec, list[0])
@@ -336,12 +333,12 @@ func TestLongValuesCollection(t *testing.T) {
 		records[i] = newTestRecord()
 	}
 
-	guid := records[1].(*testRecord).Name
-	records[1].(*testRecord).Name = strings.Repeat(guid, 10000)
+	guid := records[1].(*testRecord).Data
+	records[1].(*testRecord).Data = bytes.Repeat(guid, 10000)
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
 
-	cur, err := conn.Cursor(TestCollection, recordFabric, nil, 3)
+	cur, err := conn.Cursor(fdbx.RecordType{ID: TestCollection, New: recordFabric}, nil, 3)
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
@@ -351,7 +348,7 @@ func TestLongValuesCollection(t *testing.T) {
 	// ********* filter *********
 
 	filter := fdbx.Filter(func(rec fdbx.Record) (bool, error) {
-		if len(rec.(*testRecord).Name) > 1000 {
+		if len(rec.(*testRecord).Data) > 1000 {
 			return false, nil
 		}
 		return true, nil
@@ -393,11 +390,9 @@ func TestLongValuesIndex(t *testing.T) {
 	guid := records[1].(*testRecord).Data
 	records[1].(*testRecord).Data = bytes.Repeat(guid, 10000)
 
-	conn.RegisterIndex(TestCollection, testRecordIdx)
-
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
 
-	cur, err := conn.Cursor(TestIndexName, recordFabric, nil, 3)
+	cur, err := conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, nil, 3)
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
@@ -447,7 +442,7 @@ func TestQueue(t *testing.T) {
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
 
-	queue, err := conn.Queue(TestQueueType, recordFabric, []byte("memberID"))
+	queue, err := conn.Queue(fdbx.RecordType{ID: TestQueueType, New: recordFabric}, []byte("memberID"))
 	assert.NoError(t, err)
 	assert.NotNil(t, queue)
 
@@ -514,19 +509,6 @@ func newTestRecord() *testRecord {
 	}
 }
 
-func testRecordIdx(idx fdbx.Indexer, buf []byte) (err error) {
-	rec := new(testRecord)
-
-	if err = rec.FdbxUnmarshal(buf); err != nil {
-		return
-	}
-
-	idx.Index(TestIndexName, []byte(rec.Name))
-	idx.Index(TestIndexNumber, []byte(fmt.Sprintf("%d", rec.Number)))
-	idx.Index(TestIndexNumber, []byte(fmt.Sprintf("%d", int(rec.Decimal))))
-	return nil
-}
-
 type testRecord struct {
 	ID      []byte   `json:"-"`
 	Name    string   `json:"name"`
@@ -537,7 +519,15 @@ type testRecord struct {
 	Strs    []string `json:"strs"`
 }
 
-func (r *testRecord) FdbxID() []byte               { return r.ID }
-func (r *testRecord) FdbxType() uint16             { return TestCollection }
+func (r *testRecord) FdbxID() []byte { return r.ID }
+func (r *testRecord) FdbxType() fdbx.RecordType {
+	return fdbx.RecordType{ID: TestCollection, New: recordFabric}
+}
+func (r *testRecord) FdbxIndex(idx fdbx.Indexer) error {
+	idx.Index(TestIndexName, []byte(r.Name))
+	idx.Index(TestIndexNumber, []byte(fmt.Sprintf("%d", r.Number)))
+	idx.Index(TestIndexNumber, []byte(fmt.Sprintf("%d", int(r.Decimal))))
+	return nil
+}
 func (r *testRecord) FdbxMarshal() ([]byte, error) { return json.Marshal(r) }
 func (r *testRecord) FdbxUnmarshal(b []byte) error { return json.Unmarshal(b, r) }

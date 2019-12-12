@@ -10,6 +10,6 @@ func (db *mockDB) Del(ctype uint16, id []byte) error           { return db.FDel(
 func (db *mockDB) Save(m ...Record) error                      { return db.FSave(m...) }
 func (db *mockDB) Load(m ...Record) error                      { return db.FLoad(m...) }
 func (db *mockDB) Drop(m ...Record) error                      { return db.FDrop(m...) }
-func (db *mockDB) Select(ctype uint16, fab Fabric, opts ...Option) ([]Record, error) {
-	return db.FSelect(ctype, fab, opts...)
+func (db *mockDB) Select(rtp RecordType, opts ...Option) ([]Record, error) {
+	return db.FSelect(rtp, opts...)
 }

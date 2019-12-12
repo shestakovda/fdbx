@@ -17,11 +17,11 @@ const (
 )
 
 var (
-	// CursorType is collection number for storing cursors
-	CursorType = uint16(0)
+	// CursorTypeID is collection number for storing cursors
+	CursorTypeID = uint16(0)
 
-	// ChunkType is collection number for storing blob chunks. Default uint16 max value
-	ChunkType = uint16(0xFFFF)
+	// ChunkTypeID is collection number for storing blob chunks. Default uint16 max value
+	ChunkTypeID = uint16(0xFFFF)
 
 	// ChunkSize is max chunk length. Default 100 Kb - fdb value limit
 	ChunkSize = 100000
@@ -35,30 +35,28 @@ var (
 // TxHandler -
 type TxHandler func(DB) error
 
-// IndexFunc - calc index keys from model buffer
-type IndexFunc func(idx Indexer, buf []byte) error
-
-// Fabric - model fabric func
-type Fabric func(id []byte) (Record, error)
-
 // Predicat - for query filtering, especially for seq scan queries
 type Predicat func(Record) (bool, error)
 
-// Option -
+// Option - to describe additional args for select
 type Option func(*options) error
+
+// RecordType - to describe record collection
+type RecordType struct {
+	ID  uint16
+	New func(id []byte) (Record, error)
+}
 
 // Conn - database connection (as stored database index)
 type Conn interface {
 	ClearDB() error
 
-	RegisterIndex(recordTypeID uint16, idxFunc IndexFunc)
-
 	Tx(TxHandler) error
 
-	Queue(typeID uint16, f Fabric, prefix []byte) (Queue, error)
+	Queue(rtp RecordType, prefix []byte) (Queue, error)
 
-	Cursor(typeID uint16, f Fabric, start []byte, pageSize uint) (Cursor, error)
-	LoadCursor(f Fabric, id []byte, pageSize uint) (Cursor, error)
+	Cursor(rtp RecordType, start []byte, pageSize uint) (Cursor, error)
+	LoadCursor(rtp RecordType, id []byte, pageSize uint) (Cursor, error)
 }
 
 // DB - database object that holds connection for transaction handler
@@ -71,7 +69,7 @@ type DB interface {
 	Load(...Record) error
 	Drop(...Record) error
 
-	Select(indexID uint16, fab Fabric, opts ...Option) ([]Record, error)
+	Select(rtp RecordType, opts ...Option) ([]Record, error)
 }
 
 // Cursor - helper for long seq scan queries or pagination
@@ -111,7 +109,9 @@ type Record interface {
 	// object identifier in any format
 	FdbxID() []byte
 	// type identifier (collection id)
-	FdbxType() uint16
+	FdbxType() RecordType
+	// calc index values
+	FdbxIndex(idx Indexer) error
 	// make new buffer from object fields
 	FdbxMarshal() ([]byte, error)
 	// fill object fields from buffer

@@ -50,18 +50,18 @@ func (c *v610Conn) Tx(h TxHandler) error {
 	return exp
 }
 
-func (c *v610Conn) Queue(typeID uint16, fab Fabric, prefix []byte) (Queue, error) {
-	return newV610queue(c, typeID, fab, prefix)
+func (c *v610Conn) Queue(rtp RecordType, prefix []byte) (Queue, error) {
+	return newV610queue(c, rtp, prefix)
 }
 
-func (c *v610Conn) Cursor(typeID uint16, fab Fabric, start []byte, page uint) (Cursor, error) {
-	return newV610cursor(c, typeID, fab, start, page)
+func (c *v610Conn) Cursor(rtp RecordType, start []byte, page uint) (Cursor, error) {
+	return newV610cursor(c, rtp, start, page)
 }
 
-func (c *v610Conn) LoadCursor(fab Fabric, id []byte, page uint) (_ Cursor, err error) {
+func (c *v610Conn) LoadCursor(rtp RecordType, id []byte, page uint) (_ Cursor, err error) {
 	var cur *v610cursor
 
-	if cur, err = v610CursorFabric(c, id, fab); err != nil {
+	if cur, err = v610CursorFabric(c, id, rtp); err != nil {
 		return
 	}
 

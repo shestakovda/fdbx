@@ -8,19 +8,13 @@ import (
 
 func newBaseConn(db uint16) *baseConn {
 	return &baseConn{
-		db:      db,
-		indexes: make(map[uint16]IndexFunc, 8),
+		db: db,
 	}
 }
 
 type baseConn struct {
-	db      uint16
-	indexes map[uint16]IndexFunc
+	db uint16
 }
-
-// ********************** Public **********************
-
-func (c *baseConn) RegisterIndex(typeID uint16, idxFunc IndexFunc) { c.indexes[typeID] = idxFunc }
 
 // ********************** Private **********************
 
@@ -48,5 +42,5 @@ func (c *baseConn) key(typeID uint16, parts ...[]byte) fdb.Key {
 func (c *baseConn) rkey(rec Record) fdb.Key {
 	rid := rec.FdbxID()
 	rln := []byte{byte(len(rid))}
-	return c.key(rec.FdbxType(), rid, rln)
+	return c.key(rec.FdbxType().ID, rid, rln)
 }
