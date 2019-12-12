@@ -1,6 +1,7 @@
 package fdbx
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -17,11 +18,6 @@ func newV610queue(conn *v610Conn, rtp RecordType, prefix []byte) (*v610queue, er
 		cn:  conn,
 		rtp: rtp,
 		pf:  prefix,
-		wk:  fdbKey(conn.db, rtp.ID, prefix, []byte{0xFF, 0xFF}),
-		kr: fdb.KeyRange{
-			Begin: fdbKey(conn.db, rtp.ID, prefix, []byte{0x00}),
-			End:   fdbKey(conn.db, rtp.ID, prefix, []byte{0xFF}),
-		},
 	}, nil
 }
 
@@ -29,11 +25,9 @@ type v610queue struct {
 	pf  []byte
 	rtp RecordType
 	cn  *v610Conn
-	wk  fdb.Key
-	kr  fdb.KeyRange
 }
 
-func (q *v610queue) Ack(db DB, id []byte) error {
+func (q *v610queue) Ack(db DB, ids ...[]byte) error {
 	var ok bool
 	var db610 *v610db
 
@@ -45,11 +39,14 @@ func (q *v610queue) Ack(db DB, id []byte) error {
 		return ErrIncompatibleDB.WithStack()
 	}
 
-	db610.tx.Clear(fdbKey(q.cn.db, q.rtp.ID, q.pf, []byte{0xFF}, id, []byte{byte(len(id))}))
+	for i := range ids {
+		db610.tx.Clear(q.lostKey(ids[i], []byte{byte(len(ids[i]))}))
+	}
+
 	return nil
 }
 
-func (q *v610queue) Pub(db DB, id []byte, t time.Time) (err error) {
+func (q *v610queue) Pub(db DB, when time.Time, ids ...[]byte) (err error) {
 	var ok bool
 	var db610 *v610db
 
@@ -61,18 +58,20 @@ func (q *v610queue) Pub(db DB, id []byte, t time.Time) (err error) {
 		return ErrIncompatibleDB.WithStack()
 	}
 
-	if t.IsZero() {
-		t = time.Now()
+	if when.IsZero() {
+		when = time.Now()
 	}
 
-	when := make([]byte, 8)
-	binary.BigEndian.PutUint64(when, uint64(t.UnixNano()))
+	delay := make([]byte, 8)
+	binary.BigEndian.PutUint64(delay, uint64(when.UnixNano()))
 
 	// set task
-	db610.tx.Set(fdbKey(q.cn.db, q.rtp.ID, q.pf, when, id, []byte{byte(len(id))}), nil)
+	for i := range ids {
+		db610.tx.Set(q.dataKey(delay, ids[i], []byte{byte(len(ids[i]))}), nil)
+	}
 
 	// update watch
-	db610.tx.Set(q.wk, when)
+	db610.tx.Set(q.watchKey(), delay)
 	return nil
 }
 
@@ -134,10 +133,16 @@ func (q *v610queue) SubOne(ctx context.Context) (_ Record, err error) {
 	return nil, ErrRecordNotFound.WithStack()
 }
 
-func (q *v610queue) nextTaskDistance() (d time.Duration, err error) {
+func (q *v610queue) nextTaskDistance(tail []byte) (d time.Duration, err error) {
 	d = PunchSize
+
+	rng := fdb.KeyRange{
+		Begin: q.dataKey(),
+		End:   q.dataKey(tail),
+	}
+
 	_, err = q.cn.fdb.ReadTransact(func(tx fdb.ReadTransaction) (_ interface{}, e error) {
-		rows := tx.GetRange(q.kr, fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: 1}).GetSliceOrPanic()
+		rows := tx.GetRange(rng, fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: 1}).GetSliceOrPanic()
 		if len(rows) > 0 {
 			pflen := 4 + len(q.pf)
 			iwhen := int64(binary.BigEndian.Uint64(rows[0].Key[pflen : pflen+8]))
@@ -155,10 +160,12 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 	var wait fdb.FutureNil
 	var punch time.Duration
 
+	tail := bytes.Repeat([]byte{0xFF}, 17)
+
 	for len(list) == 0 {
 
 		if wait != nil {
-			if punch, err = q.nextTaskDistance(); err != nil {
+			if punch, err = q.nextTaskDistance(tail); err != nil {
 				return
 			}
 
@@ -190,7 +197,10 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 			ids = make([][]byte, 0, limit)
 			binary.BigEndian.PutUint64(now, uint64(time.Now().UnixNano()))
 
-			kr := fdb.KeyRange{Begin: fdbKey(q.cn.db, q.rtp.ID, q.pf, []byte{0x00}), End: fdbKey(q.cn.db, q.rtp.ID, q.pf, now)}
+			rng := fdb.KeyRange{
+				Begin: q.dataKey(),
+				End:   q.dataKey(now),
+			}
 
 			lim := int(limit) - len(list)
 
@@ -199,14 +209,14 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 			}
 
 			// must lock this range from parallel reads
-			if e = tx.AddWriteConflictRange(kr); e != nil {
+			if e = tx.AddWriteConflictRange(rng); e != nil {
 				return
 			}
 
 			opts := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: lim}
 
-			if rows = tx.GetRange(kr, opts).GetSliceOrPanic(); len(rows) == 0 {
-				wait = tx.Watch(q.wk)
+			if rows = tx.GetRange(rng, opts).GetSliceOrPanic(); len(rows) == 0 {
+				wait = tx.Watch(q.watchKey())
 				return nil, nil
 			}
 
@@ -217,7 +227,7 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 				ids = append(ids, rid)
 
 				// move to lost
-				tx.Set(fdbKey(q.cn.db, q.rtp.ID, q.pf, []byte{0xFF}, rid, rln), nil)
+				tx.Set(q.lostKey(rid, rln), nil)
 				tx.Clear(rows[i].Key)
 			}
 
@@ -249,10 +259,11 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 }
 
 func (q *v610queue) GetLost(limit uint, filter Predicat) (list []Record, err error) {
+	tail := bytes.Repeat([]byte{0xFF}, 17)
 	opt := fdb.RangeOptions{Limit: int(limit)}
 	rng := fdb.KeyRange{
-		Begin: fdbKey(q.cn.db, q.rtp.ID, q.pf, []byte{0xFF, 0x00}),
-		End:   fdbKey(q.cn.db, q.rtp.ID, q.pf, []byte{0xFF, 0xFF}),
+		Begin: q.lostKey(),
+		End:   q.lostKey(tail),
 	}
 
 	_, err = q.cn.fdb.Transact(func(tx fdb.Transaction) (_ interface{}, exp error) {
@@ -266,4 +277,13 @@ func (q *v610queue) GetLost(limit uint, filter Predicat) (list []Record, err err
 		return
 	})
 	return list, err
+}
+
+func (q *v610queue) dataKey(pts ...[]byte) fdb.Key { return q.key(0x00, pts...) }
+func (q *v610queue) lostKey(pts ...[]byte) fdb.Key { return q.key(0x01, pts...) }
+func (q *v610queue) watchKey() fdb.Key             { return q.key(0x02) }
+
+func (q *v610queue) key(prefix byte, pts ...[]byte) fdb.Key {
+	parts := append([][]byte{q.pf, {prefix}}, pts...)
+	return fdbKey(q.cn.db, q.rtp.ID, parts...)
 }

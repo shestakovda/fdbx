@@ -15,8 +15,8 @@ type mockQueue struct {
 	rtp RecordType
 }
 
-func (q *mockQueue) Ack(db DB, id []byte) error                            { return q.FAck(db, id) }
-func (q *mockQueue) Pub(db DB, id []byte, t time.Time) error               { return q.FPub(db, id, t) }
+func (q *mockQueue) Ack(db DB, id ...[]byte) error                         { return q.FAck(db, id...) }
+func (q *mockQueue) Pub(db DB, t time.Time, id ...[]byte) error            { return q.FPub(db, t, id...) }
 func (q *mockQueue) Sub(ctx context.Context) (<-chan Record, <-chan error) { return q.FSub(ctx) }
 func (q *mockQueue) SubOne(ctx context.Context) (Record, error)            { return q.FSubOne(ctx) }
 func (q *mockQueue) GetLost(limit uint, filter Predicat) ([]Record, error) {

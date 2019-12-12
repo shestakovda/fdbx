@@ -29,8 +29,8 @@ type MockConn struct {
 
 	// ***** Queue *****
 
-	FAck     func(DB, []byte) error
-	FPub     func(DB, []byte, time.Time) error
+	FAck     func(DB, ...[]byte) error
+	FPub     func(DB, time.Time, ...[]byte) error
 	FSub     func(ctx context.Context) (<-chan Record, <-chan error)
 	FSubOne  func(ctx context.Context) (Record, error)
 	FSubList func(ctx context.Context, limit uint) ([]Record, error)

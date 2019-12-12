@@ -126,7 +126,7 @@ func TestSelect(t *testing.T) {
 
 	// ********* all in *********
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	recc, errc := cur.Select(ctx)
@@ -223,7 +223,7 @@ func TestIndex(t *testing.T) {
 
 	// ********* all in *********
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	recc, errc := cur.Select(ctx)
@@ -354,7 +354,7 @@ func TestLongValuesCollection(t *testing.T) {
 		return true, nil
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	recc, errc := cur.Select(ctx, filter)
@@ -408,7 +408,7 @@ func TestLongValuesIndex(t *testing.T) {
 		return true, nil
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	recc, errc := cur.Select(ctx, filter)
@@ -465,7 +465,7 @@ func TestQueue(t *testing.T) {
 		for rec := range recc {
 			recs = append(recs, rec)
 
-			assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return queue.Ack(db, rec.FdbxID()) }))
+			// assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return queue.Ack(db, rec.FdbxID()) }))
 		}
 
 		errs := make([]error, 0, 3)
@@ -482,11 +482,26 @@ func TestQueue(t *testing.T) {
 		time.Sleep(fdbx.PunchSize)
 
 		assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
-			return queue.Pub(db, records[i].FdbxID(), time.Now().Add(fdbx.PunchSize))
+			return queue.Pub(db, time.Now().Add(fdbx.PunchSize), records[i].FdbxID())
 		}))
 	}
 
 	wg.Wait()
+
+	lost, err := queue.GetLost(0, nil)
+	assert.NoError(t, err)
+	assert.Len(t, lost, 3)
+
+	ack := make([][]byte, len(lost))
+	for i := range lost {
+		ack[i] = lost[i].FdbxID()
+	}
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return queue.Ack(db, ack...) }))
+
+	lost, err = queue.GetLost(0, nil)
+	assert.NoError(t, err)
+	assert.Len(t, lost, 0)
 }
 
 func recordFabric(id []byte) (fdbx.Record, error) { return &testRecord{ID: id}, nil }

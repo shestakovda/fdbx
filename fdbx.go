@@ -96,16 +96,20 @@ type Cursor interface {
 	Select(ctx context.Context, opts ...Option) (<-chan Record, <-chan error)
 }
 
-// Queue -
+// Queue - async task manager (pub/sub) with persistent storage and processing delay
 type Queue interface {
-	Ack(db DB, id []byte) error
+	// confirm task delivery
+	Ack(db DB, ids ...[]byte) error
 
-	Pub(db DB, id []byte, when time.Time) error
+	// publish task with processing delay
+	Pub(db DB, when time.Time, ids ...[]byte) error
 
+	// subscriptions
 	Sub(ctx context.Context) (<-chan Record, <-chan error)
 	SubOne(ctx context.Context) (Record, error)
 	SubList(ctx context.Context, limit uint) ([]Record, error)
 
+	// unconfirmed (not Ack) tasks
 	GetLost(limit uint, filter Predicat) ([]Record, error)
 }
 
