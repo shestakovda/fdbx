@@ -14,7 +14,7 @@ func v610CursorFabric(conn *v610Conn, id []byte, rtp RecordType) (*v610cursor, e
 		id:   id,
 		rtp:  rtp,
 		conn: conn,
-		To:   []byte{0xFF},
+		To:   []byte{0xFF, 0xFF},
 	}, nil
 }
 
@@ -142,7 +142,7 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 
 	var lastKey fdb.Key
 
-	if list, lastKey, err = db610.getRange(rng, opt, cur.rtp, filter); err != nil {
+	if list, lastKey, err = getRange(db610.conn.db, db610.tx, rng, opt, cur.rtp, filter); err != nil {
 		return
 	}
 

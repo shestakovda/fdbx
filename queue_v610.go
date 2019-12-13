@@ -248,7 +248,9 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 			}
 		}
 
-		if err = q.cn.Tx(func(db DB) error { return db.Load(recs...) }); err != nil {
+		if _, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (interface{}, error) {
+			return nil, loadRecords(q.cn.db, rtx, recs...)
+		}); err != nil {
 			return
 		}
 
@@ -266,14 +268,8 @@ func (q *v610queue) GetLost(limit uint, filter Predicat) (list []Record, err err
 		End:   q.lostKey(tail),
 	}
 
-	_, err = q.cn.fdb.Transact(func(tx fdb.Transaction) (_ interface{}, exp error) {
-		var db *v610db
-
-		if db, exp = newV610db(q.cn, tx); exp != nil {
-			return
-		}
-
-		list, _, exp = db.getRange(rng, opt, q.rtp, filter)
+	_, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (_ interface{}, exp error) {
+		list, _, exp = getRange(q.cn.db, rtx, rng, opt, q.rtp, filter)
 		return
 	})
 	return list, err

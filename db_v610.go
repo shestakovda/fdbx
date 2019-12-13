@@ -42,7 +42,7 @@ func (db *v610db) Del(typeID uint16, id []byte) error {
 
 func (db *v610db) Save(recs ...Record) (err error) {
 	for i := range recs {
-		if err = db.save(recs[i]); err != nil {
+		if err = saveRecord(db.conn.db, db.tx, recs[i]); err != nil {
 			return
 		}
 	}
@@ -51,19 +51,7 @@ func (db *v610db) Save(recs ...Record) (err error) {
 }
 
 func (db *v610db) Load(recs ...Record) (err error) {
-	// query all futures to leverage wait time
-	futures := make([]fdb.FutureByteSlice, len(recs))
-	for i := range recs {
-		futures[i] = db.tx.Get(recKey(db.conn.db, recs[i]))
-	}
-
-	for i := range futures {
-		if err = db.load(recs[i], futures[i]); err != nil {
-			return
-		}
-	}
-
-	return nil
+	return loadRecords(db.conn.db, db.tx, recs...)
 }
 
 func (db *v610db) Drop(recs ...Record) (err error) {
@@ -76,7 +64,7 @@ func (db *v610db) Drop(recs ...Record) (err error) {
 	}
 
 	for i := range futures {
-		if err = db.drop(recs[i], futures[i]); err != nil {
+		if err = dropRecord(db.conn.db, db.tx, recs[i], futures[i]); err != nil {
 			return
 		}
 
@@ -86,7 +74,18 @@ func (db *v610db) Drop(recs ...Record) (err error) {
 	return nil
 }
 
-func (db *v610db) Select(rtp RecordType, opts ...Option) (list []Record, err error) {
+func (db *v610db) Select(rtp RecordType, opts ...Option) ([]Record, error) {
+	return selectRecords(db.conn.db, db.tx, rtp, opts...)
+}
+
+// *********** private ***********
+
+func selectRecords(
+	dbID uint16,
+	rtx fdb.ReadTransaction,
+	rtp RecordType,
+	opts ...Option,
+) (list []Record, err error) {
 	o := new(options)
 
 	for i := range opts {
@@ -112,61 +111,107 @@ func (db *v610db) Select(rtp RecordType, opts ...Option) (list []Record, err err
 	}
 	to = append(to, bytes.Repeat([]byte{0xFF}, 17)...)
 
-	rng := fdb.KeyRange{Begin: fdbKey(db.conn.db, rtp.ID, from), End: fdbKey(db.conn.db, rtp.ID, to)}
+	rng := fdb.KeyRange{Begin: fdbKey(dbID, rtp.ID, from), End: fdbKey(dbID, rtp.ID, to)}
 
-	if list, _, err = db.getRange(rng, opt, rtp, o.filter); err != nil {
+	if list, _, err = getRange(dbID, rtx, rng, opt, rtp, o.filter); err != nil {
 		return
 	}
 
 	return list, err
 }
 
-// *********** private ***********
+func loadRecords(dbID uint16, rtx fdb.ReadTransaction, recs ...Record) (err error) {
+	// query all futures to leverage wait time
+	futures := make([]fdb.FutureByteSlice, len(recs))
+	for i := range recs {
+		futures[i] = rtx.Get(recKey(dbID, recs[i]))
+	}
 
-func (db *v610db) pack(buffer []byte) (_ []byte, err error) {
-	var flags uint8
-
-	// so long, try to reduce
-	if len(buffer) > GZipSize {
-		if buffer, err = db.gzipValue(&flags, buffer); err != nil {
+	for i := range futures {
+		if err = loadRecord(dbID, rtx, recs[i], futures[i]); err != nil {
 			return
 		}
 	}
 
-	// sooooooo long, we must split and save as blob
-	if len(buffer) > ChunkSize {
-		if buffer, err = db.saveBlob(&flags, buffer); err != nil {
-			return
-		}
-	}
-
-	return append([]byte{flags}, buffer...), nil
+	return nil
 }
 
-func (db *v610db) unpack(value []byte) (blobID, buffer []byte, err error) {
-	flags := value[0]
-	buffer = value[1:]
+func loadRecord(dbID uint16, rtx fdb.ReadTransaction, rec Record, fb fdb.FutureByteSlice) (err error) {
+	var buf []byte
 
-	// blob data
-	if flags&flagChunk > 0 {
-		blobID = buffer
-
-		if buffer, err = db.loadBlob(buffer); err != nil {
-			return
-		}
+	if buf, err = fb.Get(); err != nil {
+		return
 	}
 
-	// gzip data
-	if flags&flagGZip > 0 {
-		if buffer, err = db.gunzipValue(buffer); err != nil {
-			return
-		}
+	if len(buf) == 0 {
+		return ErrRecordNotFound.WithStack()
 	}
 
-	return blobID, buffer, nil
+	if _, buf, err = unpackValue(dbID, rtx, buf); err != nil {
+		return
+	}
+
+	return rec.FdbxUnmarshal(buf)
 }
 
-func (db *v610db) setIndexes(rec Record, buf []byte, drop bool) (err error) {
+func saveRecord(dbID uint16, tx fdb.Transaction, rec Record) (err error) {
+	var buf []byte
+
+	if buf, err = tx.Get(recKey(dbID, rec)).Get(); err != nil {
+		return
+	}
+
+	if len(buf) > 0 {
+		if _, buf, err = unpackValue(dbID, tx, buf); err != nil {
+			return
+		}
+
+		if err = setIndexes(dbID, tx, rec, buf, true); err != nil {
+			return
+		}
+	}
+
+	if buf, err = rec.FdbxMarshal(); err != nil {
+		return
+	}
+
+	if err = setIndexes(dbID, tx, rec, buf, false); err != nil {
+		return
+	}
+
+	if buf, err = packValue(dbID, tx, buf); err != nil {
+		return
+	}
+
+	tx.Set(recKey(dbID, rec), buf)
+	return nil
+}
+
+func dropRecord(dbID uint16, tx fdb.Transaction, rec Record, fb fdb.FutureByteSlice) (err error) {
+	var buf, blobID []byte
+
+	if buf, err = fb.Get(); err != nil {
+		return
+	}
+
+	if len(buf) == 0 {
+		return nil
+	}
+
+	if blobID, buf, err = unpackValue(dbID, tx, buf); err != nil {
+		return
+	}
+
+	if blobID != nil {
+		if err = dropBlob(dbID, tx, blobID); err != nil {
+			return
+		}
+	}
+
+	return setIndexes(dbID, tx, rec, buf, true)
+}
+
+func setIndexes(dbID uint16, tx fdb.Transaction, rec Record, buf []byte, drop bool) (err error) {
 	var rcp Record
 	var idx *v610Indexer
 
@@ -194,156 +239,79 @@ func (db *v610db) setIndexes(rec Record, buf []byte, drop bool) (err error) {
 	}
 
 	for i := range idx.list {
-		key := fdbKey(db.conn.db, idx.list[i].typeID, idx.list[i].value, rid, rln)
+		key := fdbKey(dbID, idx.list[i].typeID, idx.list[i].value, rid, rln)
 
 		if drop {
-			db.tx.Clear(key)
+			tx.Clear(key)
 		} else {
-			db.tx.Set(key, nil)
+			tx.Set(key, nil)
 		}
 	}
 
 	return nil
 }
 
-func (db *v610db) drop(rec Record, fb fdb.FutureByteSlice) (err error) {
-	var buf, blobID []byte
+func packValue(dbID uint16, tx fdb.Transaction, value []byte) (_ []byte, err error) {
+	var flags uint8
 
-	if buf, err = fb.Get(); err != nil {
-		return
-	}
-
-	if len(buf) == 0 {
-		return nil
-	}
-
-	if blobID, buf, err = db.unpack(buf); err != nil {
-		return
-	}
-
-	if blobID != nil {
-		if err = db.dropBlob(blobID); err != nil {
+	// so long, try to reduce
+	if len(value) > GZipSize {
+		if value, err = gzipValue(&flags, value); err != nil {
 			return
 		}
 	}
 
-	return db.setIndexes(rec, buf, true)
-}
-
-func (db *v610db) save(rec Record) (err error) {
-	var buf []byte
-
-	if buf, err = db.tx.Get(recKey(db.conn.db, rec)).Get(); err != nil {
-		return
-	}
-
-	if len(buf) > 0 {
-		if _, buf, err = db.unpack(buf); err != nil {
-			return
-		}
-
-		if err = db.setIndexes(rec, buf, true); err != nil {
+	// sooooooo long, we must split and save as blob
+	if len(value) > ChunkSize {
+		if value, err = saveBlob(dbID, tx, &flags, value); err != nil {
 			return
 		}
 	}
 
-	if buf, err = rec.FdbxMarshal(); err != nil {
-		return
-	}
-
-	if err = db.setIndexes(rec, buf, false); err != nil {
-		return
-	}
-
-	if buf, err = db.pack(buf); err != nil {
-		return
-	}
-
-	db.tx.Set(recKey(db.conn.db, rec), buf)
-	return nil
+	return append([]byte{flags}, value...), nil
 }
 
-func (db *v610db) load(m Record, fb fdb.FutureByteSlice) (err error) {
-	var buf []byte
+func unpackValue(dbID uint16, rtx fdb.ReadTransaction, value []byte) (blobID, buffer []byte, err error) {
+	flags := value[0]
+	buffer = value[1:]
 
-	if buf, err = fb.Get(); err != nil {
-		return
-	}
+	// blob data
+	if flags&flagChunk > 0 {
+		blobID = buffer
 
-	if len(buf) == 0 {
-		return ErrRecordNotFound.WithStack()
-	}
-
-	if _, buf, err = db.unpack(buf); err != nil {
-		return
-	}
-
-	return m.FdbxUnmarshal(buf)
-}
-
-func (db *v610db) gzipValue(flags *uint8, value []byte) ([]byte, error) {
-	*flags |= flagGZip
-
-	// TODO: sync.Pool
-	buf := new(bytes.Buffer)
-
-	if err := db.gzip(buf, bytes.NewReader(value)); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
-}
-
-func (db *v610db) gunzipValue(value []byte) ([]byte, error) {
-	// TODO: sync.Pool
-	buf := new(bytes.Buffer)
-
-	if err := db.gunzip(buf, bytes.NewReader(value)); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
-}
-
-func (db *v610db) gzip(w io.Writer, r io.Reader) (err error) {
-	gw := gzip.NewWriter(w)
-
-	defer func() {
-		e := gw.Close()
-		if err == nil {
-			err = e
+		if buffer, err = loadBlob(dbID, rtx, buffer); err != nil {
+			return
 		}
-	}()
-
-	if _, err = io.Copy(gw, r); err != nil {
-		return ErrMemFail.WithReason(err)
 	}
 
-	return nil
-}
-
-func (db *v610db) gunzip(w io.Writer, r io.Reader) (err error) {
-	var gr *gzip.Reader
-
-	if gr, err = gzip.NewReader(r); err != nil {
-		return ErrInvalidGZ.WithReason(err)
-	}
-
-	defer func() {
-		e := gr.Close()
-		if err == nil {
-			err = e
+	// gzip data
+	if flags&flagGZip > 0 {
+		if buffer, err = gunzipValue(buffer); err != nil {
+			return
 		}
-	}()
-
-	if _, err = io.Copy(w, gr); err != nil {
-		return ErrMemFail.WithReason(err)
 	}
 
-	return nil
+	return blobID, buffer, nil
 }
 
-func (db *v610db) saveBlob(flags *uint8, blob []byte) (value []byte, err error) {
+func loadBlob(dbID uint16, rtx fdb.ReadTransaction, value []byte) (blob []byte, err error) {
+	var kv fdb.KeyValue
+
+	res := rtx.GetRange(fdb.KeyRange{
+		Begin: fdbKey(dbID, ChunkTypeID, value),
+		End:   fdbKey(dbID, ChunkTypeID, value, []byte{0xFF}),
+	}, fdb.RangeOptions{Mode: fdb.StreamingModeIterator}).Iterator()
+
+	for res.Advance() {
+		if kv, err = res.Get(); err != nil {
+			return
+		}
+		blob = append(blob, kv.Value...)
+	}
+	return blob, nil
+}
+
+func saveBlob(dbID uint16, tx fdb.Transaction, flags *uint8, blob []byte) (value []byte, err error) {
 	var i uint16
 	var last bool
 	var part []byte
@@ -366,39 +334,86 @@ func (db *v610db) saveBlob(flags *uint8, blob []byte) (value []byte, err error) 
 
 		// save part
 		binary.BigEndian.PutUint16(index[:], i)
-		db.tx.Set(fdbKey(db.conn.db, ChunkTypeID, blobID[:], index[:]), part)
+		tx.Set(fdbKey(dbID, ChunkTypeID, blobID[:], index[:]), part)
 		i++
 	}
 
 	return blobID[:], nil
 }
 
-func (db *v610db) loadBlob(value []byte) (blob []byte, err error) {
-	var kv fdb.KeyValue
-
-	res := db.tx.GetRange(fdb.KeyRange{
-		Begin: fdbKey(db.conn.db, ChunkTypeID, value),
-		End:   fdbKey(db.conn.db, ChunkTypeID, value, []byte{0xFF}),
-	}, fdb.RangeOptions{Mode: fdb.StreamingModeIterator}).Iterator()
-
-	for res.Advance() {
-		if kv, err = res.Get(); err != nil {
-			return
-		}
-		blob = append(blob, kv.Value...)
-	}
-	return blob, nil
-}
-
-func (db *v610db) dropBlob(value []byte) error {
-	db.tx.ClearRange(fdb.KeyRange{
-		Begin: fdbKey(db.conn.db, ChunkTypeID, value),
-		End:   fdbKey(db.conn.db, ChunkTypeID, value, []byte{0xFF}),
+func dropBlob(dbID uint16, tx fdb.Transaction, value []byte) error {
+	tx.ClearRange(fdb.KeyRange{
+		Begin: fdbKey(dbID, ChunkTypeID, value),
+		End:   fdbKey(dbID, ChunkTypeID, value, []byte{0xFF}),
 	})
 	return nil
 }
 
-func (db *v610db) getRange(
+func gzipValue(flags *uint8, value []byte) ([]byte, error) {
+	*flags |= flagGZip
+
+	// TODO: sync.Pool
+	buf := new(bytes.Buffer)
+
+	if err := gzipStream(buf, bytes.NewReader(value)); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+func gunzipValue(value []byte) ([]byte, error) {
+	// TODO: sync.Pool
+	buf := new(bytes.Buffer)
+
+	if err := gunzipStream(buf, bytes.NewReader(value)); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+func gzipStream(w io.Writer, r io.Reader) (err error) {
+	gw := gzip.NewWriter(w)
+
+	defer func() {
+		e := gw.Close()
+		if err == nil {
+			err = e
+		}
+	}()
+
+	if _, err = io.Copy(gw, r); err != nil {
+		return ErrMemFail.WithReason(err)
+	}
+
+	return nil
+}
+
+func gunzipStream(w io.Writer, r io.Reader) (err error) {
+	var gr *gzip.Reader
+
+	if gr, err = gzip.NewReader(r); err != nil {
+		return ErrInvalidGZ.WithReason(err)
+	}
+
+	defer func() {
+		e := gr.Close()
+		if err == nil {
+			err = e
+		}
+	}()
+
+	if _, err = io.Copy(w, gr); err != nil {
+		return ErrMemFail.WithReason(err)
+	}
+
+	return nil
+}
+
+func getRange(
+	dbID uint16,
+	rtx fdb.ReadTransaction,
 	rng fdb.Range,
 	opt fdb.RangeOptions,
 	rtp RecordType,
@@ -416,7 +431,7 @@ func (db *v610db) getRange(
 		opt.Limit = 0
 	}
 
-	iter := db.tx.GetRange(rng, opt).Iterator()
+	iter := rtx.GetRange(rng, opt).Iterator()
 	list = make([]Record, 0, lim)
 	load := make([]Record, 0, batchSize)
 
@@ -425,7 +440,7 @@ func (db *v610db) getRange(
 			return
 		}
 
-		if exp = db.Load(load...); exp != nil {
+		if exp = loadRecords(dbID, rtx, load...); exp != nil {
 			return
 		}
 
@@ -482,7 +497,7 @@ func (db *v610db) getRange(
 			continue
 		}
 
-		if _, buf, err = db.unpack(row.Value); err != nil {
+		if _, buf, err = unpackValue(dbID, rtx, row.Value); err != nil {
 			return
 		}
 
