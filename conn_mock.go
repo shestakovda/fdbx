@@ -25,6 +25,7 @@ type MockConn struct {
 	FSave     func(...Record) error
 	FLoad     func(...Record) error
 	FDrop     func(...Record) error
+	FIndex    func(IndexHandler, []byte, bool) error
 	FSelect   func(rtp RecordType, opts ...Option) ([]Record, error)
 
 	// ***** Queue *****

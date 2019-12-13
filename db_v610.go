@@ -74,6 +74,16 @@ func (db *v610db) Drop(recs ...Record) (err error) {
 	return nil
 }
 
+func (db *v610db) Index(h IndexHandler, rid []byte, drop bool) (err error) {
+	var idx *v610Indexer
+
+	if idx, err = newV610Indexer(); err != nil {
+		return
+	}
+
+	return idx.commit(db.conn.db, db.tx, drop, rid, []byte{byte(len(rid))})
+}
+
 func (db *v610db) Select(rtp RecordType, opts ...Option) ([]Record, error) {
 	return selectRecords(db.conn.db, db.tx, rtp, opts...)
 }
@@ -216,7 +226,6 @@ func setIndexes(dbID uint16, tx fdb.Transaction, rec Record, buf []byte, drop bo
 	var idx *v610Indexer
 
 	rid := rec.FdbxID()
-	rln := []byte{byte(len(rid))}
 
 	if idx, err = newV610Indexer(); err != nil {
 		return
@@ -238,17 +247,7 @@ func setIndexes(dbID uint16, tx fdb.Transaction, rec Record, buf []byte, drop bo
 		return
 	}
 
-	for i := range idx.list {
-		key := fdbKey(dbID, idx.list[i].typeID, idx.list[i].value, rid, rln)
-
-		if drop {
-			tx.Clear(key)
-		} else {
-			tx.Set(key, nil)
-		}
-	}
-
-	return nil
+	return idx.commit(dbID, tx, drop, rid, []byte{byte(len(rid))})
 }
 
 func packValue(dbID uint16, tx fdb.Transaction, value []byte) (_ []byte, err error) {

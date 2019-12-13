@@ -72,7 +72,7 @@ type DB interface {
 	Load(...Record) error
 	Drop(...Record) error
 
-	// Index(IndexHandler) error
+	Index(h IndexHandler, rid []byte, drop bool) error
 
 	Select(rtp RecordType, opts ...Option) ([]Record, error)
 }
