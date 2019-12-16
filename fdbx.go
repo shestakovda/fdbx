@@ -75,6 +75,7 @@ type DB interface {
 	Index(h IndexHandler, rid []byte, drop bool) error
 
 	Select(rtp RecordType, opts ...Option) ([]Record, error)
+	SelectIDs(typeID uint16, opts ...Option) ([][]byte, error)
 }
 
 // Cursor - helper for long seq scan queries or pagination

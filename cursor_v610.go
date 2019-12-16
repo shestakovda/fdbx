@@ -197,7 +197,7 @@ func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan 
 		cur.To = o.to
 	}
 
-	count := uint(0)
+	count := 0
 	for !cur.IsEmpty && ctx.Err() == nil && (o.limit == 0 || count < o.limit) {
 		if err = cur.conn.Tx(func(db DB) (exp error) {
 			list, exp = cur.getPage(db, 0, false, o.filter)

@@ -16,3 +16,6 @@ func (db *mockDB) Index(h IndexHandler, rid []byte, drop bool) (err error) {
 func (db *mockDB) Select(rtp RecordType, opts ...Option) ([]Record, error) {
 	return db.FSelect(rtp, opts...)
 }
+func (db *mockDB) SelectIDs(typeID uint16, opts ...Option) ([][]byte, error) {
+	return db.FSelectIDs(typeID, opts...)
+}

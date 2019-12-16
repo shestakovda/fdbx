@@ -91,7 +91,19 @@ func TestCrud(t *testing.T) {
 			assert.Equal(t, rec3, list[0])
 		}
 
-		return err
+		ids, err := db.SelectIDs(TestCollection)
+		assert.NoError(t, err)
+		assert.Len(t, ids, 2)
+
+		if string(rec1.ID) < string(rec3.ID) {
+			assert.Equal(t, rec1.ID, ids[0])
+			assert.Equal(t, rec3.ID, ids[1])
+		} else {
+			assert.Equal(t, rec1.ID, ids[1])
+			assert.Equal(t, rec3.ID, ids[0])
+		}
+
+		return nil
 	}))
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Drop(rec1, rec3) }))

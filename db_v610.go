@@ -88,7 +88,50 @@ func (db *v610db) Select(rtp RecordType, opts ...Option) ([]Record, error) {
 	return selectRecords(db.conn.db, db.tx, rtp, opts...)
 }
 
+func (db *v610db) SelectIDs(indexTypeID uint16, opts ...Option) ([][]byte, error) {
+	return selectIDs(db.conn.db, indexTypeID, db.tx, opts...)
+}
+
 // *********** private ***********
+
+func selectOpts(opts []Option) (opt *options, err error) {
+	opt = new(options)
+
+	for i := range opts {
+		if err = opts[i](opt); err != nil {
+			return
+		}
+	}
+
+	if opt.from == nil {
+		opt.from = []byte{0x00}
+	}
+
+	if opt.to == nil {
+		opt.to = []byte{0xFF}
+	}
+	opt.to = append(opt.to, bytes.Repeat([]byte{0xFF}, 17)...)
+
+	return opt, nil
+}
+
+func selectIDs(
+	dbID, typeID uint16,
+	rtx fdb.ReadTransaction,
+	opts ...Option,
+) (ids [][]byte, err error) {
+	var opt *options
+
+	if opt, err = selectOpts(opts); err != nil {
+		return
+	}
+
+	rng := fdb.KeyRange{Begin: fdbKey(dbID, typeID, opt.from), End: fdbKey(dbID, typeID, opt.to)}
+	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: opt.limit, Reverse: opt.reverse}
+
+	ids, _, err = getRangeIDs(rtx, rng, rngOpt)
+	return
+}
 
 func selectRecords(
 	dbID uint16,
@@ -96,38 +139,17 @@ func selectRecords(
 	rtp RecordType,
 	opts ...Option,
 ) (list []Record, err error) {
-	o := new(options)
+	var opt *options
 
-	for i := range opts {
-		if err = opts[i](o); err != nil {
-			return
-		}
-	}
-
-	opt := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll}
-
-	if o.limit > 0 {
-		opt.Limit = int(o.limit)
-	}
-
-	from := []byte{0x00}
-	if o.from != nil {
-		from = o.from
-	}
-
-	to := []byte{0xFF}
-	if o.to != nil {
-		to = o.to
-	}
-	to = append(to, bytes.Repeat([]byte{0xFF}, 17)...)
-
-	rng := fdb.KeyRange{Begin: fdbKey(dbID, rtp.ID, from), End: fdbKey(dbID, rtp.ID, to)}
-
-	if list, _, err = getRange(dbID, rtx, rng, opt, rtp, o.filter); err != nil {
+	if opt, err = selectOpts(opts); err != nil {
 		return
 	}
 
-	return list, err
+	rng := fdb.KeyRange{Begin: fdbKey(dbID, rtp.ID, opt.from), End: fdbKey(dbID, rtp.ID, opt.to)}
+	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: opt.limit, Reverse: opt.reverse}
+
+	list, _, err = getRange(dbID, rtx, rng, rngOpt, rtp, opt.filter)
+	return
 }
 
 func loadRecords(dbID uint16, rtx fdb.ReadTransaction, recs ...Record) (err error) {
@@ -410,6 +432,37 @@ func gunzipStream(w io.Writer, r io.Reader) (err error) {
 	return nil
 }
 
+func getRowID(key fdb.Key) []byte {
+	klen := len(key)
+	idlen := int(key[klen-1])
+	return key[klen-idlen-1 : klen-1]
+}
+
+func getRangeIDs(
+	rtx fdb.ReadTransaction,
+	rng fdb.Range,
+	opt fdb.RangeOptions,
+) (ids [][]byte, lastKey fdb.Key, err error) {
+	rows := rtx.GetRange(rng, opt).GetSliceOrPanic()
+	ids = make([][]byte, 0, len(rows))
+
+	for i := range rows {
+
+		if opt.Reverse {
+			// first key is the last key for reverse
+			if i == 0 {
+				lastKey = rows[i].Key
+			}
+		} else {
+			lastKey = rows[i].Key
+		}
+
+		ids = append(ids, getRowID(rows[i].Key))
+	}
+
+	return ids, lastKey, nil
+}
+
 func getRange(
 	dbID uint16,
 	rtx fdb.ReadTransaction,
@@ -475,9 +528,7 @@ func getRange(
 
 		index++
 
-		klen := len(row.Key)
-		idlen := int(row.Key[klen-1])
-		rid := row.Key[klen-idlen-1 : klen-1]
+		rid := getRowID(row.Key)
 
 		if rec, err = rtp.New(rid); err != nil {
 			return
