@@ -1,10 +1,13 @@
 package fdbx
 
 import (
+	"bytes"
 	"encoding/binary"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
+
+var tail = bytes.Repeat([]byte{0xFF}, 17)
 
 func newV610Conn(db uint16) (conn *v610Conn, err error) {
 	conn = &v610Conn{db: db}

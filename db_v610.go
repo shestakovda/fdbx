@@ -110,7 +110,7 @@ func selectOpts(opts []Option) (opt *options, err error) {
 	if opt.to == nil {
 		opt.to = []byte{0xFF}
 	}
-	opt.to = append(opt.to, bytes.Repeat([]byte{0xFF}, 17)...)
+	opt.to = append(opt.to, tail...)
 
 	return opt, nil
 }
@@ -433,9 +433,9 @@ func gunzipStream(w io.Writer, r io.Reader) (err error) {
 }
 
 func getRowID(key fdb.Key) []byte {
-	klen := len(key)
-	idlen := int(key[klen-1])
-	return key[klen-idlen-1 : klen-1]
+	klen := len(key) - 1
+	idlen := int(key[klen])
+	return key[klen-idlen : klen]
 }
 
 func getRangeIDs(

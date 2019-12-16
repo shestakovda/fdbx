@@ -1,7 +1,6 @@
 package fdbx
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -133,7 +132,7 @@ func (q *v610queue) SubOne(ctx context.Context) (_ Record, err error) {
 	return nil, ErrRecordNotFound.WithStack()
 }
 
-func (q *v610queue) nextTaskDistance(tail []byte) (d time.Duration, err error) {
+func (q *v610queue) nextTaskDistance() (d time.Duration, err error) {
 	d = PunchSize
 
 	rng := fdb.KeyRange{
@@ -155,34 +154,44 @@ func (q *v610queue) nextTaskDistance(tail []byte) (d time.Duration, err error) {
 	return d, err
 }
 
-func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err error) {
-	var ids [][]byte
-	var wait fdb.FutureNil
+func (q *v610queue) waitTask(ctx context.Context, wait fdb.FutureNil) (err error) {
 	var punch time.Duration
 
-	tail := bytes.Repeat([]byte{0xFF}, 17)
+	if wait == nil {
+		return nil
+	}
+
+	if punch, err = q.nextTaskDistance(); err != nil {
+		return
+	}
+
+	wc := make(chan struct{}, 1)
+	go func() {
+		defer close(wc)
+		wait.BlockUntilReady()
+		wc <- struct{}{}
+	}()
+
+	wctx, cancel := context.WithTimeout(ctx, punch)
+	defer cancel()
+
+	select {
+	case <-wc:
+	case <-wctx.Done():
+		wait.Cancel()
+	}
+	return nil
+}
+
+func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err error) {
+	var ids [][]byte
+	var recs []Record
+	var wait fdb.FutureNil
 
 	for len(list) == 0 {
 
-		if wait != nil {
-			if punch, err = q.nextTaskDistance(tail); err != nil {
-				return
-			}
-
-			wc := make(chan struct{}, 1)
-			go func() { defer close(wc); wait.BlockUntilReady(); wc <- struct{}{} }()
-
-			func() {
-				wctx, cancel := context.WithTimeout(ctx, punch)
-				defer cancel()
-
-				select {
-				case <-wc:
-				case <-wctx.Done():
-					wait.Cancel()
-					return
-				}
-			}()
+		if err = q.waitTask(ctx, wait); err != nil {
+			return
 		}
 
 		if ctx.Err() != nil {
@@ -221,13 +230,11 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 			}
 
 			for i := range rows {
-				klen := len(rows[i].Key)
-				rln := rows[i].Key[klen-1 : klen]
-				rid := rows[i].Key[klen-int(rln[0])-1 : klen-1]
+				rid := getRowID(rows[i].Key)
 				ids = append(ids, rid)
 
 				// move to lost
-				tx.Set(q.lostKey(rid, rln), nil)
+				tx.Set(q.lostKey(rid, []byte{byte(len(rid))}), nil)
 				tx.Clear(rows[i].Key)
 			}
 
@@ -241,16 +248,7 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 			continue
 		}
 
-		recs := make([]Record, len(ids))
-		for i := range ids {
-			if recs[i], err = q.rtp.New(ids[i]); err != nil {
-				return
-			}
-		}
-
-		if _, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (interface{}, error) {
-			return nil, loadRecords(q.cn.db, rtx, recs...)
-		}); err != nil {
+		if recs, err = q.loadRecs(ids); err != nil {
 			return
 		}
 
@@ -260,8 +258,22 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 	return list, nil
 }
 
+func (q *v610queue) loadRecs(ids [][]byte) (list []Record, err error) {
+	list = make([]Record, len(ids))
+
+	for i := range ids {
+		if list[i], err = q.rtp.New(ids[i]); err != nil {
+			return
+		}
+	}
+
+	_, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (interface{}, error) {
+		return nil, loadRecords(q.cn.db, rtx, list...)
+	})
+	return list, err
+}
+
 func (q *v610queue) GetLost(limit uint, filter Predicat) (list []Record, err error) {
-	tail := bytes.Repeat([]byte{0xFF}, 17)
 	opt := fdb.RangeOptions{Limit: int(limit)}
 	rng := fdb.KeyRange{
 		Begin: q.lostKey(),

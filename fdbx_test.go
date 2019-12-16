@@ -476,8 +476,6 @@ func TestQueue(t *testing.T) {
 		recs := make([]fdbx.Record, 0, 3)
 		for rec := range recc {
 			recs = append(recs, rec)
-
-			// assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return queue.Ack(db, rec.FdbxID()) }))
 		}
 
 		errs := make([]error, 0, 3)

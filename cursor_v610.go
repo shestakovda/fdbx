@@ -1,7 +1,6 @@
 package fdbx
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 
@@ -103,8 +102,6 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 	if db610, ok = db.(*v610db); !ok {
 		return nil, ErrIncompatibleDB.WithStack()
 	}
-
-	tail := bytes.Repeat([]byte{0xFF}, 17)
 
 	opt := fdb.RangeOptions{Limit: cur.Page, Mode: fdb.StreamingModeWantAll, Reverse: reverse}
 
