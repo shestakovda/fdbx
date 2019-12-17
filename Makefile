@@ -5,6 +5,7 @@ all: test
 fmt:
 	@goimports -w .
 	@gofmt -s -w .
+	@go mod tidy
 
 test: fmt
 	@go test -count=10 -race -cover ./...

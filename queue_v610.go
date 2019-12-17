@@ -268,7 +268,7 @@ func (q *v610queue) loadRecs(ids [][]byte) (list []Record, err error) {
 	}
 
 	_, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (interface{}, error) {
-		return nil, loadRecords(q.cn.db, rtx, list...)
+		return nil, loadRecords(q.cn.db, rtx, nil, list...)
 	})
 	return list, err
 }

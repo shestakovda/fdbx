@@ -72,7 +72,7 @@ func (c *v610Conn) LoadCursor(rtp RecordType, id []byte, page uint) (_ Cursor, e
 		return
 	}
 
-	if err = c.Tx(func(db DB) error { return db.Load(cur) }); err != nil {
+	if err = c.Tx(func(db DB) error { return db.Load(nil, cur) }); err != nil {
 		return
 	}
 

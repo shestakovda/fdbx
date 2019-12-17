@@ -22,9 +22,9 @@ type MockConn struct {
 	FSet       func(ctype uint16, id, value []byte) error
 	FGet       func(ctype uint16, id []byte) ([]byte, error)
 	FDel       func(ctype uint16, id []byte) error
-	FSave      func(...Record) error
-	FLoad      func(...Record) error
-	FDrop      func(...Record) error
+	FSave      func(RecordHandler, ...Record) error
+	FLoad      func(RecordHandler, ...Record) error
+	FDrop      func(RecordHandler, ...Record) error
 	FIndex     func(IndexHandler, []byte, bool) error
 	FSelect    func(rtp RecordType, opts ...Option) ([]Record, error)
 	FSelectIDs func(typeID uint16, opts ...Option) ([][]byte, error)

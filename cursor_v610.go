@@ -86,7 +86,9 @@ func (cur *v610cursor) Select(ctx context.Context, opts ...Option) (<-chan Recor
 
 // ********************** Private **********************
 
-func (cur *v610cursor) drop() error { return cur.conn.Tx(func(db DB) error { return db.Drop(cur) }) }
+func (cur *v610cursor) drop() error {
+	return cur.conn.Tx(func(db DB) error { return db.Drop(nil, cur) })
+}
 
 func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat) (list []Record, err error) {
 	var ok bool
@@ -95,7 +97,7 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 
 	defer func() {
 		if err == nil {
-			err = db.Save(cur)
+			err = db.Save(nil, cur)
 		}
 	}()
 

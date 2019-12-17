@@ -40,9 +40,9 @@ func (db *v610db) Del(typeID uint16, id []byte) error {
 	return nil
 }
 
-func (db *v610db) Save(recs ...Record) (err error) {
+func (db *v610db) Save(onExists RecordHandler, recs ...Record) (err error) {
 	for i := range recs {
-		if err = saveRecord(db.conn.db, db.tx, recs[i]); err != nil {
+		if err = saveRecord(db.conn.db, db.tx, recs[i], onExists); err != nil {
 			return
 		}
 	}
@@ -50,11 +50,11 @@ func (db *v610db) Save(recs ...Record) (err error) {
 	return nil
 }
 
-func (db *v610db) Load(recs ...Record) (err error) {
-	return loadRecords(db.conn.db, db.tx, recs...)
+func (db *v610db) Load(onNotFound RecordHandler, recs ...Record) (err error) {
+	return loadRecords(db.conn.db, db.tx, onNotFound, recs...)
 }
 
-func (db *v610db) Drop(recs ...Record) (err error) {
+func (db *v610db) Drop(onNotExists RecordHandler, recs ...Record) (err error) {
 	keys := make(map[int]fdb.Key, len(recs))
 	futures := make([]fdb.FutureByteSlice, len(recs))
 
@@ -64,7 +64,7 @@ func (db *v610db) Drop(recs ...Record) (err error) {
 	}
 
 	for i := range futures {
-		if err = dropRecord(db.conn.db, db.tx, recs[i], futures[i]); err != nil {
+		if err = dropRecord(db.conn.db, db.tx, recs[i], futures[i], onNotExists); err != nil {
 			return
 		}
 
@@ -152,7 +152,7 @@ func selectRecords(
 	return
 }
 
-func loadRecords(dbID uint16, rtx fdb.ReadTransaction, recs ...Record) (err error) {
+func loadRecords(dbID uint16, rtx fdb.ReadTransaction, onNotFound RecordHandler, recs ...Record) (err error) {
 	// query all futures to leverage wait time
 	futures := make([]fdb.FutureByteSlice, len(recs))
 	for i := range recs {
@@ -160,7 +160,7 @@ func loadRecords(dbID uint16, rtx fdb.ReadTransaction, recs ...Record) (err erro
 	}
 
 	for i := range futures {
-		if err = loadRecord(dbID, rtx, recs[i], futures[i]); err != nil {
+		if err = loadRecord(dbID, rtx, recs[i], futures[i], onNotFound); err != nil {
 			return
 		}
 	}
@@ -168,7 +168,13 @@ func loadRecords(dbID uint16, rtx fdb.ReadTransaction, recs ...Record) (err erro
 	return nil
 }
 
-func loadRecord(dbID uint16, rtx fdb.ReadTransaction, rec Record, fb fdb.FutureByteSlice) (err error) {
+func loadRecord(
+	dbID uint16,
+	rtx fdb.ReadTransaction,
+	rec Record,
+	fb fdb.FutureByteSlice,
+	onNotFound RecordHandler,
+) (err error) {
 	var buf []byte
 
 	if buf, err = fb.Get(); err != nil {
@@ -176,6 +182,9 @@ func loadRecord(dbID uint16, rtx fdb.ReadTransaction, rec Record, fb fdb.FutureB
 	}
 
 	if len(buf) == 0 {
+		if onNotFound != nil {
+			return onNotFound(rec)
+		}
 		return ErrRecordNotFound.WithStack()
 	}
 
@@ -186,7 +195,7 @@ func loadRecord(dbID uint16, rtx fdb.ReadTransaction, rec Record, fb fdb.FutureB
 	return rec.FdbxUnmarshal(buf)
 }
 
-func saveRecord(dbID uint16, tx fdb.Transaction, rec Record) (err error) {
+func saveRecord(dbID uint16, tx fdb.Transaction, rec Record, onExists RecordHandler) (err error) {
 	var buf []byte
 
 	if buf, err = tx.Get(recKey(dbID, rec)).Get(); err != nil {
@@ -194,6 +203,12 @@ func saveRecord(dbID uint16, tx fdb.Transaction, rec Record) (err error) {
 	}
 
 	if len(buf) > 0 {
+		if onExists != nil {
+			if err = onExists(rec); err != nil {
+				return
+			}
+		}
+
 		if _, buf, err = unpackValue(dbID, tx, buf); err != nil {
 			return
 		}
@@ -219,7 +234,13 @@ func saveRecord(dbID uint16, tx fdb.Transaction, rec Record) (err error) {
 	return nil
 }
 
-func dropRecord(dbID uint16, tx fdb.Transaction, rec Record, fb fdb.FutureByteSlice) (err error) {
+func dropRecord(
+	dbID uint16,
+	tx fdb.Transaction,
+	rec Record,
+	fb fdb.FutureByteSlice,
+	onNotExists RecordHandler,
+) (err error) {
 	var buf, blobID []byte
 
 	if buf, err = fb.Get(); err != nil {
@@ -227,6 +248,9 @@ func dropRecord(dbID uint16, tx fdb.Transaction, rec Record, fb fdb.FutureByteSl
 	}
 
 	if len(buf) == 0 {
+		if onNotExists != nil {
+			return onNotExists(rec)
+		}
 		return nil
 	}
 
@@ -492,7 +516,7 @@ func getRange(
 			return
 		}
 
-		if exp = loadRecords(dbID, rtx, load...); exp != nil {
+		if exp = loadRecords(dbID, rtx, nil, load...); exp != nil {
 			return
 		}
 

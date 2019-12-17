@@ -38,6 +38,9 @@ type TxHandler func(DB) error
 // IndexHandler -
 type IndexHandler func(Indexer) error
 
+// RecordHandler -
+type RecordHandler func(Record) error
+
 // Predicat - for query filtering, especially for seq scan queries
 type Predicat func(Record) (bool, error)
 
@@ -68,9 +71,9 @@ type DB interface {
 	Get(typeID uint16, id []byte) ([]byte, error)
 	Del(typeID uint16, id []byte) error
 
-	Save(...Record) error
-	Load(...Record) error
-	Drop(...Record) error
+	Save(onExists RecordHandler, recs ...Record) error
+	Load(onNotFound RecordHandler, recs ...Record) error
+	Drop(onNotExists RecordHandler, recs ...Record) error
 
 	Index(h IndexHandler, rid []byte, drop bool) error
 

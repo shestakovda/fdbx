@@ -70,13 +70,13 @@ func TestCrud(t *testing.T) {
 
 	// ******** Record ********
 
-	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(rec1, rec3) }), fdbx.ErrRecordNotFound))
-	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(rec3, rec1) }), fdbx.ErrRecordNotFound))
+	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(nil, rec1, rec3) }), fdbx.ErrRecordNotFound))
+	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(nil, rec3, rec1) }), fdbx.ErrRecordNotFound))
 
-	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(rec1, rec3) }))
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, rec1, rec3) }))
 
-	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Load(rec2, rec4) }))
-	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Load(rec4, rec2) }))
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Load(nil, rec2, rec4) }))
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Load(nil, rec4, rec2) }))
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
 		list, err := db.Select(fdbx.RecordType{ID: TestCollection, New: recordFabric})
@@ -106,10 +106,10 @@ func TestCrud(t *testing.T) {
 		return nil
 	}))
 
-	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Drop(rec1, rec3) }))
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Drop(nil, rec1, rec3) }))
 
-	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(rec2, rec4) }), fdbx.ErrRecordNotFound))
-	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(rec4, rec2) }), fdbx.ErrRecordNotFound))
+	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(nil, rec2, rec4) }), fdbx.ErrRecordNotFound))
+	assert.True(t, errors.Is(conn.Tx(func(db fdbx.DB) error { return db.Load(nil, rec4, rec2) }), fdbx.ErrRecordNotFound))
 
 	assert.Equal(t, rec1, rec2)
 	assert.Equal(t, rec3, rec4)
@@ -127,7 +127,7 @@ func TestSelect(t *testing.T) {
 		records[i] = newTestRecord()
 	}
 
-	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, records...) }))
 
 	cur, err := conn.Cursor(fdbx.RecordType{ID: TestCollection, New: recordFabric}, nil, 3)
 	assert.NoError(t, err)
@@ -224,7 +224,7 @@ func TestIndex(t *testing.T) {
 		records[i] = newTestRecord()
 	}
 
-	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, records...) }))
 
 	cur, err := conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, nil, 3)
 	assert.NoError(t, err)
@@ -348,7 +348,7 @@ func TestLongValuesCollection(t *testing.T) {
 	guid := records[1].(*testRecord).Data
 	records[1].(*testRecord).Data = bytes.Repeat(guid, 10000)
 
-	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, records...) }))
 
 	cur, err := conn.Cursor(fdbx.RecordType{ID: TestCollection, New: recordFabric}, nil, 3)
 	assert.NoError(t, err)
@@ -402,7 +402,7 @@ func TestLongValuesIndex(t *testing.T) {
 	guid := records[1].(*testRecord).Data
 	records[1].(*testRecord).Data = bytes.Repeat(guid, 10000)
 
-	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, records...) }))
 
 	cur, err := conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, nil, 3)
 	assert.NoError(t, err)
@@ -452,7 +452,7 @@ func TestQueue(t *testing.T) {
 		records[i] = newTestRecord()
 	}
 
-	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(records...) }))
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, records...) }))
 
 	queue, err := conn.Queue(fdbx.RecordType{ID: TestQueueType, New: recordFabric}, []byte("memberID"))
 	assert.NoError(t, err)
@@ -542,6 +542,9 @@ type testRecord struct {
 	Logic   bool     `json:"logic"`
 	Data    []byte   `json:"data"`
 	Strs    []string `json:"strs"`
+
+	notFound      bool
+	raiseNotFound bool
 }
 
 func (r *testRecord) FdbxID() []byte { return r.ID }
