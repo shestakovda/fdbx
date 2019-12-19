@@ -25,3 +25,6 @@ func (q *mockQueue) GetLost(limit uint, filter Predicat) ([]Record, error) {
 func (q *mockQueue) SubList(ctx context.Context, limit uint) ([]Record, error) {
 	return q.FSubList(ctx, limit)
 }
+func (q *mockQueue) Stat() (wait, lost int, err error) {
+	return q.FStat()
+}

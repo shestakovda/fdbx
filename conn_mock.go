@@ -37,6 +37,7 @@ type MockConn struct {
 	FSubOne  func(ctx context.Context) (Record, error)
 	FSubList func(ctx context.Context, limit uint) ([]Record, error)
 	FGetLost func(limit uint, filter Predicat) ([]Record, error)
+	FStat    func() (wait, lost int, err error)
 
 	// ***** Cursor *****
 

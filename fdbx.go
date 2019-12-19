@@ -115,6 +115,9 @@ type Queue interface {
 
 	// unconfirmed (not Ack) tasks
 	GetLost(limit uint, filter Predicat) ([]Record, error)
+
+	// queue counts
+	Stat() (wait, lost int, err error)
 }
 
 // Record - database record object (user model, collection item)

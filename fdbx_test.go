@@ -502,6 +502,11 @@ func TestQueue(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, lost, 3)
 
+	wcnt, lcnt, err := queue.Stat()
+	assert.NoError(t, err)
+	assert.Equal(t, 0, wcnt)
+	assert.Equal(t, 3, lcnt)
+
 	ack := make([][]byte, len(lost))
 	for i := range lost {
 		ack[i] = lost[i].FdbxID()

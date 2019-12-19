@@ -295,3 +295,22 @@ func (q *v610queue) key(prefix byte, pts ...[]byte) fdb.Key {
 	parts := append([][]byte{q.pf, {prefix}}, pts...)
 	return fdbKey(q.cn.db, q.rtp.ID, parts...)
 }
+
+func (q *v610queue) Stat() (wait, lost int, err error) {
+	opt := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll}
+	dataRng := fdb.KeyRange{
+		Begin: q.dataKey(),
+		End:   q.dataKey(tail),
+	}
+	lostRng := fdb.KeyRange{
+		Begin: q.lostKey(),
+		End:   q.lostKey(tail),
+	}
+
+	_, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (interface{}, error) {
+		wait = len(rtx.GetRange(dataRng, opt).GetSliceOrPanic())
+		lost = len(rtx.GetRange(lostRng, opt).GetSliceOrPanic())
+		return nil, nil
+	})
+	return wait, lost, err
+}
