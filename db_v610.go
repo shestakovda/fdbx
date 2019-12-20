@@ -81,6 +81,10 @@ func (db *v610db) Index(h IndexHandler, rid []byte, drop bool) (err error) {
 		return
 	}
 
+	if err = h(idx); err != nil {
+		return
+	}
+
 	return idx.commit(db.conn.db, db.tx, drop, rid, []byte{byte(len(rid))})
 }
 
