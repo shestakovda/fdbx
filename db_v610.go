@@ -88,6 +88,24 @@ func (db *v610db) Index(h IndexHandler, rid []byte, drop bool) (err error) {
 	return idx.commit(db.conn.db, db.tx, drop, rid, []byte{byte(len(rid))})
 }
 
+func (db *v610db) ClearIndex(h IndexHandler) (err error) {
+	var idx *v610Indexer
+
+	if idx, err = newV610Indexer(); err != nil {
+		return
+	}
+
+	if err = h(idx); err != nil {
+		return
+	}
+
+	return idx.clear(db.conn.db, db.tx)
+}
+
+func (db *v610db) Clear(typeID uint16) error {
+	return clearType(db.conn.db, typeID, db.tx)
+}
+
 func (db *v610db) Select(rtp RecordType, opts ...Option) ([]Record, error) {
 	return selectRecords(db.conn.db, db.tx, rtp, opts...)
 }
@@ -600,4 +618,12 @@ func getRange(
 	}
 
 	return list, lastKey, nil
+}
+
+func clearType(dbID, typeID uint16, tx fdb.Transaction) error {
+	tx.ClearRange(fdb.KeyRange{
+		Begin: fdbKey(dbID, typeID),
+		End:   fdbKey(dbID, typeID, tail),
+	})
+	return nil
 }

@@ -77,6 +77,9 @@ type DB interface {
 
 	Index(h IndexHandler, rid []byte, drop bool) error
 
+	Clear(typeID uint16) error
+	ClearIndex(h IndexHandler) error
+
 	Select(rtp RecordType, opts ...Option) ([]Record, error)
 	SelectIDs(typeID uint16, opts ...Option) ([][]byte, error)
 }

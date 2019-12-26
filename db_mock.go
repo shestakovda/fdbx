@@ -13,6 +13,12 @@ func (db *mockDB) Drop(h RecordHandler, m ...Record) error     { return db.FDrop
 func (db *mockDB) Index(h IndexHandler, rid []byte, drop bool) (err error) {
 	return db.FIndex(h, rid, drop)
 }
+func (db *mockDB) Clear(typeID uint16) error {
+	return db.FClear(typeID)
+}
+func (db *mockDB) ClearIndex(h IndexHandler) error {
+	return db.FClearIndex(h)
+}
 func (db *mockDB) Select(rtp RecordType, opts ...Option) ([]Record, error) {
 	return db.FSelect(rtp, opts...)
 }

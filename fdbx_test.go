@@ -331,6 +331,32 @@ func TestIndex(t *testing.T) {
 		assert.Equal(t, rec, list[0])
 		return nil
 	}))
+
+	// ********* clear *********
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.ClearIndex(new(testRecord).FdbxIndex) }))
+
+	cur, err = conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, nil, 3)
+	assert.NoError(t, err)
+	assert.NotNil(t, cur)
+	assert.False(t, cur.Empty())
+
+	recc, errc = cur.Select(ctx)
+
+	recs = make([]fdbx.Record, 0, 10)
+	for rec := range recc {
+		recs = append(recs, rec)
+	}
+
+	errs = make([]error, 0)
+	for err := range errc {
+		errs = append(errs, err)
+	}
+
+	assert.Len(t, errs, 0)
+	assert.Len(t, recs, 0)
+	assert.True(t, cur.Empty())
+	assert.NoError(t, cur.Close())
 }
 
 func TestLongValuesCollection(t *testing.T) {
