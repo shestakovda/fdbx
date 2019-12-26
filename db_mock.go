@@ -10,7 +10,7 @@ func (db *mockDB) Del(ctype uint16, id []byte) error           { return db.FDel(
 func (db *mockDB) Save(h RecordHandler, m ...Record) error     { return db.FSave(h, m...) }
 func (db *mockDB) Load(h RecordHandler, m ...Record) error     { return db.FLoad(h, m...) }
 func (db *mockDB) Drop(h RecordHandler, m ...Record) error     { return db.FDrop(h, m...) }
-func (db *mockDB) Index(h IndexHandler, rid []byte, drop bool) (err error) {
+func (db *mockDB) Index(h IndexHandler, rid string, drop bool) (err error) {
 	return db.FIndex(h, rid, drop)
 }
 func (db *mockDB) Clear(typeID uint16) error {
@@ -22,6 +22,6 @@ func (db *mockDB) ClearIndex(h IndexHandler) error {
 func (db *mockDB) Select(rtp RecordType, opts ...Option) ([]Record, error) {
 	return db.FSelect(rtp, opts...)
 }
-func (db *mockDB) SelectIDs(typeID uint16, opts ...Option) ([][]byte, error) {
+func (db *mockDB) SelectIDs(typeID uint16, opts ...Option) ([]string, error) {
 	return db.FSelectIDs(typeID, opts...)
 }

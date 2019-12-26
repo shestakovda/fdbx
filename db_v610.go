@@ -74,7 +74,7 @@ func (db *v610db) Drop(onNotExists RecordHandler, recs ...Record) (err error) {
 	return nil
 }
 
-func (db *v610db) Index(h IndexHandler, rid []byte, drop bool) (err error) {
+func (db *v610db) Index(h IndexHandler, rid string, drop bool) (err error) {
 	var idx *v610Indexer
 
 	if idx, err = newV610Indexer(); err != nil {
@@ -85,7 +85,7 @@ func (db *v610db) Index(h IndexHandler, rid []byte, drop bool) (err error) {
 		return
 	}
 
-	return idx.commit(db.conn.db, db.tx, drop, rid, []byte{byte(len(rid))})
+	return idx.commit(db.conn.db, db.tx, drop, rid)
 }
 
 func (db *v610db) ClearIndex(h IndexHandler) (err error) {
@@ -110,7 +110,7 @@ func (db *v610db) Select(rtp RecordType, opts ...Option) ([]Record, error) {
 	return selectRecords(db.conn.db, db.tx, rtp, opts...)
 }
 
-func (db *v610db) SelectIDs(indexTypeID uint16, opts ...Option) ([][]byte, error) {
+func (db *v610db) SelectIDs(indexTypeID uint16, opts ...Option) ([]string, error) {
 	return selectIDs(db.conn.db, indexTypeID, db.tx, opts...)
 }
 
@@ -141,7 +141,7 @@ func selectIDs(
 	dbID, typeID uint16,
 	rtx fdb.ReadTransaction,
 	opts ...Option,
-) (ids [][]byte, err error) {
+) (ids []string, err error) {
 	var opt *options
 
 	if opt, err = selectOpts(opts); err != nil {
@@ -315,7 +315,7 @@ func setIndexes(dbID uint16, tx fdb.Transaction, rec Record, buf []byte, drop bo
 		return
 	}
 
-	return idx.commit(dbID, tx, drop, rid, []byte{byte(len(rid))})
+	return idx.commit(dbID, tx, drop, rid)
 }
 
 func packValue(dbID uint16, tx fdb.Transaction, value []byte) (_ []byte, err error) {
@@ -478,19 +478,18 @@ func gunzipStream(w io.Writer, r io.Reader) (err error) {
 	return nil
 }
 
-func getRowID(key fdb.Key) []byte {
+func getRowID(key fdb.Key) string {
 	klen := len(key) - 1
-	idlen := int(key[klen])
-	return key[klen-idlen : klen]
+	return b2s(key[klen-int(key[klen]) : klen])
 }
 
 func getRangeIDs(
 	rtx fdb.ReadTransaction,
 	rng fdb.Range,
 	opt fdb.RangeOptions,
-) (ids [][]byte, lastKey fdb.Key, err error) {
+) (ids []string, lastKey fdb.Key, err error) {
 	rows := rtx.GetRange(rng, opt).GetSliceOrPanic()
-	ids = make([][]byte, 0, len(rows))
+	ids = make([]string, 0, len(rows))
 
 	for i := range rows {
 

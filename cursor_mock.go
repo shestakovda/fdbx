@@ -14,7 +14,7 @@ type mockCursor struct {
 }
 
 // FdbxID
-func (m *mockCursor) FdbxID() []byte { return m.FFdbxID() }
+func (m *mockCursor) FdbxID() string { return m.FFdbxID() }
 
 // FdbxType
 func (m *mockCursor) FdbxType() RecordType { return m.FFdbxType() }

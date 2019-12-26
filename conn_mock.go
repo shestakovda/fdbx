@@ -14,7 +14,7 @@ type MockConn struct {
 	db uint16
 
 	FClearDB    func() error
-	FLoadCursor func(rtp RecordType, id []byte, page uint) (Cursor, error)
+	FLoadCursor func(rtp RecordType, id string, page uint) (Cursor, error)
 
 	// ***** DB *****
 
@@ -25,21 +25,21 @@ type MockConn struct {
 	FSave       func(RecordHandler, ...Record) error
 	FLoad       func(RecordHandler, ...Record) error
 	FDrop       func(RecordHandler, ...Record) error
-	FIndex      func(IndexHandler, []byte, bool) error
+	FIndex      func(IndexHandler, string, bool) error
 	FClear      func(typeID uint16) error
 	FClearIndex func(h IndexHandler) error
 	FSelect     func(rtp RecordType, opts ...Option) ([]Record, error)
-	FSelectIDs  func(typeID uint16, opts ...Option) ([][]byte, error)
+	FSelectIDs  func(typeID uint16, opts ...Option) ([]string, error)
 
 	// ***** Queue *****
 
-	FAck       func(DB, ...[]byte) error
-	FPub       func(DB, time.Time, ...[]byte) error
+	FAck       func(DB, ...string) error
+	FPub       func(DB, time.Time, ...string) error
 	FSub       func(ctx context.Context) (<-chan Record, <-chan error)
 	FSubOne    func(ctx context.Context) (Record, error)
 	FSubList   func(ctx context.Context, limit uint) ([]Record, error)
 	FGetLost   func(limit uint, filter Predicat) ([]Record, error)
-	FCheckLost func(db DB, ids ...[]byte) ([]bool, error)
+	FCheckLost func(db DB, ids ...string) (map[string]bool, error)
 	FStat      func() (wait, lost int, err error)
 
 	// ***** Cursor *****
@@ -52,7 +52,7 @@ type MockConn struct {
 
 	// ***** Record *****
 
-	FFdbxID        func() []byte
+	FFdbxID        func() string
 	FFdbxType      func() RecordType
 	FFdbxIndex     func(Indexer) error
 	FFdbxMarshal   func() ([]byte, error)
@@ -66,7 +66,7 @@ func (c *MockConn) ClearDB() error { return c.FClearDB() }
 func (c *MockConn) Tx(h TxHandler) error { return h(newMockDB(c)) }
 
 // Queue - queue stub, create mock object
-func (c *MockConn) Queue(rtp RecordType, prefix []byte) (Queue, error) {
+func (c *MockConn) Queue(rtp RecordType, prefix string) (Queue, error) {
 	return newMockQueue(c, rtp, prefix)
 }
 
@@ -76,6 +76,6 @@ func (c *MockConn) Cursor(rtp RecordType, start []byte, page uint) (Cursor, erro
 }
 
 // LoadCursor - load cursor stub
-func (c *MockConn) LoadCursor(rtp RecordType, id []byte, page uint) (Cursor, error) {
+func (c *MockConn) LoadCursor(rtp RecordType, id string, page uint) (Cursor, error) {
 	return c.FLoadCursor(rtp, id, page)
 }

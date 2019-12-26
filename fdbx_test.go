@@ -471,7 +471,7 @@ func TestQueue(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, conn)
 	assert.NoError(t, conn.ClearDB())
-	defer conn.ClearDB()
+	// defer conn.ClearDB()
 
 	records := make([]fdbx.Record, 3)
 	for i := range records {
@@ -480,7 +480,7 @@ func TestQueue(t *testing.T) {
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, records...) }))
 
-	queue, err := conn.Queue(fdbx.RecordType{ID: TestQueueType, New: recordFabric}, []byte("memberID"))
+	queue, err := conn.Queue(fdbx.RecordType{ID: TestQueueType, New: recordFabric}, "memberID")
 	assert.NoError(t, err)
 	assert.NotNil(t, queue)
 
@@ -533,7 +533,7 @@ func TestQueue(t *testing.T) {
 	assert.Equal(t, 0, wcnt)
 	assert.Equal(t, 3, lcnt)
 
-	ack := make([][]byte, len(lost))
+	ack := make([]string, len(lost))
 	for i := range lost {
 		ack[i] = lost[i].FdbxID()
 	}
@@ -543,7 +543,11 @@ func TestQueue(t *testing.T) {
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
 		res, err := queue.CheckLost(db, ack...)
 		assert.Len(t, res, 3)
-		assert.Equal(t, []bool{true, false, true}, res)
+		assert.Equal(t, map[string]bool{
+			ack[0]: true,
+			ack[1]: false,
+			ack[2]: true,
+		}, res)
 		return err
 	}))
 
@@ -554,7 +558,7 @@ func TestQueue(t *testing.T) {
 	assert.Len(t, lost, 0)
 }
 
-func recordFabric(id []byte) (fdbx.Record, error) { return &testRecord{ID: id}, nil }
+func recordFabric(id string) (fdbx.Record, error) { return &testRecord{ID: id}, nil }
 
 func newTestRecord() *testRecord {
 	uid := uuid.New()
@@ -564,7 +568,7 @@ func newTestRecord() *testRecord {
 	flt := float64(binary.BigEndian.Uint64(append(nop, uid[2:4]...)))
 
 	return &testRecord{
-		ID:      uid[:],
+		ID:      uid.String(),
 		Name:    str,
 		Number:  num,
 		Decimal: flt,
@@ -575,7 +579,7 @@ func newTestRecord() *testRecord {
 }
 
 type testRecord struct {
-	ID      []byte   `json:"-"`
+	ID      string   `json:"-"`
 	Name    string   `json:"name"`
 	Number  uint64   `json:"number"`
 	Decimal float64  `json:"decimal"`
@@ -587,7 +591,7 @@ type testRecord struct {
 	raiseNotFound bool
 }
 
-func (r *testRecord) FdbxID() []byte { return r.ID }
+func (r *testRecord) FdbxID() string { return r.ID }
 func (r *testRecord) FdbxType() fdbx.RecordType {
 	return fdbx.RecordType{ID: TestCollection, New: recordFabric}
 }

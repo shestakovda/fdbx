@@ -12,7 +12,7 @@ import (
 // PunchSize - размер ожидания в случае отсутствия задач
 var PunchSize = time.Minute
 
-func newV610queue(conn *v610Conn, rtp RecordType, prefix []byte) (*v610queue, error) {
+func newV610queue(conn *v610Conn, rtp RecordType, prefix string) (*v610queue, error) {
 	return &v610queue{
 		cn:  conn,
 		rtp: rtp,
@@ -21,12 +21,12 @@ func newV610queue(conn *v610Conn, rtp RecordType, prefix []byte) (*v610queue, er
 }
 
 type v610queue struct {
-	pf  []byte
+	pf  string
 	rtp RecordType
 	cn  *v610Conn
 }
 
-func (q *v610queue) Ack(db DB, ids ...[]byte) error {
+func (q *v610queue) Ack(db DB, ids ...string) error {
 	var ok bool
 	var db610 *v610db
 
@@ -39,13 +39,13 @@ func (q *v610queue) Ack(db DB, ids ...[]byte) error {
 	}
 
 	for i := range ids {
-		db610.tx.Clear(q.lostKey(ids[i], []byte{byte(len(ids[i]))}))
+		db610.tx.Clear(q.lostKey(s2b(ids[i]), []byte{byte(len(ids[i]))}))
 	}
 
 	return nil
 }
 
-func (q *v610queue) Pub(db DB, when time.Time, ids ...[]byte) (err error) {
+func (q *v610queue) Pub(db DB, when time.Time, ids ...string) (err error) {
 	var ok bool
 	var db610 *v610db
 
@@ -66,7 +66,7 @@ func (q *v610queue) Pub(db DB, when time.Time, ids ...[]byte) (err error) {
 
 	// set task
 	for i := range ids {
-		db610.tx.Set(q.dataKey(delay, ids[i], []byte{byte(len(ids[i]))}), nil)
+		db610.tx.Set(q.dataKey(delay, s2b(ids[i]), []byte{byte(len(ids[i]))}), nil)
 	}
 
 	// update watch
@@ -184,7 +184,7 @@ func (q *v610queue) waitTask(ctx context.Context, wait fdb.FutureNil) (err error
 }
 
 func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err error) {
-	var ids [][]byte
+	var ids []string
 	var recs []Record
 	var wait fdb.FutureNil
 
@@ -203,7 +203,7 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 			var rows []fdb.KeyValue
 
 			now := make([]byte, 8)
-			ids = make([][]byte, 0, limit)
+			ids = make([]string, 0, limit)
 			binary.BigEndian.PutUint64(now, uint64(time.Now().UnixNano()))
 
 			rng := fdb.KeyRange{
@@ -234,7 +234,7 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 				ids = append(ids, rid)
 
 				// move to lost
-				tx.Set(q.lostKey(rid, []byte{byte(len(rid))}), nil)
+				tx.Set(q.lostKey(s2b(rid), []byte{byte(len(rid))}), nil)
 				tx.Clear(rows[i].Key)
 			}
 
@@ -258,7 +258,7 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 	return list, nil
 }
 
-func (q *v610queue) loadRecs(ids [][]byte) (list []Record, err error) {
+func (q *v610queue) loadRecs(ids []string) (list []Record, err error) {
 	list = make([]Record, len(ids))
 
 	for i := range ids {
@@ -287,11 +287,11 @@ func (q *v610queue) GetLost(limit uint, filter Predicat) (list []Record, err err
 	return list, err
 }
 
-func (q *v610queue) CheckLost(db DB, ids ...[]byte) ([]bool, error) {
+func (q *v610queue) CheckLost(db DB, ids ...string) (map[string]bool, error) {
 	var ok bool
 	var db610 *v610db
 
-	res := make([]bool, len(ids))
+	res := make(map[string]bool, len(ids))
 	fbs := make([]fdb.FutureByteSlice, len(ids))
 
 	if db == nil {
@@ -303,11 +303,11 @@ func (q *v610queue) CheckLost(db DB, ids ...[]byte) ([]bool, error) {
 	}
 
 	for i := range ids {
-		fbs[i] = db610.tx.Get(q.lostKey(ids[i], []byte{byte(len(ids[i]))}))
+		fbs[i] = db610.tx.Get(q.lostKey(s2b(ids[i]), []byte{byte(len(ids[i]))}))
 	}
 
 	for i := range fbs {
-		res[i] = fbs[i].MustGet() != nil
+		res[ids[i]] = fbs[i].MustGet() != nil
 	}
 
 	return res, nil
@@ -318,7 +318,15 @@ func (q *v610queue) lostKey(pts ...[]byte) fdb.Key { return q.key(0x01, pts...) 
 func (q *v610queue) watchKey() fdb.Key             { return q.key(0x02) }
 
 func (q *v610queue) key(prefix byte, pts ...[]byte) fdb.Key {
-	parts := append([][]byte{q.pf, {prefix}}, pts...)
+	ptlen := len(pts)
+	parts := make([][]byte, ptlen+3)
+	parts[0] = s2b(q.pf)
+	parts[1] = []byte{prefix}
+
+	for i := range pts {
+		parts[i+2] = pts[i]
+	}
+
 	return fdbKey(q.cn.db, q.rtp.ID, parts...)
 }
 

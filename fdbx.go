@@ -50,7 +50,7 @@ type Option func(*options) error
 // RecordType - to describe record collection
 type RecordType struct {
 	ID  uint16
-	New func(id []byte) (Record, error)
+	New func(id string) (Record, error)
 }
 
 // Conn - database connection (as stored database index)
@@ -59,10 +59,10 @@ type Conn interface {
 
 	Tx(TxHandler) error
 
-	Queue(rtp RecordType, prefix []byte) (Queue, error)
+	Queue(rtp RecordType, prefix string) (Queue, error)
 
 	Cursor(rtp RecordType, start []byte, pageSize uint) (Cursor, error)
-	LoadCursor(rtp RecordType, id []byte, pageSize uint) (Cursor, error)
+	LoadCursor(rtp RecordType, id string, pageSize uint) (Cursor, error)
 }
 
 // DB - database object that holds connection for transaction handler
@@ -75,13 +75,13 @@ type DB interface {
 	Load(onNotFound RecordHandler, recs ...Record) error
 	Drop(onNotExists RecordHandler, recs ...Record) error
 
-	Index(h IndexHandler, rid []byte, drop bool) error
+	Index(h IndexHandler, rid string, drop bool) error
 
 	Clear(typeID uint16) error
 	ClearIndex(h IndexHandler) error
 
 	Select(rtp RecordType, opts ...Option) ([]Record, error)
-	SelectIDs(typeID uint16, opts ...Option) ([][]byte, error)
+	SelectIDs(typeID uint16, opts ...Option) ([]string, error)
 }
 
 // Cursor - helper for long seq scan queries or pagination
@@ -106,10 +106,10 @@ type Cursor interface {
 // Queue - async task manager (pub/sub) with persistent storage and processing delay
 type Queue interface {
 	// confirm task delivery
-	Ack(db DB, ids ...[]byte) error
+	Ack(db DB, ids ...string) error
 
 	// publish task with processing delay
-	Pub(db DB, when time.Time, ids ...[]byte) error
+	Pub(db DB, when time.Time, ids ...string) error
 
 	// subscriptions
 	Sub(ctx context.Context) (<-chan Record, <-chan error)
@@ -118,7 +118,7 @@ type Queue interface {
 
 	// unconfirmed (not Ack) tasks
 	GetLost(limit uint, filter Predicat) ([]Record, error)
-	CheckLost(db DB, ids ...[]byte) ([]bool, error)
+	CheckLost(db DB, ids ...string) (map[string]bool, error)
 
 	// queue counts
 	Stat() (wait, lost int, err error)
@@ -127,7 +127,7 @@ type Queue interface {
 // Record - database record object (user model, collection item)
 type Record interface {
 	// object identifier in any format
-	FdbxID() []byte
+	FdbxID() string
 	// type identifier (collection id)
 	FdbxType() RecordType
 	// calc index values

@@ -3,6 +3,7 @@ package fdbx
 import (
 	"bytes"
 	"encoding/binary"
+	"unsafe"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
@@ -57,7 +58,7 @@ func (c *v610Conn) Tx(h TxHandler) error {
 	return exp
 }
 
-func (c *v610Conn) Queue(rtp RecordType, prefix []byte) (Queue, error) {
+func (c *v610Conn) Queue(rtp RecordType, prefix string) (Queue, error) {
 	return newV610queue(c, rtp, prefix)
 }
 
@@ -65,7 +66,7 @@ func (c *v610Conn) Cursor(rtp RecordType, start []byte, page uint) (Cursor, erro
 	return newV610cursor(c, rtp, start, page)
 }
 
-func (c *v610Conn) LoadCursor(rtp RecordType, id []byte, page uint) (_ Cursor, err error) {
+func (c *v610Conn) LoadCursor(rtp RecordType, id string, page uint) (_ Cursor, err error) {
 	var cur *v610cursor
 
 	if cur, err = v610CursorFabric(c, id, rtp); err != nil {
@@ -107,7 +108,20 @@ func fdbKey(dbID, typeID uint16, parts ...[]byte) fdb.Key {
 }
 
 func recKey(dbID uint16, rec Record) fdb.Key {
-	rid := rec.FdbxID()
+	rid := s2b(rec.FdbxID())
 	rln := []byte{byte(len(rid))}
 	return fdbKey(dbID, rec.FdbxType().ID, rid, rln)
+}
+
+func s2b(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	return *(*[]byte)(unsafe.Pointer(&s))
+}
+func b2s(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return *(*string)(unsafe.Pointer(&b))
 }

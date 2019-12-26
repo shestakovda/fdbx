@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func v610CursorFabric(conn *v610Conn, id []byte, rtp RecordType) (*v610cursor, error) {
+func v610CursorFabric(conn *v610Conn, id string, rtp RecordType) (*v610cursor, error) {
 	return &v610cursor{
 		id:   id,
 		rtp:  rtp,
@@ -29,7 +29,7 @@ func newV610cursor(conn *v610Conn, rtp RecordType, start []byte, pageSize uint) 
 	}
 
 	return &v610cursor{
-		id:   uid[:],
+		id:   string(uid[:]),
 		Pos:  fdbKey(conn.db, rtp.ID, start),
 		Page: int(pageSize),
 		conn: conn,
@@ -39,7 +39,7 @@ func newV610cursor(conn *v610Conn, rtp RecordType, start []byte, pageSize uint) 
 }
 
 type v610cursor struct {
-	id []byte
+	id string
 
 	From    []byte  `json:"from"`
 	To      []byte  `json:"to"`
@@ -53,11 +53,11 @@ type v610cursor struct {
 
 // ********************** As Record **********************
 
-func (cur *v610cursor) FdbxID() []byte { return cur.id[:] }
+func (cur *v610cursor) FdbxID() string { return cur.id }
 func (cur *v610cursor) FdbxType() RecordType {
 	return RecordType{
 		ID:  CursorTypeID,
-		New: func(id []byte) (Record, error) { return &v610cursor{id: id}, nil },
+		New: func(id string) (Record, error) { return &v610cursor{id: id}, nil },
 	}
 }
 func (cur *v610cursor) FdbxIndex(Indexer) error        { return nil }

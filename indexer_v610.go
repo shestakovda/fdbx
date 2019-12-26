@@ -17,13 +17,14 @@ func (idx *v610Indexer) Index(idxTypeID uint16, value []byte) {
 	})
 }
 
-func (idx *v610Indexer) commit(dbID uint16, tx fdb.Transaction, drop bool, rid, rln []byte) error {
+func (idx *v610Indexer) commit(dbID uint16, tx fdb.Transaction, drop bool, rid string) error {
 	for i := range idx.list {
 		if len(idx.list[i].value) == 0 {
 			continue
 		}
 
-		key := fdbKey(dbID, idx.list[i].typeID, idx.list[i].value, rid, rln)
+		rln := []byte{byte(len(rid))}
+		key := fdbKey(dbID, idx.list[i].typeID, idx.list[i].value, s2b(rid), rln)
 
 		if drop {
 			tx.Clear(key)
