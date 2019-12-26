@@ -512,6 +512,15 @@ func TestQueue(t *testing.T) {
 		ack[i] = lost[i].FdbxID()
 	}
 
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return queue.Ack(db, ack[1]) }))
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
+		res, err := queue.CheckLost(db, ack...)
+		assert.Len(t, res, 3)
+		assert.Equal(t, []bool{true, false, true}, res)
+		return err
+	}))
+
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return queue.Ack(db, ack...) }))
 
 	lost, err = queue.GetLost(0, nil)

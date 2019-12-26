@@ -115,6 +115,7 @@ type Queue interface {
 
 	// unconfirmed (not Ack) tasks
 	GetLost(limit uint, filter Predicat) ([]Record, error)
+	CheckLost(db DB, ids ...[]byte) ([]bool, error)
 
 	// queue counts
 	Stat() (wait, lost int, err error)

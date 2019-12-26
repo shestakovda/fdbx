@@ -287,6 +287,32 @@ func (q *v610queue) GetLost(limit uint, filter Predicat) (list []Record, err err
 	return list, err
 }
 
+func (q *v610queue) CheckLost(db DB, ids ...[]byte) ([]bool, error) {
+	var ok bool
+	var db610 *v610db
+
+	res := make([]bool, len(ids))
+	fbs := make([]fdb.FutureByteSlice, len(ids))
+
+	if db == nil {
+		return nil, ErrNullDB.WithStack()
+	}
+
+	if db610, ok = db.(*v610db); !ok {
+		return nil, ErrIncompatibleDB.WithStack()
+	}
+
+	for i := range ids {
+		fbs[i] = db610.tx.Get(q.lostKey(ids[i], []byte{byte(len(ids[i]))}))
+	}
+
+	for i := range fbs {
+		res[i] = fbs[i].MustGet() != nil
+	}
+
+	return res, nil
+}
+
 func (q *v610queue) dataKey(pts ...[]byte) fdb.Key { return q.key(0x00, pts...) }
 func (q *v610queue) lostKey(pts ...[]byte) fdb.Key { return q.key(0x01, pts...) }
 func (q *v610queue) watchKey() fdb.Key             { return q.key(0x02) }
