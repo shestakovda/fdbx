@@ -33,14 +33,14 @@ type MockConn struct {
 
 	// ***** Queue *****
 
-	FAck       func(DB, ...string) error
-	FPub       func(DB, time.Time, ...string) error
-	FSub       func(ctx context.Context) (<-chan Record, <-chan error)
-	FSubOne    func(ctx context.Context) (Record, error)
-	FSubList   func(ctx context.Context, limit uint) ([]Record, error)
-	FGetLost   func(limit uint, filter Predicat) ([]Record, error)
-	FCheckLost func(db DB, ids ...string) (map[string]bool, error)
-	FStat      func() (wait, lost int, err error)
+	FAck     func(DB, ...string) error
+	FPub     func(DB, time.Time, ...string) error
+	FSub     func(ctx context.Context) (<-chan Record, <-chan error)
+	FSubOne  func(ctx context.Context) (Record, error)
+	FSubList func(ctx context.Context, limit uint) ([]Record, error)
+	FGetLost func(limit uint, filter Predicat) ([]Record, error)
+	FStatus  func(db DB, ids ...string) (map[string]TaskStatus, error)
+	FStat    func() (wait, lost int, err error)
 
 	// ***** Cursor *****
 

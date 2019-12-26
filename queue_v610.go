@@ -287,11 +287,11 @@ func (q *v610queue) GetLost(limit uint, filter Predicat) (list []Record, err err
 	return list, err
 }
 
-func (q *v610queue) CheckLost(db DB, ids ...string) (map[string]bool, error) {
+func (q *v610queue) Status(db DB, ids ...string) (map[string]TaskStatus, error) {
 	var ok bool
 	var db610 *v610db
 
-	res := make(map[string]bool, len(ids))
+	res := make(map[string]TaskStatus, len(ids))
 	fbs := make([]fdb.FutureByteSlice, len(ids))
 
 	if db == nil {
@@ -303,11 +303,31 @@ func (q *v610queue) CheckLost(db DB, ids ...string) (map[string]bool, error) {
 	}
 
 	for i := range ids {
+		res[ids[i]] = StatusConfirmed
+	}
+
+	rng := fdb.KeyRange{
+		Begin: q.dataKey(),
+		End:   q.dataKey(tail),
+	}
+
+	slice := db610.tx.GetRange(rng, fdb.RangeOptions{Mode: fdb.StreamingModeWantAll}).GetSliceOrPanic()
+
+	for i := range slice {
+		rid := getRowID(slice[i].Key)
+		if _, ok := res[rid]; ok {
+			res[rid] = StatusPublished
+		}
+	}
+
+	for i := range ids {
 		fbs[i] = db610.tx.Get(q.lostKey(s2b(ids[i]), []byte{byte(len(ids[i]))}))
 	}
 
 	for i := range fbs {
-		res[ids[i]] = fbs[i].MustGet() != nil
+		if fbs[i].MustGet() != nil {
+			res[ids[i]] = StatusUnconfirmed
+		}
 	}
 
 	return res, nil

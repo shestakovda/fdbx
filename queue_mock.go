@@ -22,8 +22,8 @@ func (q *mockQueue) SubOne(ctx context.Context) (Record, error)            { ret
 func (q *mockQueue) GetLost(limit uint, filter Predicat) ([]Record, error) {
 	return q.FGetLost(limit, filter)
 }
-func (q *mockQueue) CheckLost(db DB, ids ...string) (map[string]bool, error) {
-	return q.FCheckLost(db, ids...)
+func (q *mockQueue) Status(db DB, ids ...string) (map[string]TaskStatus, error) {
+	return q.FStatus(db, ids...)
 }
 func (q *mockQueue) SubList(ctx context.Context, limit uint) ([]Record, error) {
 	return q.FSubList(ctx, limit)

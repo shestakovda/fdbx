@@ -30,6 +30,16 @@ var (
 	GZipSize = 860
 )
 
+// TaskStatus - alias
+type TaskStatus uint8
+
+// task status
+const (
+	StatusPublished   TaskStatus = 1
+	StatusUnconfirmed TaskStatus = 2
+	StatusConfirmed   TaskStatus = 3
+)
+
 // TODO: agg funcs
 
 // TxHandler -
@@ -118,10 +128,12 @@ type Queue interface {
 
 	// unconfirmed (not Ack) tasks
 	GetLost(limit uint, filter Predicat) ([]Record, error)
-	CheckLost(db DB, ids ...string) (map[string]bool, error)
 
 	// queue counts
 	Stat() (wait, lost int, err error)
+
+	// task status
+	Status(db DB, ids ...string) (map[string]TaskStatus, error)
 }
 
 // Record - database record object (user model, collection item)

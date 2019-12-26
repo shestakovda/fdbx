@@ -541,12 +541,12 @@ func TestQueue(t *testing.T) {
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return queue.Ack(db, ack[1]) }))
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
-		res, err := queue.CheckLost(db, ack...)
+		res, err := queue.Status(db, ack...)
 		assert.Len(t, res, 3)
-		assert.Equal(t, map[string]bool{
-			ack[0]: true,
-			ack[1]: false,
-			ack[2]: true,
+		assert.Equal(t, map[string]fdbx.TaskStatus{
+			ack[0]: fdbx.StatusUnconfirmed,
+			ack[1]: fdbx.StatusConfirmed,
+			ack[2]: fdbx.StatusUnconfirmed,
 		}, res)
 		return err
 	}))
