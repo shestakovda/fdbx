@@ -261,7 +261,8 @@ func TestIndex(t *testing.T) {
 	rect := make([]fdbx.Record, 0, 10)
 
 	// page size = 3
-	cur, err = conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, fdbx.Page(3))
+	filter := fdbx.Filter(func(fdbx.Record) (bool, error) { return true, nil })
+	cur, err = conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, fdbx.Page(3), filter)
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())

@@ -528,8 +528,13 @@ func getRange(
 		opt.Limit = 0
 	}
 
+	if 2*lim < batchSize {
+		batchSize = 2 * lim
+	}
+
 	iter := rtx.GetRange(rng, opt).Iterator()
 	list = make([]Record, 0, lim)
+	keys := make([]fdb.Key, 0, batchSize)
 	load := make([]Record, 0, batchSize)
 
 	loadByID := func() (exp error) {
@@ -542,6 +547,10 @@ func getRange(
 		}
 
 		for i := range load {
+			if lim > 0 && len(list) >= lim {
+				break
+			}
+
 			add := true
 			if chk != nil {
 				if add, exp = chk(load[i]); exp != nil {
@@ -551,6 +560,9 @@ func getRange(
 
 			if add {
 				list = append(list, load[i])
+				if !opt.Reverse {
+					lastKey = keys[i]
+				}
 			}
 		}
 
@@ -562,12 +574,8 @@ func getRange(
 	for iter.Advance() && (lim == 0 || len(list) < lim) {
 		row := iter.MustGet()
 
-		if opt.Reverse {
-			// first key is the last key for reverse
-			if index == 0 {
-				lastKey = row.Key
-			}
-		} else {
+		// first key is the last key for reverse
+		if opt.Reverse && index == 0 {
 			lastKey = row.Key
 		}
 
@@ -581,6 +589,10 @@ func getRange(
 
 		if len(row.Value) == 0 {
 			load = append(load, rec)
+
+			if !opt.Reverse {
+				keys = append(keys, row.Key)
+			}
 
 			// buffered load
 			if len(load) >= batchSize {
@@ -609,6 +621,9 @@ func getRange(
 
 		if add {
 			list = append(list, rec)
+			if !opt.Reverse {
+				lastKey = row.Key
+			}
 		}
 	}
 
