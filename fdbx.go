@@ -71,8 +71,8 @@ type Conn interface {
 
 	Queue(rtp RecordType, prefix string) (Queue, error)
 
-	Cursor(rtp RecordType, start []byte, pageSize uint) (Cursor, error)
-	LoadCursor(rtp RecordType, id string, pageSize uint) (Cursor, error)
+	Cursor(rtp RecordType, opts ...Option) (Cursor, error)
+	LoadCursor(id string, rtp RecordType, opts ...Option) (Cursor, error)
 }
 
 // DB - database object that holds connection for transaction handler
@@ -110,7 +110,7 @@ type Cursor interface {
 	Prev(db DB, skip uint8) ([]Record, error)
 
 	// select all records from current position to the end of collection
-	Select(ctx context.Context, opts ...Option) (<-chan Record, <-chan error)
+	Select(ctx context.Context) (<-chan Record, <-chan error)
 }
 
 // Queue - async task manager (pub/sub) with persistent storage and processing delay

@@ -129,7 +129,7 @@ func TestSelect(t *testing.T) {
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, records...) }))
 
-	cur, err := conn.Cursor(fdbx.RecordType{ID: TestCollection, New: recordFabric}, nil, 3)
+	cur, err := conn.Cursor(fdbx.RecordType{ID: TestCollection, New: recordFabric}, fdbx.Page(3))
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
@@ -164,7 +164,7 @@ func TestSelect(t *testing.T) {
 	rect := make([]fdbx.Record, 0, 10)
 
 	// page size = 3
-	cur, err = conn.Cursor(fdbx.RecordType{ID: TestCollection, New: recordFabric}, nil, 3)
+	cur, err = conn.Cursor(fdbx.RecordType{ID: TestCollection, New: recordFabric}, fdbx.Page(3))
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
@@ -226,7 +226,7 @@ func TestIndex(t *testing.T) {
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, records...) }))
 
-	cur, err := conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, nil, 3)
+	cur, err := conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, fdbx.Page(3))
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
@@ -261,7 +261,7 @@ func TestIndex(t *testing.T) {
 	rect := make([]fdbx.Record, 0, 10)
 
 	// page size = 3
-	cur, err = conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, nil, 3)
+	cur, err = conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, fdbx.Page(3))
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
@@ -283,7 +283,7 @@ func TestIndex(t *testing.T) {
 	assert.False(t, cur.Empty())
 	rect = append(rect, recl...)
 
-	cur, err = conn.LoadCursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, cur.FdbxID(), 3)
+	cur, err = conn.LoadCursor(cur.FdbxID(), fdbx.RecordType{ID: TestIndexName, New: recordFabric}, fdbx.Page(3))
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 
@@ -336,7 +336,7 @@ func TestIndex(t *testing.T) {
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.ClearIndex(new(testRecord).FdbxIndex) }))
 
-	cur, err = conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, nil, 3)
+	cur, err = conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, fdbx.Page(3))
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
@@ -376,26 +376,28 @@ func TestLongValuesCollection(t *testing.T) {
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, records...) }))
 
-	cur, err := conn.Cursor(fdbx.RecordType{ID: TestCollection, New: recordFabric}, nil, 3)
+	// ********* filter *********
+
+	cur, err := conn.Cursor(
+		fdbx.RecordType{ID: TestCollection, New: recordFabric},
+		fdbx.Page(3),
+		fdbx.Filter(func(rec fdbx.Record) (bool, error) {
+			if len(rec.(*testRecord).Data) > 1000 {
+				return false, nil
+			}
+			return true, nil
+		}),
+	)
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
 
 	defer func() { assert.NoError(t, cur.Close()) }()
 
-	// ********* filter *********
-
-	filter := fdbx.Filter(func(rec fdbx.Record) (bool, error) {
-		if len(rec.(*testRecord).Data) > 1000 {
-			return false, nil
-		}
-		return true, nil
-	})
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	recc, errc := cur.Select(ctx, filter)
+	recc, errc := cur.Select(ctx)
 
 	recs := make([]fdbx.Record, 0, 2)
 	for rec := range recc {
@@ -430,26 +432,28 @@ func TestLongValuesIndex(t *testing.T) {
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, records...) }))
 
-	cur, err := conn.Cursor(fdbx.RecordType{ID: TestIndexName, New: recordFabric}, nil, 3)
+	// ********* filter *********
+
+	cur, err := conn.Cursor(
+		fdbx.RecordType{ID: TestIndexName, New: recordFabric},
+		fdbx.Page(3),
+		fdbx.Filter(func(rec fdbx.Record) (bool, error) {
+			if len(rec.(*testRecord).Data) > 1000 {
+				return false, nil
+			}
+			return true, nil
+		}),
+	)
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 	assert.False(t, cur.Empty())
 
 	defer func() { assert.NoError(t, cur.Close()) }()
 
-	// ********* filter *********
-
-	filter := fdbx.Filter(func(rec fdbx.Record) (bool, error) {
-		if len(rec.(*testRecord).Data) > 1000 {
-			return false, nil
-		}
-		return true, nil
-	})
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	recc, errc := cur.Select(ctx, filter)
+	recc, errc := cur.Select(ctx)
 
 	recs := make([]fdbx.Record, 0, 2)
 	for rec := range recc {
@@ -471,7 +475,7 @@ func TestQueue(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, conn)
 	assert.NoError(t, conn.ClearDB())
-	// defer conn.ClearDB()
+	defer conn.ClearDB()
 
 	records := make([]fdbx.Record, 3)
 	for i := range records {

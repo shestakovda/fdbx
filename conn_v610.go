@@ -62,14 +62,14 @@ func (c *v610Conn) Queue(rtp RecordType, prefix string) (Queue, error) {
 	return newV610queue(c, rtp, prefix)
 }
 
-func (c *v610Conn) Cursor(rtp RecordType, start []byte, page uint) (Cursor, error) {
-	return newV610cursor(c, rtp, start, page)
+func (c *v610Conn) Cursor(rtp RecordType, opts ...Option) (Cursor, error) {
+	return newV610cursor(c, "", rtp, opts...)
 }
 
-func (c *v610Conn) LoadCursor(rtp RecordType, id string, page uint) (_ Cursor, err error) {
+func (c *v610Conn) LoadCursor(id string, rtp RecordType, opts ...Option) (_ Cursor, err error) {
 	var cur *v610cursor
 
-	if cur, err = v610CursorFabric(c, id, rtp); err != nil {
+	if cur, err = newV610cursor(c, id, rtp); err != nil {
 		return
 	}
 
@@ -77,11 +77,7 @@ func (c *v610Conn) LoadCursor(rtp RecordType, id string, page uint) (_ Cursor, e
 		return
 	}
 
-	if page > 0 {
-		cur.Page = int(page)
-	}
-
-	return cur, nil
+	return cur, cur.applyOpts(opts)
 }
 
 // ********************** Private **********************

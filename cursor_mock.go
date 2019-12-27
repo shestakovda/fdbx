@@ -2,15 +2,14 @@ package fdbx
 
 import "context"
 
-func newMockCursor(conn *MockConn, rtp RecordType, start []byte, page uint) (*mockCursor, error) {
-	return &mockCursor{MockConn: conn, rtp: rtp, st: start, pg: page}, nil
+func newMockCursor(conn *MockConn, rtp RecordType, opts ...Option) (*mockCursor, error) {
+	return &mockCursor{MockConn: conn, rtp: rtp, opts: opts}, nil
 }
 
 type mockCursor struct {
 	*MockConn
-	rtp RecordType
-	pg  uint
-	st  []byte
+	rtp  RecordType
+	opts []Option
 }
 
 // FdbxID
@@ -41,6 +40,6 @@ func (m *mockCursor) Next(db DB, skip uint8) ([]Record, error) { return m.FNext(
 func (m *mockCursor) Prev(db DB, skip uint8) ([]Record, error) { return m.FPrev(db, skip) }
 
 // Select all records from current position to the end of collection
-func (m *mockCursor) Select(ctx context.Context, opts ...Option) (<-chan Record, <-chan error) {
+func (m *mockCursor) Select(ctx context.Context) (<-chan Record, <-chan error) {
 	return m.FCursorSelect(ctx)
 }

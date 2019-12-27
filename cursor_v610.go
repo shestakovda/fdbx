@@ -8,47 +8,48 @@ import (
 	"github.com/google/uuid"
 )
 
-func v610CursorFabric(conn *v610Conn, id string, rtp RecordType) (*v610cursor, error) {
-	return &v610cursor{
-		id:   id,
-		rtp:  rtp,
-		conn: conn,
-		To:   []byte{0xFF, 0xFF},
-	}, nil
-}
+func newV610cursor(conn *v610Conn, id string, rtp RecordType, opts ...Option) (_ *v610cursor, err error) {
+	var opt *options
 
-func newV610cursor(conn *v610Conn, rtp RecordType, start []byte, pageSize uint) (*v610cursor, error) {
-	uid := uuid.New()
-
-	if len(start) == 0 {
-		start = []byte{0x00}
+	if opt, err = selectOpts(opts); err != nil {
+		return
 	}
 
-	if pageSize <= 0 {
-		pageSize = 100
+	if id == "" {
+		uid := uuid.New()
+		id = string(uid[:])
 	}
 
+	from := fdbKey(conn.db, rtp.ID, opt.from)
 	return &v610cursor{
-		id:   string(uid[:]),
-		Pos:  fdbKey(conn.db, rtp.ID, start),
-		Page: int(pageSize),
-		conn: conn,
-		rtp:  rtp,
-		To:   []byte{0xFF, 0xFF},
+		id: id,
+
+		From:    from,
+		To:      fdbKey(conn.db, rtp.ID, opt.to),
+		Pos:     from,
+		Page:    opt.page,
+		Limit:   opt.limit,
+		IsEmpty: false,
+
+		conn:   conn,
+		rtp:    rtp,
+		filter: opt.filter,
 	}, nil
 }
 
 type v610cursor struct {
 	id string
 
-	From    []byte  `json:"from"`
-	To      []byte  `json:"to"`
+	From    fdb.Key `json:"from"`
+	To      fdb.Key `json:"to"`
 	Pos     fdb.Key `json:"pos"`
 	Page    int     `json:"page"`
+	Limit   int     `json:"limit"`
 	IsEmpty bool    `json:"empty"`
 
-	rtp  RecordType
-	conn *v610Conn
+	rtp    RecordType
+	conn   *v610Conn
+	filter Predicat
 }
 
 // ********************** As Record **********************
@@ -70,27 +71,57 @@ func (cur *v610cursor) Empty() bool  { return cur.IsEmpty }
 func (cur *v610cursor) Close() error { cur.IsEmpty = true; return cur.drop() }
 
 func (cur *v610cursor) Next(db DB, skip uint8) ([]Record, error) {
-	return cur.getPage(db, skip, false, nil)
+	return cur.getPage(db, skip, false)
 }
 
 func (cur *v610cursor) Prev(db DB, skip uint8) ([]Record, error) {
-	return cur.getPage(db, skip, true, nil)
+	return cur.getPage(db, skip, true)
 }
 
-func (cur *v610cursor) Select(ctx context.Context, opts ...Option) (<-chan Record, <-chan error) {
+func (cur *v610cursor) Select(ctx context.Context) (<-chan Record, <-chan error) {
 	recs := make(chan Record)
 	errs := make(chan error, 1)
-	go cur.readAll(ctx, recs, errs, opts...)
+	go cur.readAll(ctx, recs, errs)
 	return recs, errs
 }
 
 // ********************** Private **********************
 
+func (cur *v610cursor) applyOpts(opts []Option) (err error) {
+	opt := new(options)
+
+	for i := range opts {
+		if err = opts[i](opt); err != nil {
+			return
+		}
+	}
+
+	if opt.from != nil {
+		cur.From = opt.from
+	}
+
+	if opt.to != nil {
+		cur.To = append(opt.to, tail...)
+	}
+
+	if opt.page > 0 {
+		cur.Page = opt.page
+	}
+
+	if opt.limit > 0 {
+		cur.Limit = opt.limit
+	}
+
+	cur.IsEmpty = false
+	cur.filter = opt.filter
+	return nil
+}
+
 func (cur *v610cursor) drop() error {
 	return cur.conn.Tx(func(db DB) error { return db.Drop(nil, cur) })
 }
 
-func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat) (list []Record, err error) {
+func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool) (list []Record, err error) {
 	var ok bool
 	var rng fdb.KeyRange
 	var db610 *v610db
@@ -108,11 +139,11 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 	opt := fdb.RangeOptions{Limit: cur.Page, Mode: fdb.StreamingModeWantAll, Reverse: reverse}
 
 	if reverse {
-		rng.Begin = fdbKey(cur.conn.db, cur.rtp.ID, cur.From)
+		rng.Begin = cur.From
 		rng.End = cur.Pos
 	} else {
 		rng.Begin = cur.Pos
-		rng.End = fdbKey(cur.conn.db, cur.rtp.ID, cur.To, tail)
+		rng.End = cur.To
 	}
 
 	if skip > 0 {
@@ -141,7 +172,7 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool, filter Predicat)
 
 	var lastKey fdb.Key
 
-	if list, lastKey, err = getRange(db610.conn.db, db610.tx, rng, opt, cur.rtp, filter); err != nil {
+	if list, lastKey, err = getRange(db610.conn.db, db610.tx, rng, opt, cur.rtp, cur.filter); err != nil {
 		return
 	}
 
@@ -170,36 +201,17 @@ func reverseList(list []Record) {
 	}
 }
 
-func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan error, opts ...Option) {
+func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan error) {
 	var err error
 	var list []Record
 
 	defer close(recs)
 	defer close(errs)
 
-	o := new(options)
-
-	for i := range opts {
-		if err = opts[i](o); err != nil {
-			errs <- err
-			return
-		}
-	}
-
-	cur.From = nil
-	if len(o.from) > 0 {
-		cur.From = o.from
-	}
-
-	cur.To = []byte{0xFF}
-	if len(o.to) > 0 {
-		cur.To = o.to
-	}
-
 	count := 0
-	for !cur.IsEmpty && ctx.Err() == nil && (o.limit == 0 || count < o.limit) {
+	for !cur.IsEmpty && ctx.Err() == nil && (cur.Limit == 0 || count < cur.Limit) {
 		if err = cur.conn.Tx(func(db DB) (exp error) {
-			list, exp = cur.getPage(db, 0, false, o.filter)
+			list, exp = cur.getPage(db, 0, false)
 			return
 		}); err != nil {
 			errs <- err
@@ -210,7 +222,7 @@ func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan 
 			select {
 			case recs <- list[i]:
 				count++
-				if o.limit > 0 && count >= o.limit {
+				if cur.Limit > 0 && count >= cur.Limit {
 					cur.IsEmpty = true
 					return
 				}
