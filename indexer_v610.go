@@ -1,30 +1,51 @@
 package fdbx
 
-import "github.com/apple/foundationdb/bindings/go/src/fdb"
+import (
+	"bytes"
+
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+)
 
 func newV610Indexer() (*v610Indexer, error) {
-	return &v610Indexer{make([]*v610Index, 0, 16)}, nil
+	return new(v610Indexer), nil
 }
 
 type v610Indexer struct {
-	list []*v610Index
+	types []uint16
+	bytes [][]byte
+}
+
+func (idx *v610Indexer) Grow(n int) {
+	if idx.types == nil {
+		idx.types = make([]uint16, 0, n)
+	}
+
+	if idx.bytes == nil {
+		idx.bytes = make([][]byte, 0, n)
+	}
+
+	// todo: grow existed
 }
 
 func (idx *v610Indexer) Index(idxTypeID uint16, value []byte) {
-	idx.list = append(idx.list, &v610Index{
-		typeID: idxTypeID,
-		value:  value,
-	})
+	idx.types = append(idx.types, idxTypeID)
+	idx.bytes = append(idx.bytes, value)
 }
 
-func (idx *v610Indexer) commit(dbID uint16, tx fdb.Transaction, drop bool, rid string) error {
-	for i := range idx.list {
-		if len(idx.list[i].value) == 0 {
+func (idx *v610Indexer) commit(dbID uint16, tx fdb.Transaction, drop bool, id string) error {
+	var key fdb.Key
+
+	rid := s2b(id)
+	buf := new(bytes.Buffer)
+	rln := []byte{byte(len(rid))}
+
+	for i := range idx.types {
+		if len(idx.bytes[i]) == 0 {
 			continue
 		}
 
-		rln := []byte{byte(len(rid))}
-		key := fdbKey(dbID, idx.list[i].typeID, idx.list[i].value, s2b(rid), rln)
+		buf.Reset()
+		key = fdbKeyBuf(buf, dbID, idx.types[i], idx.bytes[i], rid, rln)
 
 		if drop {
 			tx.Clear(key)
@@ -36,15 +57,10 @@ func (idx *v610Indexer) commit(dbID uint16, tx fdb.Transaction, drop bool, rid s
 }
 
 func (idx *v610Indexer) clear(dbID uint16, tx fdb.Transaction) (err error) {
-	for i := range idx.list {
-		if err = clearType(dbID, idx.list[i].typeID, tx); err != nil {
+	for i := range idx.types {
+		if err = clearType(dbID, idx.types[i], tx); err != nil {
 			return
 		}
 	}
 	return nil
-}
-
-type v610Index struct {
-	typeID uint16
-	value  []byte
 }

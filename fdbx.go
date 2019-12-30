@@ -155,6 +155,8 @@ type Record interface {
 
 // Indexer - for record indexing
 type Indexer interface {
+	// Grow inner buffers to decrease allocs
+	Grow(n int)
 	// append key for indexing as idxTypeID
 	Index(idxTypeID uint16, value []byte)
 }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -14,7 +13,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/shestakovda/fdbx"
+	"github.com/shestakovda/fdbx/models"
 	"github.com/stretchr/testify/assert"
+
+	flatbuffers "github.com/google/flatbuffers/go"
 )
 
 // current test settings
@@ -564,6 +566,42 @@ func TestQueue(t *testing.T) {
 	assert.Len(t, lost, 0)
 }
 
+func makePack(b *testing.B, cnt int) []fdbx.Record {
+	recs := make([]fdbx.Record, cnt)
+
+	for i := range recs {
+		recs[i] = newTestRecord()
+	}
+
+	return recs
+}
+
+func benchmarkSave(b *testing.B, cnt int) {
+	var err error
+	b.StopTimer()
+
+	conn, err := fdbx.NewConn(TestDatabase, TestVersion)
+	assert.NoError(b, err)
+	assert.NotNil(b, conn)
+	assert.NoError(b, conn.ClearDB())
+	defer conn.ClearDB()
+
+	recs := makePack(b, cnt)
+
+	b.StartTimer()
+
+	for i := 0; i < b.N; i++ {
+		if err = conn.Tx(func(db fdbx.DB) error { return db.Save(nil, recs...) }); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkSave1(b *testing.B)    { benchmarkSave(b, 1) }
+func BenchmarkSave10(b *testing.B)   { benchmarkSave(b, 10) }
+func BenchmarkSave100(b *testing.B)  { benchmarkSave(b, 100) }
+func BenchmarkSave1000(b *testing.B) { benchmarkSave(b, 1000) }
+
 func recordFabric(id string) (fdbx.Record, error) { return &testRecord{ID: id}, nil }
 
 func newTestRecord() *testRecord {
@@ -602,10 +640,66 @@ func (r *testRecord) FdbxType() fdbx.RecordType {
 	return fdbx.RecordType{ID: TestCollection, New: recordFabric}
 }
 func (r *testRecord) FdbxIndex(idx fdbx.Indexer) error {
+	idx.Grow(3)
 	idx.Index(TestIndexName, []byte(r.Name))
 	idx.Index(TestIndexNumber, []byte(fmt.Sprintf("%d", r.Number)))
 	idx.Index(TestIndexNumber, []byte(fmt.Sprintf("%d", int(r.Decimal))))
 	return nil
 }
-func (r *testRecord) FdbxMarshal() ([]byte, error) { return json.Marshal(r) }
-func (r *testRecord) FdbxUnmarshal(b []byte) error { return json.Unmarshal(b, r) }
+func (r *testRecord) FdbxMarshal() ([]byte, error) {
+	size := len(r.Name) + 5 + 8 + 8 + 1 + len(r.Data) + 5 + 5*len(r.Strs)
+	for i := range r.Strs {
+		size += 5 + len(r.Strs[i])
+	}
+
+	buf := flatbuffers.NewBuilder(size)
+
+	nameOffset := buf.CreateString(r.Name)
+	dataOffset := buf.CreateByteVector(r.Data)
+
+	// Strs
+	strsCount := len(r.Strs)
+	var strsArr flatbuffers.UOffsetT
+	if strsCount != 0 {
+		strs := make([]flatbuffers.UOffsetT, strsCount)
+		for i := range r.Strs {
+			strs[strsCount-i-1] = buf.CreateString(r.Strs[i])
+		}
+		models.TestRecordStartStringsVector(buf, strsCount)
+		for i := range strs {
+			buf.PrependUOffsetT(strs[i])
+		}
+		strsArr = buf.EndVector(strsCount)
+	}
+
+	models.TestRecordStart(buf)
+	models.TestRecordAddName(buf, nameOffset)
+	models.TestRecordAddData(buf, dataOffset)
+	models.TestRecordAddFloat(buf, r.Decimal)
+	models.TestRecordAddLogic(buf, r.Logic)
+	models.TestRecordAddNumber(buf, r.Number)
+	models.TestRecordAddStrings(buf, strsArr)
+	buf.Finish(models.TestRecordEnd(buf))
+
+	return buf.FinishedBytes(), nil
+}
+func (r *testRecord) FdbxUnmarshal(buf []byte) error {
+	model := models.GetRootAsTestRecord(buf, 0)
+
+	r.Decimal = model.Float()
+	r.Logic = model.Logic()
+	r.Number = model.Number()
+	r.Name = string(model.Name())
+	r.Data = model.DataBytes()
+
+	// Strs
+	if model.StringsLength() != 0 {
+		r.Strs = make([]string, model.StringsLength())
+		for i := range r.Strs {
+			r.Strs[i] = string(model.Strings(i))
+		}
+	}
+
+	return nil
+
+}

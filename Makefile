@@ -8,10 +8,11 @@ fmt:
 	@go mod tidy
 
 test: fmt
-	@go test -count=10 -race -cover ./...
+	@flatc --go ./models_test.fbs
+	@go test -count=1 -race -cover ./...
 
 bench: fmt
-	@go test -bench . -benchmem -benchtime 10s ./...
+	@go test -bench . -benchmem -benchtime 30s  ./...
 
 lint:
 	@golangci-lint run --enable-all --fix --tests=false

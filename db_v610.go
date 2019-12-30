@@ -40,14 +40,8 @@ func (db *v610db) Del(typeID uint16, id []byte) error {
 	return nil
 }
 
-func (db *v610db) Save(onExists RecordHandler, recs ...Record) (err error) {
-	for i := range recs {
-		if err = saveRecord(db.conn.db, db.tx, recs[i], onExists); err != nil {
-			return
-		}
-	}
-
-	return nil
+func (db *v610db) Save(onExists RecordHandler, recs ...Record) error {
+	return saveRecords(db.conn.db, db.tx, onExists, recs...)
 }
 
 func (db *v610db) Load(onNotFound RecordHandler, recs ...Record) (err error) {
@@ -217,10 +211,38 @@ func loadRecord(
 	return rec.FdbxUnmarshal(buf)
 }
 
-func saveRecord(dbID uint16, tx fdb.Transaction, rec Record, onExists RecordHandler) (err error) {
+func saveRecords(dbID uint16, tx fdb.Transaction, onExists RecordHandler, recs ...Record) (err error) {
+	var key fdb.Key
+
+	fbs := make([]fdb.FutureByteSlice, len(recs))
+	keys := make([]fdb.Key, len(recs))
+
+	for i := range recs {
+		key = recKey(dbID, recs[i])
+		fbs[i] = tx.Get(key)
+		keys[i] = key
+	}
+
+	for i := range recs {
+		if err = saveRecord(dbID, tx, fbs[i], keys[i], recs[i], onExists); err != nil {
+			return
+		}
+	}
+
+	return nil
+}
+
+func saveRecord(
+	dbID uint16,
+	tx fdb.Transaction,
+	fb fdb.FutureByteSlice,
+	key fdb.Key,
+	rec Record,
+	onExists RecordHandler,
+) (err error) {
 	var buf []byte
 
-	if buf, err = tx.Get(recKey(dbID, rec)).Get(); err != nil {
+	if buf, err = fb.Get(); err != nil {
 		return
 	}
 
@@ -252,7 +274,7 @@ func saveRecord(dbID uint16, tx fdb.Transaction, rec Record, onExists RecordHand
 		return
 	}
 
-	tx.Set(recKey(dbID, rec), buf)
+	tx.Set(key, buf)
 	return nil
 }
 

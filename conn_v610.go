@@ -82,21 +82,55 @@ func (c *v610Conn) LoadCursor(id string, rf RecordFabric, opts ...Option) (_ Cur
 
 // ********************** Private **********************
 
-func fdbKey(dbID, typeID uint16, parts ...[]byte) fdb.Key {
+func fdbKeyBuf(buf *bytes.Buffer, dbID, typeID uint16, parts ...[]byte) fdb.Key {
 	mem := 4
+	// ptr := 4
+	plen := 0
 
 	for i := range parts {
 		mem += len(parts[i])
 	}
 
-	key := make(fdb.Key, 4, mem)
+	buf.Grow(mem)
+
+	// key := make(fdb.Key, mem)
+
+	var idx [4]byte
+	binary.BigEndian.PutUint16(idx[0:2], dbID)
+	binary.BigEndian.PutUint16(idx[2:4], typeID)
+
+	buf.Write(idx[:])
+
+	for i := range parts {
+		if plen = len(parts[i]); plen > 0 {
+			buf.Write(parts[i])
+
+			// copy(key[ptr:], parts[i])
+			// ptr += plen
+		}
+	}
+
+	return fdb.Key(buf.Bytes())
+}
+
+func fdbKey(dbID, typeID uint16, parts ...[]byte) fdb.Key {
+	mem := 4
+	ptr := 4
+	plen := 0
+
+	for i := range parts {
+		mem += len(parts[i])
+	}
+
+	key := make(fdb.Key, mem)
 
 	binary.BigEndian.PutUint16(key[0:2], dbID)
 	binary.BigEndian.PutUint16(key[2:4], typeID)
 
 	for i := range parts {
-		if len(parts[i]) > 0 {
-			key = append(key, parts[i]...)
+		if plen = len(parts[i]); plen > 0 {
+			copy(key[ptr:], parts[i])
+			ptr += plen
 		}
 	}
 
@@ -105,8 +139,15 @@ func fdbKey(dbID, typeID uint16, parts ...[]byte) fdb.Key {
 
 func recKey(dbID uint16, rec Record) fdb.Key {
 	rid := s2b(rec.FdbxID())
-	rln := []byte{byte(len(rid))}
-	return fdbKey(dbID, rec.FdbxType().ID, rid, rln)
+	rln := byte(len(rid))
+	key := make(fdb.Key, rln+5)
+
+	binary.BigEndian.PutUint16(key[0:2], dbID)
+	binary.BigEndian.PutUint16(key[2:4], rec.FdbxType().ID)
+
+	copy(key[4:], rid)
+	key[4+rln] = rln
+	return key
 }
 
 func s2b(s string) []byte {
@@ -115,6 +156,7 @@ func s2b(s string) []byte {
 	}
 	return *(*[]byte)(unsafe.Pointer(&s))
 }
+
 func b2s(b []byte) string {
 	if len(b) == 0 {
 		return ""
