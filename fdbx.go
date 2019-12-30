@@ -51,6 +51,9 @@ type IndexHandler func(Indexer) error
 // RecordHandler -
 type RecordHandler func(Record) error
 
+// RecordFabric -
+type RecordFabric func(id string) (Record, error)
+
 // Predicat - for query filtering, especially for seq scan queries
 type Predicat func(Record) (bool, error)
 
@@ -60,7 +63,7 @@ type Option func(*options) error
 // RecordType - to describe record collection
 type RecordType struct {
 	ID  uint16
-	New func(id string) (Record, error)
+	New RecordFabric
 }
 
 // Conn - database connection (as stored database index)
@@ -72,7 +75,7 @@ type Conn interface {
 	Queue(rtp RecordType, prefix string) (Queue, error)
 
 	Cursor(rtp RecordType, opts ...Option) (Cursor, error)
-	LoadCursor(id string, rtp RecordType, opts ...Option) (Cursor, error)
+	LoadCursor(id string, rf RecordFabric, opts ...Option) (Cursor, error)
 }
 
 // DB - database object that holds connection for transaction handler

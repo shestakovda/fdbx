@@ -3,6 +3,7 @@ package fdbx
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/google/uuid"
@@ -17,7 +18,7 @@ func newV610cursor(conn *v610Conn, id string, rtp RecordType, opts ...Option) (_
 
 	if id == "" {
 		uid := uuid.New()
-		id = string(uid[:])
+		id = fmt.Sprintf("%x", uid[:])
 	}
 
 	from := fdbKey(conn.db, rtp.ID, opt.from)
@@ -29,10 +30,11 @@ func newV610cursor(conn *v610Conn, id string, rtp RecordType, opts ...Option) (_
 		Pos:     from,
 		Page:    opt.page,
 		Limit:   opt.limit,
+		Index:   rtp.ID,
 		IsEmpty: false,
 
 		conn:   conn,
-		rtp:    rtp,
+		rtp:    &rtp,
 		filter: opt.filter,
 	}, nil
 }
@@ -45,9 +47,10 @@ type v610cursor struct {
 	Pos     fdb.Key `json:"pos"`
 	Page    int     `json:"page"`
 	Limit   int     `json:"limit"`
+	Index   uint16  `json:"index"`
 	IsEmpty bool    `json:"empty"`
 
-	rtp    RecordType
+	rtp    *RecordType
 	conn   *v610Conn
 	filter Predicat
 }
@@ -113,6 +116,7 @@ func (cur *v610cursor) applyOpts(opts []Option) (err error) {
 	}
 
 	cur.IsEmpty = false
+	cur.rtp.ID = cur.Index
 	cur.filter = opt.filter
 	return nil
 }

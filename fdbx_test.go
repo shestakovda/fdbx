@@ -284,7 +284,8 @@ func TestIndex(t *testing.T) {
 	assert.False(t, cur.Empty())
 	rect = append(rect, recl...)
 
-	cur, err = conn.LoadCursor(cur.FdbxID(), fdbx.RecordType{ID: TestIndexName, New: recordFabric}, fdbx.Page(3))
+	assert.Len(t, cur.FdbxID(), 32)
+	cur, err = conn.LoadCursor(cur.FdbxID(), recordFabric, fdbx.Page(3))
 	assert.NoError(t, err)
 	assert.NotNil(t, cur)
 

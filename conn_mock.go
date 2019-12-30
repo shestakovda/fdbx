@@ -14,7 +14,7 @@ type MockConn struct {
 	db uint16
 
 	FClearDB    func() error
-	FLoadCursor func(id string, rtp RecordType, opts ...Option) (Cursor, error)
+	FLoadCursor func(id string, rf RecordFabric, opts ...Option) (Cursor, error)
 
 	// ***** DB *****
 
@@ -76,6 +76,6 @@ func (c *MockConn) Cursor(rtp RecordType, opts ...Option) (Cursor, error) {
 }
 
 // LoadCursor - load cursor stub
-func (c *MockConn) LoadCursor(id string, rtp RecordType, opts ...Option) (Cursor, error) {
-	return c.FLoadCursor(id, rtp, opts...)
+func (c *MockConn) LoadCursor(id string, rf RecordFabric, opts ...Option) (Cursor, error) {
+	return c.FLoadCursor(id, rf, opts...)
 }

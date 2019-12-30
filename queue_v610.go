@@ -15,14 +15,14 @@ var PunchSize = time.Minute
 func newV610queue(conn *v610Conn, rtp RecordType, prefix string) (*v610queue, error) {
 	return &v610queue{
 		cn:  conn,
-		rtp: rtp,
+		rtp: &rtp,
 		pf:  prefix,
 	}, nil
 }
 
 type v610queue struct {
 	pf  string
-	rtp RecordType
+	rtp *RecordType
 	cn  *v610Conn
 }
 

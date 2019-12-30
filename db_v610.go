@@ -107,7 +107,7 @@ func (db *v610db) Clear(typeID uint16) error {
 }
 
 func (db *v610db) Select(rtp RecordType, opts ...Option) ([]Record, error) {
-	return selectRecords(db.conn.db, db.tx, rtp, opts...)
+	return selectRecords(db.conn.db, db.tx, &rtp, opts...)
 }
 
 func (db *v610db) SelectIDs(indexTypeID uint16, opts ...Option) ([]string, error) {
@@ -158,7 +158,7 @@ func selectIDs(
 func selectRecords(
 	dbID uint16,
 	rtx fdb.ReadTransaction,
-	rtp RecordType,
+	rtp *RecordType,
 	opts ...Option,
 ) (list []Record, err error) {
 	var opt *options
@@ -513,7 +513,7 @@ func getRange(
 	rtx fdb.ReadTransaction,
 	rng fdb.Range,
 	opt fdb.RangeOptions,
-	rtp RecordType,
+	rtp *RecordType,
 	chk Predicat,
 ) (list []Record, lastKey fdb.Key, err error) {
 	var buf []byte
