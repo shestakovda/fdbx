@@ -143,7 +143,7 @@ func selectIDs(
 	}
 
 	rng := fdb.KeyRange{Begin: fdbKey(dbID, typeID, opt.from), End: fdbKey(dbID, typeID, opt.to)}
-	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: opt.limit, Reverse: opt.reverse}
+	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeSerial, Limit: opt.limit, Reverse: opt.reverse}
 
 	ids, _, err = getRangeIDs(rtx, rng, rngOpt)
 	return
@@ -162,7 +162,7 @@ func selectRecords(
 	}
 
 	rng := fdb.KeyRange{Begin: fdbKey(dbID, rtp.ID, opt.from), End: fdbKey(dbID, rtp.ID, opt.to)}
-	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: opt.limit, Reverse: opt.reverse}
+	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeSerial, Limit: opt.limit, Reverse: opt.reverse}
 
 	list, _, err = getRange(dbID, rtx, rng, rngOpt, rtp, opt.filter)
 	return
@@ -389,7 +389,7 @@ func loadBlob(dbID uint16, rtx fdb.ReadTransaction, value []byte) (blob []byte, 
 	res := rtx.GetRange(fdb.KeyRange{
 		Begin: fdbKey(dbID, ChunkTypeID, value),
 		End:   fdbKey(dbID, ChunkTypeID, value, []byte{0xFF}),
-	}, fdb.RangeOptions{Mode: fdb.StreamingModeIterator}).Iterator()
+	}, fdb.RangeOptions{Mode: fdb.StreamingModeSerial}).Iterator()
 
 	for res.Advance() {
 		if kv, err = res.Get(); err != nil {
@@ -543,7 +543,7 @@ func getRange(
 	batchSize := 1000
 
 	lim := opt.Limit
-	opt.Mode = fdb.StreamingModeIterator
+	opt.Mode = fdb.StreamingModeSerial
 
 	// disable fdb limit if there are our limit with filter
 	if chk != nil {

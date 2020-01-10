@@ -204,7 +204,7 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 
 			now := make([]byte, 8)
 			ids = make([]string, 0, limit)
-			binary.BigEndian.PutUint64(now, uint64(time.Now().UnixNano()))
+			binary.BigEndian.PutUint64(now, uint64(time.Now().UTC().UnixNano()))
 
 			rng := fdb.KeyRange{
 				Begin: q.dataKey(),
