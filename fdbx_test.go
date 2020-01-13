@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/google/uuid"
 
@@ -502,7 +503,7 @@ func TestQueue(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
 
 		recc, errc := queue.Sub(ctx)
@@ -648,8 +649,9 @@ func BenchmarkSave10(b *testing.B)   { benchmarkSave(b, 10) }
 func BenchmarkSave100(b *testing.B)  { benchmarkSave(b, 100) }
 func BenchmarkSave1000(b *testing.B) { benchmarkSave(b, 1000) }
 
-func BenchmarkLoad1000_1(b *testing.B)   { benchmarkLoad(b, 1000, 1) }
-func BenchmarkLoad1000_100(b *testing.B) { benchmarkLoad(b, 1000, 100) }
+func BenchmarkLoad1_1000(b *testing.B)   { benchmarkLoad(b, 1000, 1) }
+func BenchmarkLoad10_1000(b *testing.B)  { benchmarkLoad(b, 1000, 10) }
+func BenchmarkLoad100_1000(b *testing.B) { benchmarkLoad(b, 1000, 100) }
 
 func recordFabric(id string) (fdbx.Record, error) { return &testRecord{ID: id}, nil }
 
@@ -738,17 +740,31 @@ func (r *testRecord) FdbxUnmarshal(buf []byte) error {
 	r.Decimal = model.Float()
 	r.Logic = model.Logic()
 	r.Number = model.Number()
-	r.Name = string(model.Name())
+	r.Name = b2s(model.Name())
 	r.Data = model.DataBytes()
 
 	// Strs
 	if model.StringsLength() != 0 {
 		r.Strs = make([]string, model.StringsLength())
 		for i := range r.Strs {
-			r.Strs[i] = string(model.Strings(i))
+			r.Strs[i] = b2s(model.Strings(i))
 		}
 	}
 
 	return nil
 
+}
+
+func s2b(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	return *(*[]byte)(unsafe.Pointer(&s))
+}
+
+func b2s(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return *(*string)(unsafe.Pointer(&b))
 }

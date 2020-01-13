@@ -150,6 +150,19 @@ func recKey(dbID uint16, rec Record) fdb.Key {
 	return key
 }
 
+func recTypeKey(dbID uint16, typeID uint16, recID string) fdb.Key {
+	rid := s2b(recID)
+	rln := byte(len(rid))
+	key := make(fdb.Key, rln+5)
+
+	binary.BigEndian.PutUint16(key[0:2], dbID)
+	binary.BigEndian.PutUint16(key[2:4], typeID)
+
+	copy(key[4:], rid)
+	key[4+rln] = rln
+	return key
+}
+
 func s2b(s string) []byte {
 	if s == "" {
 		return nil

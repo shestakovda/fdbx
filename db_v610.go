@@ -533,124 +533,145 @@ func getRangeIDs(
 func getRange(
 	dbID uint16,
 	rtx fdb.ReadTransaction,
-	rng fdb.Range,
+	rng fdb.KeyRange,
 	opt fdb.RangeOptions,
 	rtp *RecordType,
 	chk Predicat,
 ) (list []Record, lastKey fdb.Key, err error) {
-	var buf []byte
-	var rec Record
-	batchSize := 1000
+	var blrec Record
+	var rcbuf []byte
+	// var recsb []Record
+	var batch []fdb.KeyValue
+	var futsb []fdb.FutureByteSlice
+	var blrng fdb.KeyRange
+	var blkey *bytes.Buffer
 
-	lim := opt.Limit
+	first := true
+	bsize := 10000
+	limit := opt.Limit
 	opt.Mode = fdb.StreamingModeSerial
 
-	// disable fdb limit if there are our limit with filter
+	if opt.Reverse {
+		blkey = bytes.NewBuffer([]byte(rng.End.FDBKey()))
+	} else {
+		blkey = bytes.NewBuffer([]byte(rng.Begin.FDBKey()))
+	}
+	blkey.Grow(len(tail))
+
+	// batch size shouldn't be more then limit
+	if limit < bsize {
+		bsize = limit
+	}
+
+	// better split on batches when custom filter
 	if chk != nil {
-		opt.Limit = 0
+		opt.Limit = bsize
+	} else {
+		bsize = opt.Limit
 	}
 
-	if 2*lim < batchSize {
-		batchSize = 2 * lim
-	}
+	// load records in batches
+	for limit == 0 || len(list) < limit {
+		batchFirst := true
 
-	iter := rtx.GetRange(rng, opt).Iterator()
-	list = make([]Record, 0, lim)
-	keys := make([]fdb.Key, 0, batchSize)
-	load := make([]Record, 0, batchSize)
-
-	loadByID := func() (exp error) {
-		if len(load) == 0 {
-			return
+		if opt.Reverse {
+			blrng = fdb.KeyRange{Begin: rng.Begin, End: fdb.Key(blkey.Bytes())}
+		} else {
+			blrng = fdb.KeyRange{Begin: fdb.Key(blkey.Bytes()), End: rng.End}
 		}
 
-		if exp = loadRecords(dbID, rtx, nil, load...); exp != nil {
-			return
+		// zero length means last batch
+		if batch = rtx.GetRange(blrng, opt).GetSliceOrPanic(); len(batch) == 0 {
+			break
 		}
 
-		for i := range load {
-			if lim > 0 && len(list) >= lim {
+		// // make records batch
+		// if len(recsb) < len(batch) {
+		// 	recsb = make([]Record, len(batch))
+		// } else {
+		// 	recsb = recsb[:len(batch)]
+		// }
+
+		// batch data loading if only ids
+		if len(batch[0].Value) == 0 {
+
+			// make futures batch
+			if len(futsb) < len(batch) {
+				futsb = make([]fdb.FutureByteSlice, len(batch))
+			} else {
+				futsb = futsb[:len(batch)]
+			}
+
+			// get record type id
+			if blrec, err = rtp.New(getRowID(batch[0].Key)); err != nil {
+				return
+			}
+
+			// query all futures to leverage wait time
+			for i := range batch {
+				futsb[i] = rtx.Get(recTypeKey(dbID, blrec.FdbxType().ID, getRowID(batch[i].Key)))
+			}
+
+			// wait all values
+			for i := range batch {
+				if batch[i].Value, err = futsb[i].Get(); err != nil {
+					return
+				}
+			}
+		}
+
+		// record filtering
+		for i := range batch {
+			if limit > 0 && len(list) >= limit {
 				break
 			}
 
+			// last key is needed for cursor paging
+			if opt.Reverse {
+				// first key is the last key for reverse
+				if first {
+					lastKey = batch[0].Key
+					first = false
+				}
+
+				if batchFirst {
+					blkey.Reset()
+					blkey.Write([]byte(batch[0].Key))
+					batchFirst = false
+				}
+			} else {
+				lastKey = batch[i].Key
+				blkey.Reset()
+				blkey.Grow(len(lastKey) + len(tail))
+				blkey.Write([]byte(lastKey))
+				blkey.Write(tail)
+			}
+
+			if blrec, err = rtp.New(getRowID(batch[i].Key)); err != nil {
+				return
+			}
+
+			if _, rcbuf, err = unpackValue(dbID, rtx, batch[i].Value); err != nil {
+				return
+			}
+
+			if err = blrec.FdbxUnmarshal(rcbuf); err != nil {
+				return
+			}
+
 			add := true
+
 			if chk != nil {
-				if add, exp = chk(load[i]); exp != nil {
+				if add, err = chk(blrec); err != nil {
 					return
 				}
 			}
 
 			if add {
-				list = append(list, load[i])
-				if !opt.Reverse {
-					lastKey = keys[i]
-				}
+				list = append(list, blrec)
 			}
 		}
 
-		load = make([]Record, 0, batchSize)
-		return nil
-	}
-
-	index := 0
-	for iter.Advance() && (lim == 0 || len(list) < lim) {
-		row := iter.MustGet()
-
-		// first key is the last key for reverse
-		if opt.Reverse && index == 0 {
-			lastKey = row.Key
-		}
-
-		index++
-
-		rid := getRowID(row.Key)
-
-		if rec, err = rtp.New(rid); err != nil {
-			return
-		}
-
-		if len(row.Value) == 0 {
-			load = append(load, rec)
-
-			if !opt.Reverse {
-				keys = append(keys, row.Key)
-			}
-
-			// buffered load
-			if len(load) >= batchSize {
-				if err = loadByID(); err != nil {
-					return
-				}
-			}
-
-			continue
-		}
-
-		if _, buf, err = unpackValue(dbID, rtx, row.Value); err != nil {
-			return
-		}
-
-		if err = rec.FdbxUnmarshal(buf); err != nil {
-			return
-		}
-
-		add := true
-		if chk != nil {
-			if add, err = chk(rec); err != nil {
-				return
-			}
-		}
-
-		if add {
-			list = append(list, rec)
-			if !opt.Reverse {
-				lastKey = row.Key
-			}
-		}
-	}
-
-	if err = loadByID(); err != nil {
-		return
 	}
 
 	return list, lastKey, nil
