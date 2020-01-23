@@ -143,7 +143,7 @@ func selectIDs(
 	}
 
 	rng := fdb.KeyRange{Begin: fdbKey(dbID, typeID, opt.from), End: fdbKey(dbID, typeID, opt.to)}
-	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeSerial, Limit: opt.limit, Reverse: opt.reverse}
+	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeSerial, Limit: opt.limit, Reverse: opt.reverse != nil}
 
 	ids, _, err = getRangeIDs(rtx, rng, rngOpt)
 	return
@@ -162,7 +162,7 @@ func selectRecords(
 	}
 
 	rng := fdb.KeyRange{Begin: fdbKey(dbID, rtp.ID, opt.from), End: fdbKey(dbID, rtp.ID, opt.to)}
-	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeSerial, Limit: opt.limit, Reverse: opt.reverse}
+	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeSerial, Limit: opt.limit, Reverse: opt.reverse != nil}
 
 	list, _, err = getRange(dbID, rtx, rng, rngOpt, rtp, opt.filter, false)
 	return

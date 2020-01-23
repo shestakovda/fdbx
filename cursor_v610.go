@@ -25,7 +25,7 @@ func newV610cursor(conn *v610Conn, id string, rtp RecordType, opts ...Option) (_
 	from := fdbKey(conn.db, rtp.ID, opt.from)
 	to := fdbKey(conn.db, rtp.ID, opt.to)
 
-	if opt.reverse {
+	if opt.reverse != nil {
 		start = to
 	} else {
 		start = from
@@ -41,7 +41,7 @@ func newV610cursor(conn *v610Conn, id string, rtp RecordType, opts ...Option) (_
 		Limit:   opt.limit,
 		Index:   rtp.ID,
 		IsEmpty: false,
-		Reverse: opt.reverse,
+		Reverse: opt.reverse != nil,
 
 		conn:   conn,
 		rtp:    &rtp,
@@ -59,7 +59,7 @@ type v610cursor struct {
 	Limit   int     `json:"limit"`
 	Index   uint16  `json:"index"`
 	IsEmpty bool    `json:"empty"`
-	Reverse bool    `json:"rev"`
+	Reverse bool    `json:"rev,omitempty"`
 
 	rtp    *RecordType
 	conn   *v610Conn
@@ -127,7 +127,7 @@ func (cur *v610cursor) applyOpts(opts []Option) (err error) {
 	}
 
 	cur.IsEmpty = false
-	cur.Reverse = opt.reverse
+	cur.Reverse = opt.reverse != nil
 	cur.rtp.ID = cur.Index
 	cur.filter = opt.filter
 	return nil

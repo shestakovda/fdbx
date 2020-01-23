@@ -6,7 +6,7 @@ type options struct {
 	page    int
 	limit   int
 	filter  Predicat
-	reverse bool
+	reverse *struct{}
 }
 
 // Page - max count of selected models
@@ -61,7 +61,7 @@ func Query(value []byte) Option {
 // Reverse - select from end to start
 func Reverse() Option {
 	return func(o *options) error {
-		o.reverse = true
+		o.reverse = &struct{}{}
 		return nil
 	}
 }
