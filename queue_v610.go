@@ -39,7 +39,7 @@ func (q *v610queue) Ack(db DB, ids ...string) error {
 	}
 
 	for i := range ids {
-		db610.tx.Clear(q.lostKey(s2b(ids[i]), []byte{byte(len(ids[i]))}))
+		db610.tx.Clear(q.lostKey(S2B(ids[i]), []byte{byte(len(ids[i]))}))
 	}
 
 	return nil
@@ -66,7 +66,7 @@ func (q *v610queue) Pub(db DB, when time.Time, ids ...string) (err error) {
 
 	// set task
 	for i := range ids {
-		db610.tx.Set(q.dataKey(delay, s2b(ids[i]), []byte{byte(len(ids[i]))}), nil)
+		db610.tx.Set(q.dataKey(delay, S2B(ids[i]), []byte{byte(len(ids[i]))}), nil)
 	}
 
 	// update watch
@@ -234,7 +234,7 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 				ids = append(ids, rid)
 
 				// move to lost
-				tx.Set(q.lostKey(s2b(rid), []byte{byte(len(rid))}), nil)
+				tx.Set(q.lostKey(S2B(rid), []byte{byte(len(rid))}), nil)
 				tx.Clear(rows[i].Key)
 			}
 
@@ -321,7 +321,7 @@ func (q *v610queue) Status(db DB, ids ...string) (map[string]TaskStatus, error) 
 	}
 
 	for i := range ids {
-		fbs[i] = db610.tx.Get(q.lostKey(s2b(ids[i]), []byte{byte(len(ids[i]))}))
+		fbs[i] = db610.tx.Get(q.lostKey(S2B(ids[i]), []byte{byte(len(ids[i]))}))
 	}
 
 	for i := range fbs {
@@ -340,7 +340,7 @@ func (q *v610queue) watchKey() fdb.Key             { return q.key(0x02) }
 func (q *v610queue) key(prefix byte, pts ...[]byte) fdb.Key {
 	ptlen := len(pts)
 	parts := make([][]byte, ptlen+3)
-	parts[0] = s2b(q.pf)
+	parts[0] = S2B(q.pf)
 	parts[1] = []byte{prefix}
 
 	for i := range pts {

@@ -3,7 +3,6 @@ package fdbx
 import (
 	"bytes"
 	"encoding/binary"
-	"unsafe"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
@@ -138,7 +137,7 @@ func fdbKey(dbID, typeID uint16, parts ...[]byte) fdb.Key {
 }
 
 func recKey(dbID uint16, rec Record) fdb.Key {
-	rid := s2b(rec.FdbxID())
+	rid := S2B(rec.FdbxID())
 	rln := byte(len(rid))
 	key := make(fdb.Key, rln+5)
 
@@ -151,7 +150,7 @@ func recKey(dbID uint16, rec Record) fdb.Key {
 }
 
 func recTypeKey(dbID uint16, typeID uint16, recID string) fdb.Key {
-	rid := s2b(recID)
+	rid := S2B(recID)
 	rln := byte(len(rid))
 	key := make(fdb.Key, rln+5)
 
@@ -161,18 +160,4 @@ func recTypeKey(dbID uint16, typeID uint16, recID string) fdb.Key {
 	copy(key[4:], rid)
 	key[4+rln] = rln
 	return key
-}
-
-func s2b(s string) []byte {
-	if s == "" {
-		return nil
-	}
-	return *(*[]byte)(unsafe.Pointer(&s))
-}
-
-func b2s(b []byte) string {
-	if len(b) == 0 {
-		return ""
-	}
-	return *(*string)(unsafe.Pointer(&b))
 }

@@ -3,6 +3,7 @@ package fdbx
 import (
 	"context"
 	"time"
+	"unsafe"
 )
 
 // Supported FoundationDB client versions
@@ -176,4 +177,20 @@ func NewConn(db, version uint16) (Conn, error) {
 	}
 
 	return nil, ErrUnknownVersion
+}
+
+// S2B - fast and dangerous!
+func S2B(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	return *(*[]byte)(unsafe.Pointer(&s))
+}
+
+// S2B - fast and dangerous!
+func B2S(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	return *(*string)(unsafe.Pointer(&b))
 }

@@ -502,7 +502,7 @@ func gunzipStream(w io.Writer, r io.Reader) (err error) {
 
 func getRowID(key fdb.Key) string {
 	klen := len(key) - 1
-	return b2s(key[klen-int(key[klen]) : klen])
+	return B2S(key[klen-int(key[klen]) : klen])
 }
 
 func getRangeIDs(

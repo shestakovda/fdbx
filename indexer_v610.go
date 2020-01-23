@@ -35,7 +35,7 @@ func (idx *v610Indexer) Index(idxTypeID uint16, value []byte) {
 func (idx *v610Indexer) commit(dbID uint16, tx fdb.Transaction, drop bool, id string) error {
 	var key fdb.Key
 
-	rid := s2b(id)
+	rid := S2B(id)
 	buf := new(bytes.Buffer)
 	rln := []byte{byte(len(rid))}
 
