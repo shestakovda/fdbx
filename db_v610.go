@@ -164,7 +164,7 @@ func selectRecords(
 	rng := fdb.KeyRange{Begin: fdbKey(dbID, rtp.ID, opt.from), End: fdbKey(dbID, rtp.ID, opt.to)}
 	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeSerial, Limit: opt.limit, Reverse: opt.reverse}
 
-	list, _, err = getRange(dbID, rtx, rng, rngOpt, rtp, opt.filter)
+	list, _, err = getRange(dbID, rtx, rng, rngOpt, rtp, opt.filter, false)
 	return
 }
 
@@ -537,17 +537,17 @@ func getRange(
 	opt fdb.RangeOptions,
 	rtp *RecordType,
 	chk Predicat,
+	rev bool,
 ) (list []Record, lastKey fdb.Key, err error) {
 	var blrec Record
 	var rcbuf []byte
-	// var recsb []Record
 	var batch []fdb.KeyValue
 	var futsb []fdb.FutureByteSlice
 	var blrng fdb.KeyRange
 	var blkey *bytes.Buffer
 
 	first := true
-	bsize := 10000
+	bsize := 1000
 	limit := opt.Limit
 	opt.Mode = fdb.StreamingModeSerial
 
@@ -572,7 +572,6 @@ func getRange(
 
 	// load records in batches
 	for limit == 0 || len(list) < limit {
-		batchFirst := true
 
 		if opt.Reverse {
 			blrng = fdb.KeyRange{Begin: rng.Begin, End: fdb.Key(blkey.Bytes())}
@@ -584,13 +583,6 @@ func getRange(
 		if batch = rtx.GetRange(blrng, opt).GetSliceOrPanic(); len(batch) == 0 {
 			break
 		}
-
-		// // make records batch
-		// if len(recsb) < len(batch) {
-		// 	recsb = make([]Record, len(batch))
-		// } else {
-		// 	recsb = recsb[:len(batch)]
-		// }
 
 		// batch data loading if only ids
 		if len(batch[0].Value) == 0 {
@@ -626,25 +618,24 @@ func getRange(
 				break
 			}
 
-			// last key is needed for cursor paging
-			if opt.Reverse {
-				// first key is the last key for reverse
+			blkey.Reset()
+			blkey.Grow(len(batch[i].Key) + len(tail))
+			blkey.Write([]byte(batch[i].Key))
+			if !opt.Reverse {
+				blkey.Write(tail)
+			}
+
+			if rev {
 				if first {
-					lastKey = batch[0].Key
+					if opt.Reverse {
+						lastKey = fdb.Key(append(batch[0].Key, tail...))
+					} else {
+						lastKey = batch[0].Key
+					}
 					first = false
 				}
-
-				if batchFirst {
-					blkey.Reset()
-					blkey.Write([]byte(batch[0].Key))
-					batchFirst = false
-				}
 			} else {
-				lastKey = batch[i].Key
-				blkey.Reset()
-				blkey.Grow(len(lastKey) + len(tail))
-				blkey.Write([]byte(lastKey))
-				blkey.Write(tail)
+				lastKey = fdb.Key(blkey.Bytes())
 			}
 
 			if blrec, err = rtp.New(getRowID(batch[i].Key)); err != nil {

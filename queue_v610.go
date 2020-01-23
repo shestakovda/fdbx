@@ -281,7 +281,7 @@ func (q *v610queue) GetLost(limit uint, filter Predicat) (list []Record, err err
 	}
 
 	_, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (_ interface{}, exp error) {
-		list, _, exp = getRange(q.cn.db, rtx, rng, opt, q.rtp, filter)
+		list, _, exp = getRange(q.cn.db, rtx, rng, opt, q.rtp, filter, false)
 		return
 	})
 	return list, err

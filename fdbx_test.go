@@ -148,6 +148,7 @@ func TestSelect(t *testing.T) {
 
 	recs := make([]fdbx.Record, 0, 10)
 	for rec := range recc {
+
 		recs = append(recs, rec)
 	}
 
@@ -213,6 +214,91 @@ func TestSelect(t *testing.T) {
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl, err = cur.Next(db, 0); return err }))
 	assert.Len(t, recl, 0)
 	assert.True(t, cur.Empty())
+
+	assert.NoError(t, cur.Close())
+
+	// ********* REVERSE *********
+
+	cur, err = conn.Cursor(fdbx.RecordType{ID: TestCollection, New: recordFabric}, fdbx.Page(3), fdbx.Reverse())
+	assert.NoError(t, err)
+	assert.NotNil(t, cur)
+	assert.False(t, cur.Empty())
+
+	// ********* all in *********
+
+	recc, errc = cur.Select(ctx)
+
+	recs2 := make([]fdbx.Record, 0, 10)
+	for rec := range recc {
+		recs2 = append(recs2, rec)
+	}
+
+	errs = make([]error, 0)
+	for err := range errc {
+		errs = append(errs, err)
+	}
+
+	assert.Len(t, errs, 0)
+	assert.Len(t, recs2, 10)
+	assert.True(t, cur.Empty())
+	assert.NoError(t, cur.Close())
+
+	// ********* steps *********
+
+	recl2 := make([]fdbx.Record, 0, 10)
+	rect2 := make([]fdbx.Record, 0, 10)
+
+	// page size = 3
+	cur, err = conn.Cursor(fdbx.RecordType{ID: TestCollection, New: recordFabric}, fdbx.Page(3), fdbx.Reverse())
+	assert.NoError(t, err)
+	assert.NotNil(t, cur)
+	assert.False(t, cur.Empty())
+
+	// pos: 0 -> (load 3) -> 3
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl2, err = cur.Next(db, 0); return err }))
+	assert.Len(t, recl2, 3)
+	assert.False(t, cur.Empty())
+	rect2 = append(rect2, recl2...)
+
+	// pos: 3 -> (skip 3) -> 6 -> (load 3) -> 9
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl2, err = cur.Next(db, 1); return err }))
+	assert.Len(t, recl2, 3)
+	assert.False(t, cur.Empty())
+
+	// pos: 9 -> (skip -6) -> 3 -> (load 3) -> 6
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl2, err = cur.Prev(db, 1); return err }))
+	assert.Len(t, recl2, 3)
+	assert.False(t, cur.Empty())
+	rect2 = append(rect2, recl2...)
+
+	// pos: 6 -> (load 3) -> 9
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl2, err = cur.Next(db, 0); return err }))
+	assert.Len(t, recl2, 3)
+	assert.False(t, cur.Empty())
+	rect2 = append(rect2, recl2...)
+
+	// pos: 9 -> (load 3) -> 10
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl2, err = cur.Next(db, 0); return err }))
+	assert.Len(t, recl2, 1)
+	assert.True(t, cur.Empty())
+	rect2 = append(rect2, recl2...)
+
+	// important!
+	assert.Equal(t, recs2, rect2)
+
+	// pos: 10 -> (skip -3) -> 7 -> (load 3) -> 10
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl2, err = cur.Prev(db, 0); return err }))
+	assert.Len(t, recl2, 3)
+	assert.False(t, cur.Empty())
+
+	// pos: 10 -> (skip -3) -> 7 -> (load 3) -> 10
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { recl2, err = cur.Next(db, 0); return err }))
+	assert.Len(t, recl2, 0)
+	assert.True(t, cur.Empty())
+
+	// very important!
+	fdbx.ReverseList(recs2)
+	assert.Equal(t, recs, recs2)
 }
 
 func TestIndex(t *testing.T) {

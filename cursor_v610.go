@@ -11,6 +11,7 @@ import (
 
 func newV610cursor(conn *v610Conn, id string, rtp RecordType, opts ...Option) (_ *v610cursor, err error) {
 	var opt *options
+	var start fdb.Key
 
 	if opt, err = selectOpts(opts); err != nil {
 		return
@@ -22,16 +23,25 @@ func newV610cursor(conn *v610Conn, id string, rtp RecordType, opts ...Option) (_
 	}
 
 	from := fdbKey(conn.db, rtp.ID, opt.from)
+	to := fdbKey(conn.db, rtp.ID, opt.to)
+
+	if opt.reverse {
+		start = to
+	} else {
+		start = from
+	}
+
 	return &v610cursor{
 		id: id,
 
 		From:    from,
-		To:      fdbKey(conn.db, rtp.ID, opt.to),
-		Pos:     from,
+		To:      to,
+		Pos:     start,
 		Page:    opt.page,
 		Limit:   opt.limit,
 		Index:   rtp.ID,
 		IsEmpty: false,
+		Reverse: opt.reverse,
 
 		conn:   conn,
 		rtp:    &rtp,
@@ -49,6 +59,7 @@ type v610cursor struct {
 	Limit   int     `json:"limit"`
 	Index   uint16  `json:"index"`
 	IsEmpty bool    `json:"empty"`
+	Reverse bool    `json:"rev"`
 
 	rtp    *RecordType
 	conn   *v610Conn
@@ -74,11 +85,11 @@ func (cur *v610cursor) Empty() bool  { return cur.IsEmpty }
 func (cur *v610cursor) Close() error { cur.IsEmpty = true; return cur.drop() }
 
 func (cur *v610cursor) Next(db DB, skip uint8) ([]Record, error) {
-	return cur.getPage(db, skip, false)
+	return cur.getPage(db, skip, true)
 }
 
 func (cur *v610cursor) Prev(db DB, skip uint8) ([]Record, error) {
-	return cur.getPage(db, skip, true)
+	return cur.getPage(db, skip, false)
 }
 
 func (cur *v610cursor) Select(ctx context.Context) (<-chan Record, <-chan error) {
@@ -116,6 +127,7 @@ func (cur *v610cursor) applyOpts(opts []Option) (err error) {
 	}
 
 	cur.IsEmpty = false
+	cur.Reverse = opt.reverse
 	cur.rtp.ID = cur.Index
 	cur.filter = opt.filter
 	return nil
@@ -125,8 +137,9 @@ func (cur *v610cursor) drop() error {
 	return cur.conn.Tx(func(db DB) error { return db.Drop(nil, cur) })
 }
 
-func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool) (list []Record, err error) {
+func (cur *v610cursor) getPage(db DB, skip uint8, next bool) (list []Record, err error) {
 	var ok bool
+	var rev bool
 	var rng fdb.KeyRange
 	var db610 *v610db
 
@@ -140,9 +153,15 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool) (list []Record, 
 		return nil, ErrIncompatibleDB.WithStack()
 	}
 
-	opt := fdb.RangeOptions{Limit: cur.Page, Mode: fdb.StreamingModeWantAll, Reverse: reverse}
+	if next {
+		rev = cur.Reverse
+	} else {
+		rev = !cur.Reverse
+	}
 
-	if reverse {
+	opt := fdb.RangeOptions{Limit: cur.Page, Mode: fdb.StreamingModeSerial, Reverse: rev}
+
+	if rev {
 		rng.Begin = cur.From
 		rng.End = cur.Pos
 	} else {
@@ -152,7 +171,7 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool) (list []Record, 
 
 	if skip > 0 {
 		opt.Limit = int(skip) * cur.Page
-		if reverse {
+		if rev {
 			opt.Limit++
 		}
 
@@ -167,32 +186,26 @@ func (cur *v610cursor) getPage(db DB, skip uint8, reverse bool) (list []Record, 
 		cur.Pos = append(rows[rlen-1].Key, tail...)
 		opt.Limit = cur.Page
 
-		if reverse {
+		if rev {
 			rng.End = cur.Pos
 		} else {
 			rng.Begin = cur.Pos
 		}
 	}
 
-	var lastKey fdb.Key
-
-	if list, lastKey, err = getRange(db610.conn.db, db610.tx, rng, opt, cur.rtp, cur.filter); err != nil {
+	if list, cur.Pos, err = getRange(db610.conn.db, db610.tx, rng, opt, cur.rtp, cur.filter, !next); err != nil {
 		return
 	}
 
-	if reverse {
-		reverseList(list)
-	}
-
-	if len(lastKey) > 0 {
-		cur.Pos = append(lastKey, tail...)
+	if !next {
+		ReverseList(list)
 	}
 
 	cur.IsEmpty = len(list) < cur.Page
 	return list, nil
 }
 
-func reverseList(list []Record) {
+func ReverseList(list []Record) {
 	llen := len(list)
 
 	if llen == 0 {
@@ -215,7 +228,7 @@ func (cur *v610cursor) readAll(ctx context.Context, recs chan Record, errs chan 
 	count := 0
 	for !cur.IsEmpty && ctx.Err() == nil && (cur.Limit == 0 || count < cur.Limit) {
 		if err = cur.conn.Tx(func(db DB) (exp error) {
-			list, exp = cur.getPage(db, 0, false)
+			list, exp = cur.getPage(db, 0, true)
 			return
 		}); err != nil {
 			errs <- err
