@@ -65,6 +65,9 @@ func (c *MockConn) ClearDB() error { return c.FClearDB() }
 // Tx - tx stub, create mock object
 func (c *MockConn) Tx(h TxHandler) error { return h(newMockDB(c)) }
 
+// StartClearDaemon - daemon stub, create mock object
+func (c *MockConn) StartClearDaemon() {}
+
 // Queue - queue stub, create mock object
 func (c *MockConn) Queue(rtp RecordType, prefix string) (Queue, error) {
 	return newMockQueue(c, rtp, prefix)

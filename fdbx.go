@@ -19,7 +19,10 @@ const (
 
 var (
 	// CursorTypeID is collection number for storing cursors
-	CursorTypeID = uint16(0)
+	CursorTypeID = uint16(0xFFFD)
+
+	// CursorIndexID is collection number for storing cursor created index
+	CursorIndexID = uint16(0xFFFE)
 
 	// ChunkTypeID is collection number for storing blob chunks. Default uint16 max value
 	ChunkTypeID = uint16(0xFFFF)
@@ -77,6 +80,8 @@ type Conn interface {
 
 	Cursor(rtp RecordType, opts ...Option) (Cursor, error)
 	LoadCursor(id string, rf RecordFabric, opts ...Option) (Cursor, error)
+
+	StartClearDaemon()
 }
 
 // DB - database object that holds connection for transaction handler

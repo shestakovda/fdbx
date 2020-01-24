@@ -3,6 +3,9 @@ package fdbx
 import (
 	"bytes"
 	"encoding/binary"
+	"time"
+
+	"github.com/golang/glog"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
@@ -79,11 +82,65 @@ func (c *v610Conn) LoadCursor(id string, rf RecordFabric, opts ...Option) (_ Cur
 	return cur, cur.applyOpts(opts)
 }
 
+func (c *v610Conn) StartClearDaemon() {
+	defer func() {
+		if rec := recover(); rec != nil {
+			glog.Errorf("fdbx: cursor clear daemon panic: %+v", rec)
+			go c.StartClearDaemon()
+		}
+	}()
+
+	for {
+		err := c.Tx(func(db DB) (exp error) {
+			var buf [8]byte
+			var ids []string
+
+			before := time.Now().Add(-24 * time.Hour)
+
+			binary.BigEndian.PutUint64(buf[:], uint64(before.UTC().UnixNano()))
+
+			opts := []Option{
+				Limit(10000),
+				To(buf[:]),
+			}
+
+			if ids, exp = db.SelectIDs(CursorIndexID, opts...); exp != nil {
+				return
+			}
+
+			if len(ids) == 0 {
+				return
+			}
+
+			list := make([]Record, len(ids))
+
+			for i := range ids {
+				if list[i], exp = cursorFabric(ids[i]); exp != nil {
+					return
+				}
+			}
+
+			if exp = db.Drop(nil, list...); exp != nil {
+				return
+			}
+
+			glog.Infof("fdbx: cursor clear: drop %d items", len(list))
+			return nil
+		})
+
+		if err != nil {
+			glog.Errorf("fdbx: cursor clear daemon error: %+v", err)
+			return
+		}
+
+		time.Sleep(time.Hour)
+	}
+}
+
 // ********************** Private **********************
 
 func fdbKeyBuf(buf *bytes.Buffer, dbID, typeID uint16, parts ...[]byte) fdb.Key {
 	mem := 4
-	// ptr := 4
 	plen := 0
 
 	for i := range parts {
@@ -91,8 +148,6 @@ func fdbKeyBuf(buf *bytes.Buffer, dbID, typeID uint16, parts ...[]byte) fdb.Key 
 	}
 
 	buf.Grow(mem)
-
-	// key := make(fdb.Key, mem)
 
 	var idx [4]byte
 	binary.BigEndian.PutUint16(idx[0:2], dbID)
@@ -103,9 +158,6 @@ func fdbKeyBuf(buf *bytes.Buffer, dbID, typeID uint16, parts ...[]byte) fdb.Key 
 	for i := range parts {
 		if plen = len(parts[i]); plen > 0 {
 			buf.Write(parts[i])
-
-			// copy(key[ptr:], parts[i])
-			// ptr += plen
 		}
 	}
 

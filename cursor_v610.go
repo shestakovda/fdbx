@@ -2,8 +2,10 @@ package fdbx
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/google/uuid"
@@ -42,6 +44,7 @@ func newV610cursor(conn *v610Conn, id string, rtp RecordType, opts ...Option) (_
 		Index:   rtp.ID,
 		IsEmpty: false,
 		Reverse: opt.reverse != nil,
+		Created: time.Now(),
 
 		conn:   conn,
 		rtp:    &rtp,
@@ -49,17 +52,22 @@ func newV610cursor(conn *v610Conn, id string, rtp RecordType, opts ...Option) (_
 	}, nil
 }
 
+func cursorFabric(id string) (Record, error) {
+	return &v610cursor{id: id}, nil
+}
+
 type v610cursor struct {
 	id string
 
-	From    fdb.Key `json:"from"`
-	To      fdb.Key `json:"to"`
-	Pos     fdb.Key `json:"pos"`
-	Page    int     `json:"page"`
-	Limit   int     `json:"limit"`
-	Index   uint16  `json:"index"`
-	IsEmpty bool    `json:"empty"`
-	Reverse bool    `json:"rev,omitempty"`
+	From    fdb.Key   `json:"from"`
+	To      fdb.Key   `json:"to"`
+	Pos     fdb.Key   `json:"pos"`
+	Page    int       `json:"page"`
+	Limit   int       `json:"limit"`
+	Index   uint16    `json:"index"`
+	IsEmpty bool      `json:"empty"`
+	Reverse bool      `json:"rev"`
+	Created time.Time `json:"created"`
 
 	rtp    *RecordType
 	conn   *v610Conn
@@ -75,7 +83,12 @@ func (cur *v610cursor) FdbxType() RecordType {
 		New: func(id string) (Record, error) { return &v610cursor{id: id}, nil },
 	}
 }
-func (cur *v610cursor) FdbxIndex(Indexer) error        { return nil }
+func (cur *v610cursor) FdbxIndex(idx Indexer) error {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(cur.Created.UTC().UnixNano()))
+	idx.Index(CursorIndexID, buf[:])
+	return nil
+}
 func (cur *v610cursor) FdbxMarshal() ([]byte, error)   { return json.Marshal(cur) }
 func (cur *v610cursor) FdbxUnmarshal(buf []byte) error { return json.Unmarshal(buf, cur) }
 
@@ -126,8 +139,11 @@ func (cur *v610cursor) applyOpts(opts []Option) (err error) {
 		cur.Limit = opt.limit
 	}
 
+	if opt.reverse != nil {
+		cur.Reverse = true
+	}
+
 	cur.IsEmpty = false
-	cur.Reverse = opt.reverse != nil
 	cur.rtp.ID = cur.Index
 	cur.filter = opt.filter
 	return nil
