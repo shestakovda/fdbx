@@ -5,14 +5,8 @@ import (
 	"time"
 )
 
-func newMockConn(db uint16) (conn *MockConn, err error) {
-	return &MockConn{db: db}, nil
-}
-
 // MockConn - stub conn for unit testing
 type MockConn struct {
-	db uint16
-
 	FClearDB    func() error
 	FLoadCursor func(id string, rf RecordFabric, opts ...Option) (Cursor, error)
 
@@ -38,7 +32,7 @@ type MockConn struct {
 	FSub     func(ctx context.Context) (<-chan Record, <-chan error)
 	FSubOne  func(ctx context.Context) (Record, error)
 	FSubList func(ctx context.Context, limit uint) ([]Record, error)
-	FGetLost func(limit uint, filter Predicat) ([]Record, error)
+	FGetLost func(limit uint, cond Condition) ([]Record, error)
 	FStatus  func(db DB, ids ...string) (map[string]TaskStatus, error)
 	FStat    func() (wait, lost int, err error)
 
@@ -70,12 +64,12 @@ func (c *MockConn) StartClearDaemon() {}
 
 // Queue - queue stub, create mock object
 func (c *MockConn) Queue(rtp RecordType, prefix string) (Queue, error) {
-	return newMockQueue(c, rtp, prefix)
+	return &mockQueue{MockConn: c}, nil
 }
 
 // Cursor - cursor stub, create mock object
 func (c *MockConn) Cursor(rtp RecordType, opts ...Option) (Cursor, error) {
-	return newMockCursor(c, rtp, opts...)
+	return &mockCursor{MockConn: c}, nil
 }
 
 // LoadCursor - load cursor stub

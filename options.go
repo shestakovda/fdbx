@@ -5,7 +5,7 @@ type options struct {
 	from    []byte
 	page    int
 	limit   int
-	filter  Predicat
+	cond    Condition
 	reverse *struct{}
 }
 
@@ -26,9 +26,9 @@ func Limit(n uint) Option {
 }
 
 // Filter -
-func Filter(f Predicat) Option {
+func Filter(f Condition) Option {
 	return func(o *options) error {
-		o.filter = f
+		o.cond = f
 		return nil
 	}
 }

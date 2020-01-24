@@ -10,15 +10,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const (
-	flagGZip  = uint8(1 << 6)
-	flagChunk = uint8(1 << 7)
-)
-
-func newV610db(c *v610Conn, tx fdb.Transaction) (*v610db, error) {
-	return &v610db{conn: c, tx: tx}, nil
-}
-
 type v610db struct {
 	conn *v610Conn
 	tx   fdb.Transaction
@@ -69,11 +60,7 @@ func (db *v610db) Drop(onNotExists RecordHandler, recs ...Record) (err error) {
 }
 
 func (db *v610db) Index(h IndexHandler, rid string, drop bool) (err error) {
-	var idx *v610Indexer
-
-	if idx, err = newV610Indexer(); err != nil {
-		return
-	}
+	idx := new(v610Indexer)
 
 	if err = h(idx); err != nil {
 		return
@@ -83,11 +70,7 @@ func (db *v610db) Index(h IndexHandler, rid string, drop bool) (err error) {
 }
 
 func (db *v610db) ClearIndex(h IndexHandler) (err error) {
-	var idx *v610Indexer
-
-	if idx, err = newV610Indexer(); err != nil {
-		return
-	}
+	idx := new(v610Indexer)
 
 	if err = h(idx); err != nil {
 		return
@@ -145,8 +128,7 @@ func selectIDs(
 	rng := fdb.KeyRange{Begin: fdbKey(dbID, typeID, opt.from), End: fdbKey(dbID, typeID, opt.to)}
 	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeSerial, Limit: opt.limit, Reverse: opt.reverse != nil}
 
-	ids, _, err = getRangeIDs(rtx, rng, rngOpt)
-	return
+	return getRangeIDs(rtx, rng, rngOpt), nil
 }
 
 func selectRecords(
@@ -164,7 +146,7 @@ func selectRecords(
 	rng := fdb.KeyRange{Begin: fdbKey(dbID, rtp.ID, opt.from), End: fdbKey(dbID, rtp.ID, opt.to)}
 	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeSerial, Limit: opt.limit, Reverse: opt.reverse != nil}
 
-	list, _, err = getRange(dbID, rtx, rng, rngOpt, rtp, opt.filter, false)
+	list, _, err = getRange(dbID, rtx, rng, rngOpt, rtp, opt.cond, false)
 	return
 }
 
@@ -313,13 +295,9 @@ func dropRecord(
 
 func setIndexes(dbID uint16, tx fdb.Transaction, rec Record, buf []byte, drop bool) (err error) {
 	var rcp Record
-	var idx *v610Indexer
 
 	rid := rec.FdbxID()
-
-	if idx, err = newV610Indexer(); err != nil {
-		return
-	}
+	idx := new(v610Indexer)
 
 	if drop {
 		if rcp, err = rec.FdbxType().New(rid); err != nil {
@@ -352,9 +330,7 @@ func packValue(dbID uint16, tx fdb.Transaction, value []byte) (_ []byte, err err
 
 	// sooooooo long, we must split and save as blob
 	if len(value) > ChunkSize {
-		if value, err = saveBlob(dbID, tx, &flags, value); err != nil {
-			return
-		}
+		value = saveBlob(dbID, tx, &flags, value)
 	}
 
 	return append([]byte{flags}, value...), nil
@@ -400,7 +376,7 @@ func loadBlob(dbID uint16, rtx fdb.ReadTransaction, value []byte) (blob []byte, 
 	return blob, nil
 }
 
-func saveBlob(dbID uint16, tx fdb.Transaction, flags *uint8, blob []byte) (value []byte, err error) {
+func saveBlob(dbID uint16, tx fdb.Transaction, flags *uint8, blob []byte) []byte {
 	var i uint16
 	var last bool
 	var part []byte
@@ -427,7 +403,7 @@ func saveBlob(dbID uint16, tx fdb.Transaction, flags *uint8, blob []byte) (value
 		i++
 	}
 
-	return blobID[:], nil
+	return blobID[:]
 }
 
 func dropBlob(dbID uint16, tx fdb.Transaction, value []byte) error {
@@ -509,25 +485,16 @@ func getRangeIDs(
 	rtx fdb.ReadTransaction,
 	rng fdb.Range,
 	opt fdb.RangeOptions,
-) (ids []string, lastKey fdb.Key, err error) {
+) []string {
 	rows := rtx.GetRange(rng, opt).GetSliceOrPanic()
-	ids = make([]string, 0, len(rows))
+
+	ids := make([]string, len(rows))
 
 	for i := range rows {
-
-		if opt.Reverse {
-			// first key is the last key for reverse
-			if i == 0 {
-				lastKey = rows[i].Key
-			}
-		} else {
-			lastKey = rows[i].Key
-		}
-
-		ids = append(ids, getRowID(rows[i].Key))
+		ids[i] = getRowID(rows[i].Key)
 	}
 
-	return ids, lastKey, nil
+	return ids
 }
 
 func getRange(
@@ -536,7 +503,7 @@ func getRange(
 	rng fdb.KeyRange,
 	opt fdb.RangeOptions,
 	rtp *RecordType,
-	chk Predicat,
+	cnd Condition,
 	rev bool,
 ) (list []Record, lastKey fdb.Key, err error) {
 	var blrec Record
@@ -564,7 +531,7 @@ func getRange(
 	}
 
 	// better split on batches when custom filter
-	if chk != nil {
+	if cnd != nil {
 		opt.Limit = bsize
 	} else {
 		bsize = opt.Limit
@@ -572,7 +539,6 @@ func getRange(
 
 	// load records in batches
 	for limit == 0 || len(list) < limit {
-
 		if opt.Reverse {
 			blrng = fdb.KeyRange{Begin: rng.Begin, End: fdb.Key(blkey.Bytes())}
 		} else {
@@ -586,7 +552,6 @@ func getRange(
 
 		// batch data loading if only ids
 		if len(batch[0].Value) == 0 {
-
 			// make futures batch
 			if len(futsb) < len(batch) {
 				futsb = make([]fdb.FutureByteSlice, len(batch))
@@ -628,7 +593,7 @@ func getRange(
 			if rev {
 				if first {
 					if opt.Reverse {
-						lastKey = fdb.Key(append(batch[0].Key, tail...))
+						lastKey = append(batch[0].Key, tail...)
 					} else {
 						lastKey = batch[0].Key
 					}
@@ -652,8 +617,8 @@ func getRange(
 
 			add := true
 
-			if chk != nil {
-				if add, err = chk(blrec); err != nil {
+			if cnd != nil {
+				if add, err = cnd(blrec); err != nil {
 					return
 				}
 			}
@@ -662,7 +627,6 @@ func getRange(
 				list = append(list, blrec)
 			}
 		}
-
 	}
 
 	return list, lastKey, nil

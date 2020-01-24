@@ -9,17 +9,6 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
 
-// PunchSize - размер ожидания в случае отсутствия задач
-var PunchSize = time.Minute
-
-func newV610queue(conn *v610Conn, rtp RecordType, prefix string) (*v610queue, error) {
-	return &v610queue{
-		cn:  conn,
-		rtp: &rtp,
-		pf:  prefix,
-	}, nil
-}
-
 type v610queue struct {
 	pf  string
 	rtp *RecordType
@@ -86,7 +75,6 @@ func (q *v610queue) Sub(ctx context.Context) (<-chan Record, <-chan error) {
 		defer close(modc)
 		defer func() {
 			if rec := recover(); rec != nil {
-
 				if err, ok := rec.(error); ok {
 					errc <- ErrQueuePanic.WithReason(err)
 				} else {
@@ -96,7 +84,6 @@ func (q *v610queue) Sub(ctx context.Context) (<-chan Record, <-chan error) {
 		}()
 
 		for {
-
 			if m, err = q.SubOne(ctx); err != nil {
 				errc <- err
 				return
@@ -145,7 +132,7 @@ func (q *v610queue) nextTaskDistance() (d time.Duration, err error) {
 		if len(rows) > 0 {
 			pflen := 4 + len(q.pf)
 			iwhen := int64(binary.BigEndian.Uint64(rows[0].Key[pflen : pflen+8]))
-			if wait := time.Unix(0, iwhen).Sub(time.Now()); wait > 0 {
+			if wait := time.Until(time.Unix(0, iwhen)); wait > 0 {
 				d = wait + time.Millisecond
 			}
 		}
@@ -189,7 +176,6 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 	var wait fdb.FutureNil
 
 	for len(list) == 0 {
-
 		if err = q.waitTask(ctx, wait); err != nil {
 			return
 		}
@@ -273,7 +259,7 @@ func (q *v610queue) loadRecs(ids []string) (list []Record, err error) {
 	return list, err
 }
 
-func (q *v610queue) GetLost(limit uint, filter Predicat) (list []Record, err error) {
+func (q *v610queue) GetLost(limit uint, cond Condition) (list []Record, err error) {
 	opt := fdb.RangeOptions{Limit: int(limit)}
 	rng := fdb.KeyRange{
 		Begin: q.lostKey(),
@@ -281,7 +267,7 @@ func (q *v610queue) GetLost(limit uint, filter Predicat) (list []Record, err err
 	}
 
 	_, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (_ interface{}, exp error) {
-		list, _, exp = getRange(q.cn.db, rtx, rng, opt, q.rtp, filter, false)
+		list, _, exp = getRange(q.cn.db, rtx, rng, opt, q.rtp, cond, false)
 		return
 	})
 	return list, err

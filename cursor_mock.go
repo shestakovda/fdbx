@@ -2,14 +2,8 @@ package fdbx
 
 import "context"
 
-func newMockCursor(conn *MockConn, rtp RecordType, opts ...Option) (*mockCursor, error) {
-	return &mockCursor{MockConn: conn, rtp: rtp, opts: opts}, nil
-}
-
 type mockCursor struct {
 	*MockConn
-	rtp  RecordType
-	opts []Option
 }
 
 // FdbxID

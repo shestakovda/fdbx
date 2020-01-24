@@ -47,21 +47,19 @@ func (c *v610Conn) ClearDB() error {
 }
 
 func (c *v610Conn) Tx(h TxHandler) error {
-	_, exp := c.fdb.Transact(func(tx fdb.Transaction) (_ interface{}, err error) {
-		var db DB
-
-		if db, err = newV610db(c, tx); err != nil {
-			return
-		}
-
-		return nil, h(db)
+	_, exp := c.fdb.Transact(func(tx fdb.Transaction) (interface{}, error) {
+		return nil, h(&v610db{conn: c, tx: tx})
 	})
 
 	return exp
 }
 
 func (c *v610Conn) Queue(rtp RecordType, prefix string) (Queue, error) {
-	return newV610queue(c, rtp, prefix)
+	return &v610queue{
+		cn:  c,
+		rtp: &rtp,
+		pf:  prefix,
+	}, nil
 }
 
 func (c *v610Conn) Cursor(rtp RecordType, opts ...Option) (Cursor, error) {
@@ -115,9 +113,7 @@ func (c *v610Conn) StartClearDaemon() {
 			list := make([]Record, len(ids))
 
 			for i := range ids {
-				if list[i], exp = cursorFabric(ids[i]); exp != nil {
-					return
-				}
+				list[i] = &v610cursor{id: ids[i]}
 			}
 
 			if exp = db.Drop(nil, list...); exp != nil {

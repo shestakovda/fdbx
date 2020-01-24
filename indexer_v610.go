@@ -6,10 +6,6 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
 
-func newV610Indexer() (*v610Indexer, error) {
-	return new(v610Indexer), nil
-}
-
 type v610Indexer struct {
 	types []uint16
 	bytes [][]byte

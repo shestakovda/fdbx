@@ -17,6 +17,7 @@ const (
 	MaxChunkSize = 100000
 )
 
+//nolint:gochecknoglobals
 var (
 	// CursorTypeID is collection number for storing cursors
 	CursorTypeID = uint16(0xFFFD)
@@ -32,6 +33,14 @@ var (
 
 	// GZipSize is a value len more then GZipSize cause gzip processing
 	GZipSize = 860
+
+	// PunchSize - poll wait interval for queue when no new tasks registered
+	PunchSize = time.Minute
+)
+
+const (
+	flagGZip  = uint8(1 << 6)
+	flagChunk = uint8(1 << 7)
 )
 
 // TaskStatus - alias
@@ -43,8 +52,6 @@ const (
 	StatusUnconfirmed TaskStatus = 2
 	StatusConfirmed   TaskStatus = 3
 )
-
-// TODO: agg funcs
 
 // TxHandler -
 type TxHandler func(DB) error
@@ -58,8 +65,8 @@ type RecordHandler func(Record) error
 // RecordFabric -
 type RecordFabric func(id string) (Record, error)
 
-// Predicat - for query filtering, especially for seq scan queries
-type Predicat func(Record) (bool, error)
+// Condition - for query filtering, especially for seq scan queries
+type Condition func(Record) (bool, error)
 
 // Option - to describe additional args for select
 type Option func(*options) error
@@ -136,7 +143,7 @@ type Queue interface {
 	SubList(ctx context.Context, limit uint) ([]Record, error)
 
 	// unconfirmed (not Ack) tasks
-	GetLost(limit uint, filter Predicat) ([]Record, error)
+	GetLost(limit uint, cond Condition) ([]Record, error)
 
 	// queue counts
 	Stat() (wait, lost int, err error)
@@ -178,7 +185,7 @@ func NewConn(db, version uint16) (Conn, error) {
 	case ConnVersion610:
 		return newV610Conn(db)
 	case ConnVersionMock:
-		return newMockConn(db)
+		return new(MockConn), nil
 	}
 
 	return nil, ErrUnknownVersion
