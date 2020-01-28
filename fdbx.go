@@ -174,6 +174,11 @@ type Indexer interface {
 	Index(idxTypeID uint16, value []byte)
 }
 
+// Aggregator - for complex queries
+type Aggregator interface {
+	InnerJoin(RecordFabric, []uint16) ([]Record, error)
+}
+
 // NewConn - makes new connection with specified client version
 func NewConn(db, version uint16) (Conn, error) {
 	// default 6.1.х
