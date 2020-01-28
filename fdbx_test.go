@@ -730,6 +730,46 @@ func benchmarkLoad(b *testing.B, page uint, cnt int) {
 	}
 }
 
+func benchmarkLoadIDs(b *testing.B, page uint, cnt int) {
+	var err error
+
+	// rtp := fdbx.RecordType{ID: TestCollection, New: recordFabric}
+
+	b.StopTimer()
+
+	conn, err := fdbx.NewConn(TestDatabase, TestVersion)
+	assert.NoError(b, err)
+	assert.NotNil(b, conn)
+	assert.NoError(b, conn.ClearDB())
+	defer conn.ClearDB()
+
+	for i := 0; i < cnt; i++ {
+		recs := makePack(b, int(page))
+
+		if err = conn.Tx(func(db fdbx.DB) error { return db.Save(nil, recs...) }); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.StartTimer()
+
+	var ids []string
+
+	for i := 0; i < b.N; i++ {
+
+		if err = conn.Tx(func(db fdbx.DB) (exp error) {
+			ids, exp = db.SelectIDs(TestIndexName)
+			return
+		}); err != nil {
+			b.Fatal(err)
+		}
+
+		if len(ids) != int(page)*cnt {
+			b.Fatal("bad len")
+		}
+	}
+}
+
 func BenchmarkSave1(b *testing.B)    { benchmarkSave(b, 1) }
 func BenchmarkSave10(b *testing.B)   { benchmarkSave(b, 10) }
 func BenchmarkSave100(b *testing.B)  { benchmarkSave(b, 100) }
@@ -738,6 +778,10 @@ func BenchmarkSave1000(b *testing.B) { benchmarkSave(b, 1000) }
 func BenchmarkLoad1_1000(b *testing.B)   { benchmarkLoad(b, 1000, 1) }
 func BenchmarkLoad10_1000(b *testing.B)  { benchmarkLoad(b, 1000, 10) }
 func BenchmarkLoad100_1000(b *testing.B) { benchmarkLoad(b, 1000, 100) }
+
+func BenchmarkLoadID1_1000(b *testing.B)   { benchmarkLoadIDs(b, 1000, 1) }
+func BenchmarkLoadID10_1000(b *testing.B)  { benchmarkLoadIDs(b, 1000, 10) }
+func BenchmarkLoadID100_1000(b *testing.B) { benchmarkLoadIDs(b, 1000, 100) }
 
 func recordFabric(id string) (fdbx.Record, error) { return &testRecord{ID: id}, nil }
 
