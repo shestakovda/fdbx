@@ -72,6 +72,10 @@ func (c *MockConn) Cursor(rtp RecordType, opts ...Option) (Cursor, error) {
 	return &mockCursor{MockConn: c}, nil
 }
 
+func (c *MockConn) CursorID(rtp RecordType, opts ...Option) (CursorID, error) {
+	return nil, nil
+}
+
 // LoadCursor - load cursor stub
 func (c *MockConn) LoadCursor(id string, rf RecordFabric, opts ...Option) (Cursor, error) {
 	return c.FLoadCursor(id, rf, opts...)

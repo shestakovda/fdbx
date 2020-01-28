@@ -632,6 +632,78 @@ func getRange(
 	return list, lastKey, nil
 }
 
+func getRangeIDs2(
+	rtx fdb.ReadTransaction,
+	rng fdb.KeyRange,
+	opt fdb.RangeOptions,
+	rev bool,
+) (list []string, lastKey fdb.Key, err error) {
+	var batch []fdb.KeyValue
+	var blrng fdb.KeyRange
+	var blkey *bytes.Buffer
+
+	first := true
+	bsize := 1000
+	opt.Mode = fdb.StreamingModeSerial
+
+	if opt.Reverse {
+		blkey = bytes.NewBuffer([]byte(rng.End.FDBKey()))
+	} else {
+		blkey = bytes.NewBuffer([]byte(rng.Begin.FDBKey()))
+	}
+	blkey.Grow(len(tail))
+
+	// batch size shouldn't be more then limit
+	if opt.Limit < bsize {
+		bsize = opt.Limit
+	}
+
+	// load records in batches
+	for opt.Limit == 0 || len(list) < opt.Limit {
+		if opt.Reverse {
+			blrng = fdb.KeyRange{Begin: rng.Begin, End: fdb.Key(blkey.Bytes())}
+		} else {
+			blrng = fdb.KeyRange{Begin: fdb.Key(blkey.Bytes()), End: rng.End}
+		}
+
+		// zero length means last batch
+		if batch = rtx.GetRange(blrng, opt).GetSliceOrPanic(); len(batch) == 0 {
+			break
+		}
+
+		// record filtering
+		for i := range batch {
+			if opt.Limit > 0 && len(list) >= opt.Limit {
+				break
+			}
+
+			blkey.Reset()
+			blkey.Grow(len(batch[i].Key) + len(tail))
+			blkey.Write([]byte(batch[i].Key))
+			if !opt.Reverse {
+				blkey.Write(tail)
+			}
+
+			if rev {
+				if first {
+					if opt.Reverse {
+						lastKey = append(batch[0].Key, tail...)
+					} else {
+						lastKey = batch[0].Key
+					}
+					first = false
+				}
+			} else {
+				lastKey = fdb.Key(blkey.Bytes())
+			}
+
+			list = append(list, getRowID(batch[i].Key))
+		}
+	}
+
+	return list, lastKey, nil
+}
+
 func clearType(dbID, typeID uint16, tx fdb.Transaction) error {
 	tx.ClearRange(fdb.KeyRange{
 		Begin: fdbKey(dbID, typeID),

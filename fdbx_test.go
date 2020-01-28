@@ -9,15 +9,13 @@ import (
 	"sync"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/google/uuid"
-
 	"github.com/shestakovda/fdbx"
 	"github.com/shestakovda/fdbx/models"
 	"github.com/stretchr/testify/assert"
 
-	flatbuffers "github.com/google/flatbuffers/go"
+	fbs "github.com/google/flatbuffers/go"
 )
 
 // current test settings
@@ -770,6 +768,57 @@ func benchmarkLoadIDs(b *testing.B, page uint, cnt int) {
 	}
 }
 
+func benchmarkIntersect(b *testing.B, page uint, cnt int) {
+	var ids []string
+	var crsName, crsNum fdbx.CursorID
+
+	ctx := context.Background()
+
+	rtpName := fdbx.RecordType{ID: TestIndexName, New: recordFabric}
+	rtpNum := fdbx.RecordType{ID: TestIndexNumber, New: recordFabric}
+
+	b.StopTimer()
+
+	conn, err := fdbx.NewConn(TestDatabase, TestVersion)
+	assert.NoError(b, err)
+	assert.NotNil(b, conn)
+	assert.NoError(b, conn.ClearDB())
+	defer conn.ClearDB()
+
+	for i := 0; i < cnt; i++ {
+		recs := makePack(b, int(page))
+
+		if err = conn.Tx(func(db fdbx.DB) error { return db.Save(nil, recs...) }); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	query := fdbx.Query([]byte("42"))
+
+	b.StartTimer()
+
+	for i := 0; i < b.N; i++ {
+
+		if crsName, err = conn.CursorID(rtpName, query); err != nil {
+			b.Fatal(err)
+		}
+
+		if crsNum, err = conn.CursorID(rtpNum, query); err != nil {
+			b.Fatal(err)
+		}
+
+		crs := []fdbx.CursorID{crsName, crsNum}
+
+		if ids, err = fdbx.Intersect(ctx, crs, 0); err != nil {
+			b.Fatal(err)
+		}
+
+		if len(ids) == 0 {
+			b.Fatal("no result")
+		}
+	}
+}
+
 func BenchmarkSave1(b *testing.B)    { benchmarkSave(b, 1) }
 func BenchmarkSave10(b *testing.B)   { benchmarkSave(b, 10) }
 func BenchmarkSave100(b *testing.B)  { benchmarkSave(b, 100) }
@@ -782,6 +831,8 @@ func BenchmarkLoad100_1000(b *testing.B) { benchmarkLoad(b, 1000, 100) }
 func BenchmarkLoadID1_1000(b *testing.B)   { benchmarkLoadIDs(b, 1000, 1) }
 func BenchmarkLoadID10_1000(b *testing.B)  { benchmarkLoadIDs(b, 1000, 10) }
 func BenchmarkLoadID100_1000(b *testing.B) { benchmarkLoadIDs(b, 1000, 100) }
+
+func BenchmarkIntersect1_1000(b *testing.B) { benchmarkIntersect(b, 1000, 1) }
 
 func recordFabric(id string) (fdbx.Record, error) { return &testRecord{ID: id}, nil }
 
@@ -833,16 +884,16 @@ func (r *testRecord) FdbxMarshal() ([]byte, error) {
 		size += 5 + len(r.Strs[i])
 	}
 
-	buf := flatbuffers.NewBuilder(size)
+	buf := fbs.NewBuilder(size)
 
 	nameOffset := buf.CreateString(r.Name)
 	dataOffset := buf.CreateByteVector(r.Data)
 
 	// Strs
 	strsCount := len(r.Strs)
-	var strsArr flatbuffers.UOffsetT
+	var strsArr fbs.UOffsetT
 	if strsCount != 0 {
-		strs := make([]flatbuffers.UOffsetT, strsCount)
+		strs := make([]fbs.UOffsetT, strsCount)
 		for i := range r.Strs {
 			strs[strsCount-i-1] = buf.CreateString(r.Strs[i])
 		}
@@ -870,31 +921,16 @@ func (r *testRecord) FdbxUnmarshal(buf []byte) error {
 	r.Decimal = model.Float()
 	r.Logic = model.Logic()
 	r.Number = model.Number()
-	r.Name = b2s(model.Name())
+	r.Name = fdbx.B2S(model.Name())
 	r.Data = model.DataBytes()
 
 	// Strs
 	if model.StringsLength() != 0 {
 		r.Strs = make([]string, model.StringsLength())
 		for i := range r.Strs {
-			r.Strs[i] = b2s(model.Strings(i))
+			r.Strs[i] = fdbx.B2S(model.Strings(i))
 		}
 	}
 
 	return nil
-
-}
-
-func s2b(s string) []byte {
-	if s == "" {
-		return nil
-	}
-	return *(*[]byte)(unsafe.Pointer(&s))
-}
-
-func b2s(b []byte) string {
-	if len(b) == 0 {
-		return ""
-	}
-	return *(*string)(unsafe.Pointer(&b))
 }

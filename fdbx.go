@@ -88,6 +88,8 @@ type Conn interface {
 	Cursor(rtp RecordType, opts ...Option) (Cursor, error)
 	LoadCursor(id string, rf RecordFabric, opts ...Option) (Cursor, error)
 
+	CursorID(rtp RecordType, opts ...Option) (CursorID, error)
+
 	StartClearDaemon()
 }
 
@@ -127,6 +129,22 @@ type Cursor interface {
 
 	// select all records from current position to the end of collection
 	Select(ctx context.Context) (<-chan Record, <-chan error)
+}
+
+// CursorID - helper for long seq scan queries or pagination
+type CursorID interface {
+	// if true, there are no records Next from cursor, but you can use Prev
+	Empty() bool
+
+	// mark cursor as empty and drop it from database
+	Close() error
+
+	// next or prev `page` records from collection or index
+	Next(db DB, skip uint8) ([]string, error)
+	Prev(db DB, skip uint8) ([]string, error)
+
+	// select all records from current position to the end of collection
+	Select(ctx context.Context) (<-chan string, <-chan error)
 }
 
 // Queue - async task manager (pub/sub) with persistent storage and processing delay
@@ -172,11 +190,6 @@ type Indexer interface {
 	Grow(n int)
 	// append key for indexing as idxTypeID
 	Index(idxTypeID uint16, value []byte)
-}
-
-// Aggregator - for complex queries
-type Aggregator interface {
-	InnerJoin(RecordFabric, []uint16) ([]Record, error)
 }
 
 // NewConn - makes new connection with specified client version

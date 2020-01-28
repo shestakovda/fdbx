@@ -66,6 +66,10 @@ func (c *v610Conn) Cursor(rtp RecordType, opts ...Option) (Cursor, error) {
 	return newV610cursor(c, "", rtp, opts...)
 }
 
+func (c *v610Conn) CursorID(rtp RecordType, opts ...Option) (CursorID, error) {
+	return newidscursor(c, "", rtp.ID, opts...)
+}
+
 func (c *v610Conn) LoadCursor(id string, rf RecordFabric, opts ...Option) (_ Cursor, err error) {
 	var cur *v610cursor
 
