@@ -651,7 +651,45 @@ func TestQueue(t *testing.T) {
 	assert.Len(t, lost, 0)
 }
 
-func makePack(b *testing.B, cnt int) []fdbx.Record {
+func TestIntersect(t *testing.T) {
+	var ids []string
+	var crsName, crsNum fdbx.CursorID
+
+	ctx := context.Background()
+
+	rtpName := fdbx.RecordType{ID: TestIndexName, New: recordFabric}
+	rtpNum := fdbx.RecordType{ID: TestIndexNumber, New: recordFabric}
+
+	conn, err := fdbx.NewConn(TestDatabase, TestVersion)
+	assert.NoError(t, err)
+	assert.NotNil(t, conn)
+	assert.NoError(t, conn.ClearDB())
+	defer conn.ClearDB()
+
+	recs := makePack(999)
+	arec := newTestRecord()
+	arec.Name = "42"
+	arec.Number = 42
+	recs = append(recs, arec)
+
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, recs...) }))
+
+	query := fdbx.Query([]byte("42"))
+
+	crsName, err = conn.CursorID(rtpName, query)
+	assert.NoError(t, err)
+
+	crsNum, err = conn.CursorID(rtpNum, query)
+	assert.NoError(t, err)
+
+	crs := []fdbx.CursorID{crsName, crsNum}
+
+	ids, err = fdbx.Intersect(ctx, crs, 0)
+	assert.NoError(t, err)
+	assert.True(t, len(ids) >= 1)
+}
+
+func makePack(cnt int) []fdbx.Record {
 	recs := make([]fdbx.Record, cnt)
 
 	for i := range recs {
@@ -671,7 +709,7 @@ func benchmarkSave(b *testing.B, cnt int) {
 	assert.NoError(b, conn.ClearDB())
 	defer conn.ClearDB()
 
-	recs := makePack(b, cnt)
+	recs := makePack(cnt)
 
 	b.StartTimer()
 
@@ -697,7 +735,7 @@ func benchmarkLoad(b *testing.B, page uint, cnt int) {
 	defer conn.ClearDB()
 
 	for i := 0; i < cnt; i++ {
-		recs := makePack(b, int(page))
+		recs := makePack(int(page))
 
 		if err = conn.Tx(func(db fdbx.DB) error { return db.Save(nil, recs...) }); err != nil {
 			b.Fatal(err)
@@ -742,7 +780,7 @@ func benchmarkLoadIDs(b *testing.B, page uint, cnt int) {
 	defer conn.ClearDB()
 
 	for i := 0; i < cnt; i++ {
-		recs := makePack(b, int(page))
+		recs := makePack(int(page))
 
 		if err = conn.Tx(func(db fdbx.DB) error { return db.Save(nil, recs...) }); err != nil {
 			b.Fatal(err)
@@ -768,16 +806,16 @@ func benchmarkLoadIDs(b *testing.B, page uint, cnt int) {
 	}
 }
 
-func benchmarkIntersect(b *testing.B, page uint, cnt int) {
+func BenchmarkIntersect(b *testing.B) {
 	var ids []string
 	var crsName, crsNum fdbx.CursorID
 
+	cnt := 10
+	page := 1000
 	ctx := context.Background()
 
 	rtpName := fdbx.RecordType{ID: TestIndexName, New: recordFabric}
 	rtpNum := fdbx.RecordType{ID: TestIndexNumber, New: recordFabric}
-
-	b.StopTimer()
 
 	conn, err := fdbx.NewConn(TestDatabase, TestVersion)
 	assert.NoError(b, err)
@@ -786,37 +824,57 @@ func benchmarkIntersect(b *testing.B, page uint, cnt int) {
 	defer conn.ClearDB()
 
 	for i := 0; i < cnt; i++ {
-		recs := makePack(b, int(page))
+		recs := makePack(page - 1)
+
+		arec := newTestRecord()
+		arec.Name = "4"
+		arec.Number = 4
+
+		recs = append(recs, arec)
 
 		if err = conn.Tx(func(db fdbx.DB) error { return db.Save(nil, recs...) }); err != nil {
 			b.Fatal(err)
 		}
 	}
 
-	query := fdbx.Query([]byte("42"))
-
-	b.StartTimer()
-
-	for i := 0; i < b.N; i++ {
-
-		if crsName, err = conn.CursorID(rtpName, query); err != nil {
-			b.Fatal(err)
-		}
-
-		if crsNum, err = conn.CursorID(rtpNum, query); err != nil {
-			b.Fatal(err)
-		}
-
-		crs := []fdbx.CursorID{crsName, crsNum}
-
-		if ids, err = fdbx.Intersect(ctx, crs, 0); err != nil {
-			b.Fatal(err)
-		}
-
-		if len(ids) == 0 {
-			b.Fatal("no result")
-		}
+	if crsName, err = conn.CursorID(rtpName); err != nil {
+		b.Fatal(err)
 	}
+
+	if crsNum, err = conn.CursorID(rtpNum); err != nil {
+		b.Fatal(err)
+	}
+
+	crs := []fdbx.CursorID{crsName, crsNum}
+
+	if ids, err = fdbx.Intersect(ctx, crs, 0); err != nil {
+		b.Fatal(err)
+	}
+
+	total := len(ids)
+
+	b.Run(fmt.Sprintf("%d-pairs", total), func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+
+			if crsName, err = conn.CursorID(rtpName); err != nil {
+				b.Fatal(err)
+			}
+
+			if crsNum, err = conn.CursorID(rtpNum); err != nil {
+				b.Fatal(err)
+			}
+
+			crs := []fdbx.CursorID{crsName, crsNum}
+
+			if ids, err = fdbx.Intersect(ctx, crs, 0); err != nil {
+				b.Fatal(err)
+			}
+
+			if len(ids) != total {
+				b.Fatal("incorrect result")
+			}
+		}
+	})
 }
 
 func BenchmarkSave1(b *testing.B)    { benchmarkSave(b, 1) }
@@ -831,8 +889,6 @@ func BenchmarkLoad100_1000(b *testing.B) { benchmarkLoad(b, 1000, 100) }
 func BenchmarkLoadID1_1000(b *testing.B)   { benchmarkLoadIDs(b, 1000, 1) }
 func BenchmarkLoadID10_1000(b *testing.B)  { benchmarkLoadIDs(b, 1000, 10) }
 func BenchmarkLoadID100_1000(b *testing.B) { benchmarkLoadIDs(b, 1000, 100) }
-
-func BenchmarkIntersect1_1000(b *testing.B) { benchmarkIntersect(b, 1000, 1) }
 
 func recordFabric(id string) (fdbx.Record, error) { return &testRecord{ID: id}, nil }
 

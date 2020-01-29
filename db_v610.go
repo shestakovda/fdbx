@@ -111,6 +111,10 @@ func selectOpts(opts []Option) (opt *options, err error) {
 	}
 	opt.to = append(opt.to, tail...)
 
+	if opt.page == 0 {
+		opt.page = 1000
+	}
+
 	return opt, nil
 }
 

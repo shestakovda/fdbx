@@ -20,15 +20,14 @@ func Intersect(
 
 	for i := range crs {
 		max |= 1 << i
-		idsc, errc := crs[i].Select(wctx)
-		idscl = append(idscl, idsc)
-		errcl = append(errcl, errc)
+		idscl[i], errcl[i] = crs[i].Select(wctx)
 	}
 
 	sum := make(map[string]uint64, 64)
 	cum := make(map[string]struct{}, 64)
 
 	for chid := range mergeStrc(idscl...) {
+
 		sum[chid.id] |= 1 << chid.n
 
 		if sum[chid.id] == max {
@@ -57,7 +56,7 @@ type chanID struct {
 func mergeStrc(strcl ...<-chan string) <-chan *chanID {
 	var wgp sync.WaitGroup
 
-	merged := make(chan *chanID, len(strcl))
+	merged := make(chan *chanID)
 
 	wgp.Add(len(strcl))
 
@@ -67,7 +66,6 @@ func mergeStrc(strcl ...<-chan string) <-chan *chanID {
 		for str := range strc {
 			if str != "" {
 				merged <- &chanID{n, str}
-				return
 			}
 		}
 	}
