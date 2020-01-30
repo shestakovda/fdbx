@@ -190,7 +190,7 @@ func loadRecord(
 		return ErrRecordNotFound.WithStack()
 	}
 
-	if _, buf, err = unpackValue(dbID, rtx, buf); err != nil {
+	if _, _, buf, err = unpackValue(dbID, rtx, buf); err != nil {
 		return
 	}
 
@@ -239,7 +239,7 @@ func saveRecord(
 			}
 		}
 
-		if _, buf, err = unpackValue(dbID, tx, buf); err != nil {
+		if _, _, buf, err = unpackValue(dbID, tx, buf); err != nil {
 			return
 		}
 
@@ -256,7 +256,7 @@ func saveRecord(
 		return
 	}
 
-	if buf, err = packValue(dbID, tx, buf); err != nil {
+	if buf, err = packValue(dbID, tx, buf, rec.FdbxType().Ver); err != nil {
 		return
 	}
 
@@ -284,7 +284,7 @@ func dropRecord(
 		return nil
 	}
 
-	if blobID, buf, err = unpackValue(dbID, tx, buf); err != nil {
+	if _, blobID, buf, err = unpackValue(dbID, tx, buf); err != nil {
 		return
 	}
 
@@ -304,7 +304,9 @@ func setIndexes(dbID uint16, tx fdb.Transaction, rec Record, buf []byte, drop bo
 	idx := new(v610Indexer)
 
 	if drop {
-		if rcp, err = rec.FdbxType().New(rid); err != nil {
+		rtp := rec.FdbxType()
+
+		if rcp, err = rtp.New(rtp.Ver, rid); err != nil {
 			return
 		}
 
@@ -322,7 +324,7 @@ func setIndexes(dbID uint16, tx fdb.Transaction, rec Record, buf []byte, drop bo
 	return idx.commit(dbID, tx, drop, rid)
 }
 
-func packValue(dbID uint16, tx fdb.Transaction, value []byte) (_ []byte, err error) {
+func packValue(dbID uint16, tx fdb.Transaction, value []byte, ver uint8) (_ []byte, err error) {
 	var flags uint8
 
 	// so long, try to reduce
@@ -337,18 +339,29 @@ func packValue(dbID uint16, tx fdb.Transaction, value []byte) (_ []byte, err err
 		value = saveBlob(dbID, tx, &flags, value)
 	}
 
-	return append([]byte{flags}, value...), nil
+	// versioned model
+	flags |= flagVersion
+
+	return append([]byte{flags, ver}, value...), nil
 }
 
-func unpackValue(dbID uint16, rtx fdb.ReadTransaction, value []byte) (blobID, buffer []byte, err error) {
+func unpackValue(dbID uint16, rtx fdb.ReadTransaction, value []byte) (ver uint8, blobID, buffer []byte, err error) {
+	index := 1
 	flags := value[0]
-	buffer = value[1:]
+
+	// read model version
+	if flags&flagVersion > 0 {
+		ver = uint8(value[index])
+		index++
+	}
+
+	buffer = value[index:]
 
 	// blob data
 	if flags&flagChunk > 0 {
 		blobID = buffer
 
-		if buffer, err = loadBlob(dbID, rtx, buffer); err != nil {
+		if buffer, err = loadBlob(dbID, rtx, blobID); err != nil {
 			return
 		}
 	}
@@ -360,7 +373,7 @@ func unpackValue(dbID uint16, rtx fdb.ReadTransaction, value []byte) (blobID, bu
 		}
 	}
 
-	return blobID, buffer, nil
+	return ver, blobID, buffer, nil
 }
 
 func loadBlob(dbID uint16, rtx fdb.ReadTransaction, value []byte) (blob []byte, err error) {
@@ -510,6 +523,7 @@ func getRange(
 	cnd Condition,
 	rev bool,
 ) (list []Record, lastKey fdb.Key, err error) {
+	var rcver uint8
 	var blrec Record
 	var rcbuf []byte
 	var batch []fdb.KeyValue
@@ -564,7 +578,7 @@ func getRange(
 			}
 
 			// get record type id
-			if blrec, err = rtp.New(getRowID(batch[0].Key)); err != nil {
+			if blrec, err = rtp.New(rtp.Ver, getRowID(batch[0].Key)); err != nil {
 				return
 			}
 
@@ -607,11 +621,11 @@ func getRange(
 				lastKey = fdb.Key(blkey.Bytes())
 			}
 
-			if blrec, err = rtp.New(getRowID(batch[i].Key)); err != nil {
+			if rcver, _, rcbuf, err = unpackValue(dbID, rtx, batch[i].Value); err != nil {
 				return
 			}
 
-			if _, rcbuf, err = unpackValue(dbID, rtx, batch[i].Value); err != nil {
+			if blrec, err = rtp.New(rcver, getRowID(batch[i].Key)); err != nil {
 				return
 			}
 

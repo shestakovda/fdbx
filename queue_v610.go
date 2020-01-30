@@ -248,7 +248,7 @@ func (q *v610queue) loadRecs(ids []string) (list []Record, err error) {
 	list = make([]Record, len(ids))
 
 	for i := range ids {
-		if list[i], err = q.rtp.New(ids[i]); err != nil {
+		if list[i], err = q.rtp.New(q.rtp.Ver, ids[i]); err != nil {
 			return
 		}
 	}

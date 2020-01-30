@@ -76,7 +76,7 @@ func (cur *v610cursor) FdbxID() string { return cur.id }
 func (cur *v610cursor) FdbxType() RecordType {
 	return RecordType{
 		ID:  CursorTypeID,
-		New: func(id string) (Record, error) { return &v610cursor{id: id}, nil },
+		New: func(ver uint8, id string) (Record, error) { return &v610cursor{id: id}, nil },
 	}
 }
 func (cur *v610cursor) FdbxIndex(idx Indexer) error {

@@ -40,7 +40,7 @@ func BenchmarkRecKey(b *testing.B) {
 	}
 }
 
-func recordFabric(id string) (Record, error) { return &testRecord{ID: id}, nil }
+func recordFabric(ver uint8, id string) (Record, error) { return &testRecord{ID: id}, nil }
 
 func newTestRecord() *testRecord {
 	uid := uuid.New()

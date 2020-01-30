@@ -39,8 +39,9 @@ var (
 )
 
 const (
-	flagGZip  = uint8(1 << 6)
-	flagChunk = uint8(1 << 7)
+	flagVersion = uint8(1 << 5)
+	flagGZip    = uint8(1 << 6)
+	flagChunk   = uint8(1 << 7)
 )
 
 // TaskStatus - alias
@@ -63,7 +64,7 @@ type IndexHandler func(Indexer) error
 type RecordHandler func(Record) error
 
 // RecordFabric -
-type RecordFabric func(id string) (Record, error)
+type RecordFabric func(ver uint8, id string) (Record, error)
 
 // Condition - for query filtering, especially for seq scan queries
 type Condition func(Record) (bool, error)
@@ -74,6 +75,7 @@ type Option func(*options) error
 // RecordType - to describe record collection
 type RecordType struct {
 	ID  uint16
+	Ver uint8
 	New RecordFabric
 }
 

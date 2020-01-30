@@ -890,7 +890,7 @@ func BenchmarkLoadID1_1000(b *testing.B)   { benchmarkLoadIDs(b, 1000, 1) }
 func BenchmarkLoadID10_1000(b *testing.B)  { benchmarkLoadIDs(b, 1000, 10) }
 func BenchmarkLoadID100_1000(b *testing.B) { benchmarkLoadIDs(b, 1000, 100) }
 
-func recordFabric(id string) (fdbx.Record, error) { return &testRecord{ID: id}, nil }
+func recordFabric(ver uint8, id string) (fdbx.Record, error) { return &testRecord{ID: id}, nil }
 
 func newTestRecord() *testRecord {
 	uid := uuid.New()
