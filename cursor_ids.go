@@ -2,11 +2,9 @@ package fdbx
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/google/uuid"
 )
 
 func newidscursor(conn *v610Conn, id string, typeID uint16, opts ...Option) (_ *idscursor, err error) {
@@ -18,8 +16,7 @@ func newidscursor(conn *v610Conn, id string, typeID uint16, opts ...Option) (_ *
 	}
 
 	if id == "" {
-		uid := uuid.New()
-		id = fmt.Sprintf("%x", uid[:])
+		id = UUID()
 	}
 
 	from := fdbKey(conn.db, typeID, opt.from)

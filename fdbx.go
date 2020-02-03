@@ -2,8 +2,12 @@ package fdbx
 
 import (
 	"context"
+	"encoding/hex"
+	"reflect"
 	"time"
 	"unsafe"
+
+	"github.com/google/uuid"
 )
 
 // Supported FoundationDB client versions
@@ -211,12 +215,22 @@ func NewConn(db, version uint16) (Conn, error) {
 	return nil, ErrUnknownVersion
 }
 
+// UUID - new uuid v4 string without dashes
+func UUID() string {
+	id := uuid.New()
+	return hex.EncodeToString(id[:])
+}
+
 // S2B - fast and dangerous!
 func S2B(s string) []byte {
 	if s == "" {
 		return nil
 	}
-	return *(*[]byte)(unsafe.Pointer(&s))
+	return *(*[]byte)(unsafe.Pointer(&reflect.SliceHeader{
+		Data: (*reflect.StringHeader)(unsafe.Pointer(&s)).Data,
+		Len:  len(s),
+		Cap:  len(s),
+	}))
 }
 
 // S2B - fast and dangerous!

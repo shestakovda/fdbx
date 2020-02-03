@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/google/uuid"
 )
 
 func newV610cursor(conn *v610Conn, id string, rtp RecordType, opts ...Option) (_ *v610cursor, err error) {
@@ -20,8 +18,7 @@ func newV610cursor(conn *v610Conn, id string, rtp RecordType, opts ...Option) (_
 	}
 
 	if id == "" {
-		uid := uuid.New()
-		id = fmt.Sprintf("%x", uid[:])
+		id = UUID()
 	}
 
 	from := fdbKey(conn.db, rtp.ID, opt.from)
