@@ -177,6 +177,7 @@ func loadRecord(
 	fb fdb.FutureByteSlice,
 	onNotFound RecordHandler,
 ) (err error) {
+	var ver uint8
 	var buf []byte
 
 	if buf, err = fb.Get(); err != nil {
@@ -190,8 +191,16 @@ func loadRecord(
 		return ErrRecordNotFound.WithStack()
 	}
 
-	if _, _, buf, err = unpackValue(dbID, rtx, buf); err != nil {
+	if ver, _, buf, err = unpackValue(dbID, rtx, buf); err != nil {
 		return
+	}
+
+	rtp := rec.FdbxType()
+
+	if ver != rtp.Ver {
+		if rec, err = rtp.New(ver, rec.FdbxID()); err != nil {
+			return
+		}
 	}
 
 	return rec.FdbxUnmarshal(buf)
@@ -226,6 +235,7 @@ func saveRecord(
 	rec Record,
 	onExists RecordHandler,
 ) (err error) {
+	var ver uint8
 	var buf []byte
 
 	if buf, err = fb.Get(); err != nil {
@@ -239,24 +249,26 @@ func saveRecord(
 			}
 		}
 
-		if _, _, buf, err = unpackValue(dbID, tx, buf); err != nil {
+		if ver, _, buf, err = unpackValue(dbID, tx, buf); err != nil {
 			return
 		}
 
-		if err = setIndexes(dbID, tx, rec, buf, true); err != nil {
+		if err = setIndexes(dbID, tx, rec, ver, buf, true); err != nil {
 			return
 		}
 	}
+
+	ver = rec.FdbxType().Ver
 
 	if buf, err = rec.FdbxMarshal(); err != nil {
 		return
 	}
 
-	if err = setIndexes(dbID, tx, rec, buf, false); err != nil {
+	if err = setIndexes(dbID, tx, rec, ver, buf, false); err != nil {
 		return
 	}
 
-	if buf, err = packValue(dbID, tx, buf, rec.FdbxType().Ver); err != nil {
+	if buf, err = packValue(dbID, tx, buf, ver); err != nil {
 		return
 	}
 
@@ -271,6 +283,7 @@ func dropRecord(
 	fb fdb.FutureByteSlice,
 	onNotExists RecordHandler,
 ) (err error) {
+	var ver uint8
 	var buf, blobID []byte
 
 	if buf, err = fb.Get(); err != nil {
@@ -284,7 +297,7 @@ func dropRecord(
 		return nil
 	}
 
-	if _, blobID, buf, err = unpackValue(dbID, tx, buf); err != nil {
+	if ver, blobID, buf, err = unpackValue(dbID, tx, buf); err != nil {
 		return
 	}
 
@@ -294,19 +307,18 @@ func dropRecord(
 		}
 	}
 
-	return setIndexes(dbID, tx, rec, buf, true)
+	return setIndexes(dbID, tx, rec, ver, buf, true)
 }
 
-func setIndexes(dbID uint16, tx fdb.Transaction, rec Record, buf []byte, drop bool) (err error) {
+func setIndexes(dbID uint16, tx fdb.Transaction, rec Record, ver uint8, buf []byte, drop bool) (err error) {
 	var rcp Record
 
 	rid := rec.FdbxID()
+	rtp := rec.FdbxType()
 	idx := new(v610Indexer)
 
 	if drop {
-		rtp := rec.FdbxType()
-
-		if rcp, err = rtp.New(rtp.Ver, rid); err != nil {
+		if rcp, err = rtp.New(ver, rid); err != nil {
 			return
 		}
 
