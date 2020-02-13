@@ -54,11 +54,20 @@ func (c *v610Conn) Tx(h TxHandler) error {
 	return exp
 }
 
-func (c *v610Conn) Queue(rtp RecordType, prefix string) (Queue, error) {
+func (c *v610Conn) Queue(rtp RecordType, prefix string, opts ...Option) (Queue, error) {
+	opt := new(options)
+
+	for i := range opts {
+		if err := opts[i](opt); err != nil {
+			return nil, err
+		}
+	}
+
 	return &v610queue{
 		cn:  c,
 		rtp: &rtp,
 		pf:  prefix,
+		nf:  opt.onNotFound,
 	}, nil
 }
 

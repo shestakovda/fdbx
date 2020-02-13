@@ -63,7 +63,7 @@ func (c *MockConn) Tx(h TxHandler) error { return h(newMockDB(c)) }
 func (c *MockConn) StartClearDaemon() {}
 
 // Queue - queue stub, create mock object
-func (c *MockConn) Queue(rtp RecordType, prefix string) (Queue, error) {
+func (c *MockConn) Queue(rtp RecordType, prefix string, opts ...Option) (Queue, error) {
 	return &mockQueue{MockConn: c}, nil
 }
 

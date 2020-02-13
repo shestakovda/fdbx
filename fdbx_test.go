@@ -560,20 +560,28 @@ func TestLongValuesIndex(t *testing.T) {
 }
 
 func TestQueue(t *testing.T) {
+	const recCount = 3
+
 	conn, err := fdbx.NewConn(TestDatabase, TestVersion)
 	assert.NoError(t, err)
 	assert.NotNil(t, conn)
 	assert.NoError(t, conn.ClearDB())
 	defer conn.ClearDB()
 
-	records := make([]fdbx.Record, 3)
+	records := make([]fdbx.Record, recCount)
 	for i := range records {
 		records[i] = newTestRecord()
 	}
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Save(nil, records...) }))
 
-	queue, err := conn.Queue(fdbx.RecordType{ID: TestQueueType, New: recordFabric}, "memberID")
+	notFound := "deleted!"
+	notFoundHandler := fdbx.OnNotFound(func(rec fdbx.Record) error {
+		assert.Equal(t, notFound, rec.FdbxID())
+		return nil
+	})
+
+	queue, err := conn.Queue(fdbx.RecordType{ID: TestQueueType, New: recordFabric}, "memberID", notFoundHandler)
 	assert.NoError(t, err)
 	assert.NotNil(t, queue)
 
@@ -592,22 +600,26 @@ func TestQueue(t *testing.T) {
 
 		recc, errc := queue.Sub(ctx)
 
-		recs := make([]fdbx.Record, 0, 3)
+		recs := make([]fdbx.Record, 0, recCount)
 		for rec := range recc {
 			recs = append(recs, rec)
 		}
 
-		errs := make([]error, 0, 3)
+		errs := make([]error, 0, 1)
 		for err := range errc {
 			errs = append(errs, err)
 		}
 
-		assert.Len(t, recs, 3)
+		assert.Len(t, recs, recCount)
 		assert.Len(t, errs, 1)
 		assert.True(t, errors.Is(errs[0], context.DeadlineExceeded))
 	}()
 
-	for i := 0; i < 3; i++ {
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
+		return queue.Pub(db, time.Now().Add(fdbx.PunchSize), notFound)
+	}))
+
+	for i := 0; i < recCount; i++ {
 		time.Sleep(fdbx.PunchSize)
 
 		assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
@@ -619,12 +631,12 @@ func TestQueue(t *testing.T) {
 
 	lost, err := queue.GetLost(0, nil)
 	assert.NoError(t, err)
-	assert.Len(t, lost, 3)
+	assert.Len(t, lost, recCount)
 
 	wcnt, lcnt, err := queue.Stat()
 	assert.NoError(t, err)
 	assert.Equal(t, 0, wcnt)
-	assert.Equal(t, 3, lcnt)
+	assert.Equal(t, recCount+1, lcnt)
 
 	ack := make([]string, len(lost))
 	for i := range lost {
@@ -635,7 +647,7 @@ func TestQueue(t *testing.T) {
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
 		res, err := queue.Status(db, ack...)
-		assert.Len(t, res, 3)
+		assert.Len(t, res, recCount)
 		assert.Equal(t, map[string]fdbx.TaskStatus{
 			ack[0]: fdbx.StatusUnconfirmed,
 			ack[1]: fdbx.StatusConfirmed,

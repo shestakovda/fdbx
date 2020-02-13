@@ -89,7 +89,7 @@ type Conn interface {
 
 	Tx(TxHandler) error
 
-	Queue(rtp RecordType, prefix string) (Queue, error)
+	Queue(rtp RecordType, prefix string, opts ...Option) (Queue, error)
 
 	Cursor(rtp RecordType, opts ...Option) (Cursor, error)
 	LoadCursor(id string, rf RecordFabric, opts ...Option) (Cursor, error)

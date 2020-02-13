@@ -150,7 +150,7 @@ func selectRecords(
 	rng := fdb.KeyRange{Begin: fdbKey(dbID, rtp.ID, opt.from), End: fdbKey(dbID, rtp.ID, opt.to)}
 	rngOpt := fdb.RangeOptions{Mode: fdb.StreamingModeSerial, Limit: opt.limit, Reverse: opt.reverse != nil}
 
-	list, _, err = getRange(dbID, rtx, rng, rngOpt, rtp, opt.cond, false)
+	list, _, err = getRange(dbID, rtx, rng, rngOpt, rtp, opt.cond, false, opt.onNotFound)
 	return
 }
 
@@ -534,6 +534,7 @@ func getRange(
 	rtp *RecordType,
 	cnd Condition,
 	rev bool,
+	onNotFound RecordHandler,
 ) (list []Record, lastKey fdb.Key, err error) {
 	var rcver uint8
 	var blrec Record
@@ -631,6 +632,18 @@ func getRange(
 				}
 			} else {
 				lastKey = fdb.Key(blkey.Bytes())
+			}
+
+			if len(batch[i].Value) == 0 {
+				if onNotFound != nil {
+					if blrec, err = rtp.New(0, getRowID(batch[i].Key)); err != nil {
+						return
+					}
+					if err = onNotFound(blrec); err != nil {
+						return
+					}
+				}
+				continue
 			}
 
 			if rcver, _, rcbuf, err = unpackValue(dbID, rtx, batch[i].Value); err != nil {

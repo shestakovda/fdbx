@@ -1,12 +1,13 @@
 package fdbx
 
 type options struct {
-	to      []byte
-	from    []byte
-	page    int
-	limit   int
-	cond    Condition
-	reverse *struct{}
+	to         []byte
+	from       []byte
+	page       int
+	limit      int
+	cond       Condition
+	reverse    *struct{}
+	onNotFound RecordHandler
 }
 
 // Page - max count of selected models
@@ -62,6 +63,14 @@ func Query(value []byte) Option {
 func Reverse() Option {
 	return func(o *options) error {
 		o.reverse = &struct{}{}
+		return nil
+	}
+}
+
+// OnNotFound - select from end to start
+func OnNotFound(h RecordHandler) Option {
+	return func(o *options) error {
+		o.onNotFound = h
 		return nil
 	}
 }

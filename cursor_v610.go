@@ -43,9 +43,10 @@ func newV610cursor(conn *v610Conn, id string, rtp RecordType, opts ...Option) (_
 		Reverse: opt.reverse != nil,
 		Created: time.Now(),
 
-		conn: conn,
-		rtp:  &rtp,
-		cond: opt.cond,
+		conn:       conn,
+		rtp:        &rtp,
+		cond:       opt.cond,
+		onNotFound: opt.onNotFound,
 	}, nil
 }
 
@@ -62,9 +63,10 @@ type v610cursor struct {
 	Reverse bool      `json:"rev"`
 	Created time.Time `json:"created"`
 
-	rtp  *RecordType
-	conn *v610Conn
-	cond Condition
+	rtp        *RecordType
+	conn       *v610Conn
+	cond       Condition
+	onNotFound RecordHandler
 }
 
 // ********************** As Record **********************
@@ -139,6 +141,7 @@ func (cur *v610cursor) applyOpts(opts []Option) (err error) {
 	cur.IsEmpty = false
 	cur.rtp.ID = cur.Index
 	cur.cond = opt.cond
+	cur.onNotFound = opt.onNotFound
 	return nil
 }
 
@@ -202,7 +205,9 @@ func (cur *v610cursor) getPage(db DB, skip uint8, next bool) (list []Record, err
 		}
 	}
 
-	if list, cur.Pos, err = getRange(db610.conn.db, db610.tx, rng, opt, cur.rtp, cur.cond, !next); err != nil {
+	if list, cur.Pos, err = getRange(
+		db610.conn.db, db610.tx, rng, opt, cur.rtp, cur.cond, !next, cur.onNotFound,
+	); err != nil {
 		return
 	}
 

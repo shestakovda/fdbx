@@ -13,6 +13,7 @@ type v610queue struct {
 	pf  string
 	rtp *RecordType
 	cn  *v610Conn
+	nf  RecordHandler
 }
 
 func (q *v610queue) Ack(db DB, ids ...string) error {
@@ -175,6 +176,10 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 	var recs []Record
 	var wait fdb.FutureNil
 
+	if limit < 1 {
+		return nil, nil
+	}
+
 	for len(list) == 0 {
 		if err = q.waitTask(ctx, wait); err != nil {
 			return
@@ -197,18 +202,12 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 				End:   q.dataKey(now),
 			}
 
-			lim := int(limit) - len(list)
-
-			if lim < 1 {
-				return nil, nil
-			}
-
 			// must lock this range from parallel reads
 			if e = tx.AddWriteConflictRange(rng); e != nil {
 				return
 			}
 
-			opts := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: lim}
+			opts := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Limit: int(limit)}
 
 			if rows = tx.GetRange(rng, opts).GetSliceOrPanic(); len(rows) == 0 {
 				wait = tx.Watch(q.watchKey())
@@ -245,18 +244,39 @@ func (q *v610queue) SubList(ctx context.Context, limit uint) (list []Record, err
 }
 
 func (q *v610queue) loadRecs(ids []string) (list []Record, err error) {
-	list = make([]Record, len(ids))
+	tmp := make([]Record, len(ids))
+	list = make([]Record, 0, len(ids))
+	skip := make(map[string]struct{}, len(ids))
 
 	for i := range ids {
-		if list[i], err = q.rtp.New(q.rtp.Ver, ids[i]); err != nil {
+		if tmp[i], err = q.rtp.New(q.rtp.Ver, ids[i]); err != nil {
 			return
 		}
 	}
 
-	_, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (interface{}, error) {
-		return nil, loadRecords(q.cn.db, rtx, nil, list...)
-	})
-	return list, err
+	onNotFound := func(rec Record) (exp error) {
+		if q.nf != nil {
+			if exp = q.nf(rec); exp != nil {
+				return
+			}
+		}
+
+		skip[rec.FdbxID()] = struct{}{}
+		return nil
+	}
+
+	if _, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (interface{}, error) {
+		return nil, loadRecords(q.cn.db, rtx, onNotFound, tmp...)
+	}); err != nil {
+		return
+	}
+
+	for i := range tmp {
+		if _, ok := skip[tmp[i].FdbxID()]; !ok {
+			list = append(list, tmp[i])
+		}
+	}
+	return list, nil
 }
 
 func (q *v610queue) GetLost(limit uint, cond Condition) (list []Record, err error) {
@@ -267,7 +287,7 @@ func (q *v610queue) GetLost(limit uint, cond Condition) (list []Record, err erro
 	}
 
 	_, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (_ interface{}, exp error) {
-		list, _, exp = getRange(q.cn.db, rtx, rng, opt, q.rtp, cond, false)
+		list, _, exp = getRange(q.cn.db, rtx, rng, opt, q.rtp, cond, false, q.nf)
 		return
 	})
 	return list, err

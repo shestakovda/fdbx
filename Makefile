@@ -8,7 +8,7 @@ fmt:
 	@go mod tidy
 
 test: fmt
-	@go test -count=10 -timeout 10s -run . -race -cover ./...
+	@go test -count=10 -timeout 20s -run . -race -cover ./...
 
 bench: fmt
 	@go test -bench . -benchmem -benchtime 30s .
