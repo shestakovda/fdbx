@@ -12,6 +12,7 @@ type MockConn struct {
 
 	// ***** DB *****
 
+	FAt         func(id uint16) DB
 	FClearAll   func() error
 	FSet        func(ctype uint16, id, value []byte) error
 	FGet        func(ctype uint16, id []byte) ([]byte, error)

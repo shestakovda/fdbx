@@ -24,13 +24,13 @@ const (
 //nolint:gochecknoglobals
 var (
 	// CursorTypeID is collection number for storing cursors
-	CursorTypeID = uint16(0xFFFD)
+	CursorTypeID uint16 = 0xFFFD
 
 	// CursorIndexID is collection number for storing cursor created index
-	CursorIndexID = uint16(0xFFFE)
+	CursorIndexID uint16 = 0xFFFE
 
 	// ChunkTypeID is collection number for storing blob chunks. Default uint16 max value
-	ChunkTypeID = uint16(0xFFFF)
+	ChunkTypeID uint16 = 0xFFFF
 
 	// ChunkSize is max chunk length. Default 100 Kb - fdb value limit
 	ChunkSize = 100000
@@ -101,6 +101,8 @@ type Conn interface {
 
 // DB - database object that holds connection for transaction handler
 type DB interface {
+	At(dbID uint16) DB
+
 	Set(typeID uint16, id, value []byte) error
 	Get(typeID uint16, id []byte) ([]byte, error)
 	Del(typeID uint16, id []byte) error
@@ -219,6 +221,11 @@ func NewConn(db, version uint16) (Conn, error) {
 func UUID() string {
 	id := uuid.New()
 	return hex.EncodeToString(id[:])
+}
+
+// GUID - new uuid v4 string with dashes
+func GUID() string {
+	return uuid.New().String()
 }
 
 // S2B - fast and dangerous!

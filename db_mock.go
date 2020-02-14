@@ -4,6 +4,7 @@ func newMockDB(conn *MockConn) *mockDB { return &mockDB{MockConn: conn} }
 
 type mockDB struct{ *MockConn }
 
+func (db *mockDB) At(id uint16) DB                             { return db.FAt(id) }
 func (db *mockDB) Set(ctype uint16, id, value []byte) error    { return db.FSet(ctype, id, value) }
 func (db *mockDB) Get(ctype uint16, id []byte) ([]byte, error) { return db.FGet(ctype, id) }
 func (db *mockDB) Del(ctype uint16, id []byte) error           { return db.FDel(ctype, id) }

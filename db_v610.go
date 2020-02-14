@@ -17,6 +17,16 @@ type v610db struct {
 
 // ********************** Public **********************
 
+func (db *v610db) At(id uint16) DB {
+	return &v610db{
+		conn: &v610Conn{
+			db:  id,
+			fdb: db.conn.fdb,
+		},
+		tx: db.tx,
+	}
+}
+
 func (db *v610db) Get(typeID uint16, id []byte) ([]byte, error) {
 	return db.tx.Get(fdbKey(db.conn.db, typeID, id)).Get()
 }

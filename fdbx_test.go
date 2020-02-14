@@ -26,6 +26,7 @@ var (
 	TestQueueType   = uint16(0x0506)
 	TestIndexName   = uint16(0x0708)
 	TestIndexNumber = uint16(0x0910)
+	TestAtDatabase  = uint16(0x1112)
 )
 
 func TestCrud(t *testing.T) {
@@ -54,6 +55,9 @@ func TestCrud(t *testing.T) {
 	}))
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Set(TestCollection, key, val) }))
+
+	// we can call clear at another db and then get values from our db
+	assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.At(TestAtDatabase).Clear(TestCollection) }))
 
 	assert.NoError(t, conn.Tx(func(db fdbx.DB) error {
 		v, e := db.Get(TestCollection, key)
@@ -700,6 +704,37 @@ func TestIntersect(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, len(ids) >= 1)
 }
+
+func TestUtils(t *testing.T) {
+	uid := fdbx.UUID()
+	assert.Len(t, uid, 32)
+	assert.NotContains(t, uid, "-")
+	assert.Regexp(t, `^[0-9a-f]{32}$`, uid)
+
+	guid := fdbx.GUID()
+	assert.Len(t, guid, 36)
+	assert.Contains(t, guid, "-")
+	assert.Regexp(t, `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`, guid)
+
+	assert.Nil(t, fdbx.S2B(""))
+	assert.Equal(t, "", fdbx.B2S(nil))
+	assert.Equal(t, "", fdbx.B2S([]byte{}))
+
+	str := "some test string"
+	buf := fdbx.S2B(str)
+	lol := fdbx.B2S(buf)
+
+	assert.Equal(t, str, lol)
+
+	// fatal error: fault
+	// buf[3] = 'T'
+
+	buf = append(buf, 's')
+	assert.Equal(t, str, lol)
+	assert.Equal(t, str+"s", fdbx.B2S(buf))
+}
+
+/********************** Benchmarks **********************/
 
 func makePack(cnt int) []fdbx.Record {
 	recs := make([]fdbx.Record, cnt)
