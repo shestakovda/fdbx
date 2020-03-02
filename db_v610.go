@@ -207,10 +207,8 @@ func loadRecord(
 
 	rtp := rec.FdbxType()
 
-	if ver != rtp.Ver {
-		if rec, err = rtp.New(ver, rec.FdbxID()); err != nil {
-			return
-		}
+	if rtp.Ver > 0 && ver > 0 && ver != rtp.Ver {
+		return ErrVersionMismatch.WithStack()
 	}
 
 	return rec.FdbxUnmarshal(buf)
@@ -368,6 +366,7 @@ func packValue(dbID uint16, tx fdb.Transaction, value []byte, ver uint8) (_ []by
 }
 
 func unpackValue(dbID uint16, rtx fdb.ReadTransaction, value []byte) (ver uint8, blobID, buffer []byte, err error) {
+	ver = 1
 	index := 1
 	flags := value[0]
 

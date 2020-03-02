@@ -12,18 +12,19 @@ const stackTpl = "%s:%d -> %s()"
 
 // All package errors
 var (
-	ErrMemFail        = newError("memory error")
-	ErrUnknownVersion = newError("unknown client version")
-	ErrOldVersion     = newError("old client version")
-	ErrConnect        = newError("connection error")
-	ErrNullRecord     = newError("undefined record")
-	ErrNullDB         = newError("undefined db connection")
-	ErrEmptyID        = newError("empty identifier")
-	ErrEmptyValue     = newError("empty value")
-	ErrInvalidGZ      = newError("invalid gzip value")
-	ErrQueuePanic     = newError("unknown panic in queue")
-	ErrIncompatibleDB = newError("incompatible DB object")
-	ErrRecordNotFound = newError("record not found")
+	ErrMemFail         = newError("memory error")
+	ErrUnknownVersion  = newError("unknown client version")
+	ErrOldVersion      = newError("old client version")
+	ErrConnect         = newError("connection error")
+	ErrNullRecord      = newError("undefined record")
+	ErrNullDB          = newError("undefined db connection")
+	ErrEmptyID         = newError("empty identifier")
+	ErrEmptyValue      = newError("empty value")
+	ErrInvalidGZ       = newError("invalid gzip value")
+	ErrQueuePanic      = newError("unknown panic in queue")
+	ErrIncompatibleDB  = newError("incompatible DB object")
+	ErrRecordNotFound  = newError("record not found")
+	ErrVersionMismatch = newError("record version mismatch")
 )
 
 func newError(msg string) *fdbxError { return &fdbxError{message: msg} }
