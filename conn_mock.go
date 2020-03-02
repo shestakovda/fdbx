@@ -57,6 +57,9 @@ type MockConn struct {
 // ClearDB - clear stub, set FClearDB before usage
 func (c *MockConn) ClearDB() error { return c.FClearDB() }
 
+// Tx - at stub, create mock object
+func (c *MockConn) At(id uint16) Conn { return c }
+
 // Tx - tx stub, create mock object
 func (c *MockConn) Tx(h TxHandler) error { return h(newMockDB(c)) }
 

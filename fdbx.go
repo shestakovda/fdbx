@@ -87,8 +87,8 @@ type RecordType struct {
 type Conn interface {
 	ClearDB() error
 
+	At(id uint16) Conn
 	Tx(TxHandler) error
-	TxAt(id uint16, h TxHandler) error
 
 	Queue(rtp RecordType, prefix string, opts ...Option) (Queue, error)
 

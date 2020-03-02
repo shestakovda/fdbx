@@ -46,17 +46,13 @@ func (c *v610Conn) ClearDB() error {
 	return exp
 }
 
+func (c *v610Conn) At(id uint16) Conn {
+	return &v610Conn{db: id, fdb: c.fdb}
+}
+
 func (c *v610Conn) Tx(h TxHandler) error {
 	_, exp := c.fdb.Transact(func(tx fdb.Transaction) (interface{}, error) {
 		return nil, h(&v610db{conn: c, tx: tx})
-	})
-
-	return exp
-}
-
-func (c *v610Conn) TxAt(id uint16, h TxHandler) error {
-	_, exp := c.fdb.Transact(func(tx fdb.Transaction) (interface{}, error) {
-		return nil, h(&v610db{conn: &v610Conn{db: id, fdb: c.fdb}, tx: tx})
 	})
 
 	return exp
