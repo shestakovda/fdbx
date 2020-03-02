@@ -88,6 +88,7 @@ type Conn interface {
 	ClearDB() error
 
 	Tx(TxHandler) error
+	TxAt(id uint16, h TxHandler) error
 
 	Queue(rtp RecordType, prefix string, opts ...Option) (Queue, error)
 
