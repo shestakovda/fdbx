@@ -83,6 +83,10 @@ func (c *v610Conn) CursorID(rtp RecordType, opts ...Option) (CursorID, error) {
 	return newidscursor(c, "", rtp.ID, opts...)
 }
 
+func (c *v610Conn) Waiter(typeID uint16) Waiter {
+	return newV610Waiter(c, typeID)
+}
+
 func (c *v610Conn) LoadCursor(id string, rf RecordFabric, opts ...Option) (_ Cursor, err error) {
 	var cur *v610cursor
 

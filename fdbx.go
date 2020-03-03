@@ -97,6 +97,8 @@ type Conn interface {
 
 	CursorID(rtp RecordType, opts ...Option) (CursorID, error)
 
+	Waiter(typeID uint16) Waiter
+
 	StartClearDaemon()
 }
 
@@ -199,6 +201,14 @@ type Indexer interface {
 	Grow(n int)
 	// append key for indexing as idxTypeID
 	Index(idxTypeID uint16, value []byte)
+}
+
+// WaitCallback -
+type WaitCallback func(id string) bool
+
+// Waiter -
+type Waiter interface {
+	Wait(ctx context.Context, fnc WaitCallback, ids ...string) error
 }
 
 // NewConn - makes new connection with specified client version

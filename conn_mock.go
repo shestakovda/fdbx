@@ -52,6 +52,10 @@ type MockConn struct {
 	FFdbxIndex     func(Indexer) error
 	FFdbxMarshal   func() ([]byte, error)
 	FFdbxUnmarshal func([]byte) error
+
+	// ***** Waiter *****
+
+	FWait func(ctx context.Context, fnc WaitCallback, ids ...string) error
 }
 
 // ClearDB - clear stub, set FClearDB before usage
@@ -78,6 +82,10 @@ func (c *MockConn) Cursor(rtp RecordType, opts ...Option) (Cursor, error) {
 
 func (c *MockConn) CursorID(rtp RecordType, opts ...Option) (CursorID, error) {
 	return nil, nil
+}
+
+func (c *MockConn) Waiter(typeID uint16) Waiter {
+	return &mockWaiter{MockConn: c}
 }
 
 // LoadCursor - load cursor stub

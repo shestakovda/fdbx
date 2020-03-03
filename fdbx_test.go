@@ -734,6 +734,67 @@ func TestUtils(t *testing.T) {
 	assert.Equal(t, str+"s", fdbx.B2S(buf))
 }
 
+func TestWaiter(t *testing.T) {
+	conn, err := fdbx.NewConn(TestDatabase, TestVersion)
+	assert.NoError(t, err)
+	assert.NotNil(t, conn)
+	assert.NoError(t, conn.ClearDB())
+	defer conn.ClearDB()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	const N = 100
+	ids := make([]string, N)
+
+	for i := range ids {
+		ids[i] = fdbx.UUID()
+	}
+
+	var mx sync.Mutex
+	var wg sync.WaitGroup
+	wg.Add(2 * len(ids))
+	res := make(map[string]uint8, N)
+	wtr := conn.Waiter(TestCollection)
+	fnc := func(id string) bool {
+		defer wg.Done()
+		mx.Lock()
+		defer mx.Unlock()
+		_, ok := res[id]
+		res[id]++
+		return !ok
+	}
+
+	assert.NoError(t, wtr.Wait(ctx, fnc, ids...))
+
+	for i := range ids {
+		key := fdbx.S2B(ids[i])
+		value := fdbx.S2B(fdbx.UUID())
+		assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Set(TestCollection, key, value) }))
+	}
+
+	for i := range ids {
+		key := fdbx.S2B(ids[i])
+		value := fdbx.S2B(fdbx.UUID())
+		assert.NoError(t, conn.Tx(func(db fdbx.DB) error { return db.Set(TestCollection, key, value) }))
+	}
+
+	wg.Wait()
+	assert.Equal(t, len(ids), len(res))
+
+	notFound := false
+	for i := range ids {
+		if cnt, ok := res[ids[i]]; !ok {
+			notFound = true
+			break
+		} else {
+			assert.Equal(t, uint8(2), cnt)
+		}
+	}
+
+	assert.False(t, notFound)
+}
+
 /********************** Benchmarks **********************/
 
 func makePack(cnt int) []fdbx.Record {
