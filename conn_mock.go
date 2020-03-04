@@ -2,6 +2,7 @@ package fdbx
 
 import (
 	"context"
+	"net/http"
 	"time"
 )
 
@@ -39,11 +40,12 @@ type MockConn struct {
 
 	// ***** Cursor *****
 
-	FEmpty        func() bool
-	FClose        func() error
-	FNext         func(db DB, skip uint8) ([]Record, error)
-	FPrev         func(db DB, skip uint8) ([]Record, error)
-	FCursorSelect func(ctx context.Context) (<-chan Record, <-chan error)
+	FEmpty          func() bool
+	FClose          func() error
+	FNext           func(db DB, skip uint8) ([]Record, error)
+	FPrev           func(db DB, skip uint8) ([]Record, error)
+	CursorApplyOpts func(opts ...Option) (err error)
+	FCursorSelect   func(ctx context.Context) (<-chan Record, <-chan error)
 
 	// ***** Record *****
 
@@ -56,6 +58,11 @@ type MockConn struct {
 	// ***** Waiter *****
 
 	FWait func(ctx context.Context, fnc WaitCallback, ids ...string) error
+
+	// ***** FileSystem *****
+
+	FileSystemOpen func(name string) (http.File, error)
+	FileSystemSave func(name string, data []byte) error
 }
 
 // ClearDB - clear stub, set FClearDB before usage
@@ -86,6 +93,10 @@ func (c *MockConn) CursorID(rtp RecordType, opts ...Option) (CursorID, error) {
 
 func (c *MockConn) Waiter(typeID uint16) Waiter {
 	return &mockWaiter{MockConn: c}
+}
+
+func (c *MockConn) FileSystem(typeID uint16) FileSystem {
+	return &mockFileSystem{MockConn: c}
 }
 
 // LoadCursor - load cursor stub

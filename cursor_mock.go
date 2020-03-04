@@ -37,3 +37,7 @@ func (m *mockCursor) Prev(db DB, skip uint8) ([]Record, error) { return m.FPrev(
 func (m *mockCursor) Select(ctx context.Context) (<-chan Record, <-chan error) {
 	return m.FCursorSelect(ctx)
 }
+
+func (m *mockCursor) ApplyOpts(opts ...Option) (err error) {
+	return m.CursorApplyOpts(opts...)
+}

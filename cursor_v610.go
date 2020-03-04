@@ -107,9 +107,7 @@ func (cur *v610cursor) Select(ctx context.Context) (<-chan Record, <-chan error)
 	return recs, errs
 }
 
-// ********************** Private **********************
-
-func (cur *v610cursor) applyOpts(opts []Option) (err error) {
+func (cur *v610cursor) ApplyOpts(opts ...Option) (err error) {
 	opt := new(options)
 
 	for i := range opts {
@@ -118,11 +116,11 @@ func (cur *v610cursor) applyOpts(opts []Option) (err error) {
 		}
 	}
 
-	if opt.from != nil {
+	if len(opt.from) > 0 {
 		cur.From = opt.from
 	}
 
-	if opt.to != nil {
+	if len(opt.to) > 0 {
 		cur.To = append(opt.to, tail...)
 	}
 
@@ -144,6 +142,8 @@ func (cur *v610cursor) applyOpts(opts []Option) (err error) {
 	cur.onNotFound = opt.onNotFound
 	return nil
 }
+
+// ********************** Private **********************
 
 func (cur *v610cursor) drop() error {
 	return cur.conn.Tx(func(db DB) error { return db.Drop(nil, cur) })

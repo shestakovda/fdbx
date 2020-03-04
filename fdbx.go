@@ -3,6 +3,7 @@ package fdbx
 import (
 	"context"
 	"encoding/hex"
+	"net/http"
 	"reflect"
 	"time"
 	"unsafe"
@@ -23,6 +24,9 @@ const (
 
 //nolint:gochecknoglobals
 var (
+	// FilesTypeID is collection number for storing files
+	FilesTypeID uint16 = 0xFFFC
+
 	// CursorTypeID is collection number for storing cursors
 	CursorTypeID uint16 = 0xFFFD
 
@@ -99,6 +103,8 @@ type Conn interface {
 
 	Waiter(typeID uint16) Waiter
 
+	FileSystem(typeID uint16) FileSystem
+
 	StartClearDaemon()
 }
 
@@ -137,6 +143,9 @@ type Cursor interface {
 	// next or prev `page` records from collection or index
 	Next(db DB, skip uint8) ([]Record, error)
 	Prev(db DB, skip uint8) ([]Record, error)
+
+	// change options in runtime
+	ApplyOpts(opts ...Option) (err error)
 
 	// select all records from current position to the end of collection
 	Select(ctx context.Context) (<-chan Record, <-chan error)
@@ -209,6 +218,12 @@ type WaitCallback func(id string) bool
 // Waiter -
 type Waiter interface {
 	Wait(ctx context.Context, fnc WaitCallback, ids ...string) error
+}
+
+// FileSystem - read/write file system
+type FileSystem interface {
+	http.FileSystem
+	Save(name string, data []byte) error
 }
 
 // NewConn - makes new connection with specified client version

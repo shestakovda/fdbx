@@ -6,6 +6,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -793,6 +796,78 @@ func TestWaiter(t *testing.T) {
 	}
 
 	assert.False(t, notFound)
+}
+
+func TestFileSystem(t *testing.T) {
+	files := map[string]string{
+		"file1.txt":      fdbx.UUID(),
+		"file2.txt":      fdbx.UUID(),
+		"dir/file1.txt":  fdbx.UUID(),
+		"dir/file2.txt":  fdbx.UUID(),
+		"dir/file3.txt":  fdbx.UUID(),
+		"dir2/file1.txt": fdbx.UUID(),
+		"dir2/file2.txt": fdbx.UUID(),
+	}
+
+	conn, err := fdbx.NewConn(TestDatabase, TestVersion)
+	assert.NoError(t, err)
+	assert.NotNil(t, conn)
+	assert.NoError(t, conn.ClearDB())
+	defer conn.ClearDB()
+
+	fs := conn.FileSystem(TestCollection)
+
+	for name, data := range files {
+		assert.NoError(t, fs.Save(name, fdbx.S2B(data)))
+	}
+
+	name := "dir/file2.txt"
+
+	file, err := fs.Open("./.././" + name)
+	assert.NoError(t, err)
+	assert.NotNil(t, file)
+
+	stat, err := file.Stat()
+	assert.NoError(t, err)
+	assert.NotNil(t, stat)
+
+	assert.Equal(t, "file2.txt", stat.Name())
+	assert.Equal(t, int64(32), stat.Size())
+	assert.Equal(t, os.FileMode(0644), stat.Mode())
+	assert.False(t, stat.ModTime().IsZero())
+	assert.False(t, stat.IsDir())
+
+	data, err := ioutil.ReadAll(file)
+	assert.NoError(t, err)
+	assert.Equal(t, files[name], string(data))
+
+	list, err := file.Readdir(2)
+	assert.NoError(t, err)
+	assert.Len(t, list, 2)
+
+	stat = list[0]
+	assert.Equal(t, "file1.txt", stat.Name())
+
+	list, err = file.Readdir(2)
+	assert.True(t, err == io.EOF)
+	assert.Len(t, list, 1)
+
+	stat = list[0]
+	assert.Equal(t, "file3.txt", stat.Name())
+
+	file, err = fs.Open("file2.txt")
+	assert.NoError(t, err)
+	assert.NotNil(t, file)
+
+	list, err = file.Readdir(0)
+	assert.NoError(t, err)
+	assert.Len(t, list, 7)
+
+	stat = list[0]
+	assert.Equal(t, "file1.txt", stat.Name())
+
+	stat = list[6]
+	assert.Equal(t, "file2.txt", stat.Name())
 }
 
 /********************** Benchmarks **********************/

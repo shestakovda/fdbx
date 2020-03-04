@@ -87,6 +87,10 @@ func (c *v610Conn) Waiter(typeID uint16) Waiter {
 	return newV610Waiter(c, typeID)
 }
 
+func (c *v610Conn) FileSystem(typeID uint16) FileSystem {
+	return newV610FileSystem(c, typeID)
+}
+
 func (c *v610Conn) LoadCursor(id string, rf RecordFabric, opts ...Option) (_ Cursor, err error) {
 	var cur *v610cursor
 
@@ -98,7 +102,7 @@ func (c *v610Conn) LoadCursor(id string, rf RecordFabric, opts ...Option) (_ Cur
 		return
 	}
 
-	return cur, cur.applyOpts(opts)
+	return cur, cur.ApplyOpts(opts...)
 }
 
 func (c *v610Conn) StartClearDaemon() {
