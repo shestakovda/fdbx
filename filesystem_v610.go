@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang/glog"
-
 	fbs "github.com/google/flatbuffers/go"
 	"github.com/shestakovda/fdbx/models"
 )
@@ -43,8 +41,6 @@ func (fs *v610fileSystem) Open(name string) (_ http.File, err error) {
 
 	name = fs.clean(name)
 
-	glog.Errorf("open name = %s", name)
-
 	if rec, err = fs.newFile(verFileV1, name); err != nil {
 		return
 	}
@@ -59,13 +55,11 @@ func (fs *v610fileSystem) Open(name string) (_ http.File, err error) {
 func (fs *v610fileSystem) Save(name string, data []byte) (err error) {
 	name = fs.clean(name)
 	return fs.conn.Tx(func(db DB) error {
-
-		glog.Errorf("save name = %s", name)
-
 		return db.Save(nil, &v610file{
-			path:  name,
-			data:  data,
-			mtime: time.Now(),
+			path:   name,
+			data:   data,
+			mtime:  time.Now(),
+			system: fs,
 		})
 	})
 }
@@ -126,7 +120,6 @@ func (f *v610file) Readdir(count int) (list []os.FileInfo, err error) {
 			query = "/"
 		}
 
-		glog.Errorf("query name = %s", query)
 		if f.cursor, err = conn.Cursor(f.FdbxType(), Query(S2B(query))); err != nil {
 			return
 		}
@@ -195,7 +188,7 @@ func (f *v610file) Sys() interface{} { return f.system }
 func (f *v610file) FdbxID() string { return f.path }
 
 func (f *v610file) FdbxType() RecordType {
-	return RecordType{ID: FilesTypeID, Ver: verFileV1, New: f.system.newFile}
+	return RecordType{ID: f.system.tpid, Ver: verFileV1, New: f.system.newFile}
 }
 
 func (f *v610file) FdbxIndex(idx Indexer) error { return nil }

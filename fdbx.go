@@ -24,9 +24,6 @@ const (
 
 //nolint:gochecknoglobals
 var (
-	// FilesTypeID is collection number for storing files
-	FilesTypeID uint16 = 0xFFFC
-
 	// CursorTypeID is collection number for storing cursors
 	CursorTypeID uint16 = 0xFFFD
 
