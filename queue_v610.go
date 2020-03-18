@@ -280,17 +280,22 @@ func (q *v610queue) loadRecs(ids []string) (list []Record, err error) {
 }
 
 func (q *v610queue) GetLost(limit uint, cond Condition) (list []Record, err error) {
+	var ids []string
+
 	opt := fdb.RangeOptions{Limit: int(limit)}
 	rng := fdb.KeyRange{
 		Begin: q.lostKey(),
 		End:   q.lostKey(tail),
 	}
 
-	_, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (_ interface{}, exp error) {
-		list, _, exp = getRange(q.cn.db, rtx, rng, opt, q.rtp, cond, false, q.nf)
+	if _, err = q.cn.fdb.ReadTransact(func(rtx fdb.ReadTransaction) (interface{}, error) {
+		ids = getRangeIDs(rtx, rng, opt)
+		return nil, nil
+	}); err != nil {
 		return
-	})
-	return list, err
+	}
+
+	return q.loadRecs(ids)
 }
 
 func (q *v610queue) Status(db DB, ids ...string) (map[string]TaskStatus, error) {
