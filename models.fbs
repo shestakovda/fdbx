@@ -17,3 +17,9 @@ table TestRecord {
 	Data:[uint8];
 	Strings:[string];
 }
+
+table Transaction {
+    TxID:uint64;
+    Start:uint64;
+    Committed:byte=2;
+}

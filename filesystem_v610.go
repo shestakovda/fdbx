@@ -93,7 +93,9 @@ func (f *v610file) Close() (err error) {
 func (f *v610file) Read(p []byte) (n int, err error) { return f.stream.Read(p) }
 
 // http.File -> io.Seeker
-func (f *v610file) Seek(offset int64, whence int) (int64, error) { return f.stream.Seek(offset, whence) }
+func (f *v610file) Seek(offset int64, whence int) (int64, error) {
+	return f.stream.Seek(offset, whence)
+}
 
 // http.File
 func (f *v610file) Readdir(count int) (list []os.FileInfo, err error) {
