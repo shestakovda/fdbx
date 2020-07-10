@@ -2,18 +2,26 @@ package mvcc
 
 import "github.com/shestakovda/errors"
 
-type DB interface {
-	Begin() (Tx, error)
+type Key interface {
+	Bytes() []byte
+}
+
+type Value interface {
 }
 
 type Tx interface {
-	Commit() error
-	Rollback()
+	Select(Key) (Value, error)
+	// Upsert(key, val []byte) error
+	// Delete(key []byte) error
+	// Commit() error
+	// Cancel()
 }
 
 var (
-	ErrBegin    = errors.New("can't create a transaction")
-	ErrClose    = errors.New("can't close a transaction")
-	ErrCommit   = errors.New("can't commit a transaction")
-	ErrRollback = errors.New("can't abort a transaction")
+	ErrBegin  = errors.New("begin error")
+	ErrSelect = errors.New("select error")
+
+// ErrClose    = errors.New("tx close error")
+// ErrCommit   = errors.New("tx commit error")
+// ErrRollback = errors.New("tx rollback error")
 )

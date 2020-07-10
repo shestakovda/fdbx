@@ -50,16 +50,16 @@ func (rcv *Transaction) MutateStart(n uint64) bool {
 	return rcv._tab.MutateUint64Slot(6, n)
 }
 
-func (rcv *Transaction) Committed() int8 {
+func (rcv *Transaction) Status() byte {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
 	if o != 0 {
-		return rcv._tab.GetInt8(o + rcv._tab.Pos)
+		return rcv._tab.GetByte(o + rcv._tab.Pos)
 	}
 	return 2
 }
 
-func (rcv *Transaction) MutateCommitted(n int8) bool {
-	return rcv._tab.MutateInt8Slot(8, n)
+func (rcv *Transaction) MutateStatus(n byte) bool {
+	return rcv._tab.MutateByteSlot(8, n)
 }
 
 func TransactionStart(builder *flatbuffers.Builder) {
@@ -71,8 +71,8 @@ func TransactionAddTxID(builder *flatbuffers.Builder, TxID uint64) {
 func TransactionAddStart(builder *flatbuffers.Builder, Start uint64) {
 	builder.PrependUint64Slot(1, Start, 0)
 }
-func TransactionAddCommitted(builder *flatbuffers.Builder, Committed int8) {
-	builder.PrependInt8Slot(2, Committed, 2)
+func TransactionAddStatus(builder *flatbuffers.Builder, Status byte) {
+	builder.PrependByteSlot(2, Status, 2)
 }
 func TransactionEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	return builder.EndObject()

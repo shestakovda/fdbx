@@ -4,6 +4,12 @@ import "sync"
 
 const cacheSizeMax = 8000000
 
+func newStatusCache() *statusCache {
+	return &statusCache{
+		cache: make(map[uint64]txStatus, 64),
+	}
+}
+
 type statusCache struct {
 	sync.RWMutex
 	min   uint64
@@ -24,7 +30,7 @@ func (c *statusCache) set(txid uint64, status txStatus) {
 
 	if txid > c.max {
 		c.max = txid
-	} else if txid < c.min {
+	} else if txid < c.min || c.min == 0 {
 		c.min = txid
 	}
 
@@ -32,10 +38,8 @@ func (c *statusCache) set(txid uint64, status txStatus) {
 		delim := c.min + 0.25*float64(c.max-c.min)
 
 		for key := range c.cache {
-			delete(c.cache, key)
-
-			if key > delim {
-				break
+			if key < delim {
+				delete(c.cache, key)
 			}
 		}
 	}

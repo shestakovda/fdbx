@@ -8,17 +8,40 @@ import (
 	"github.com/google/uuid"
 )
 
-const end = [1]byte{0xFF}
+const api = 610
+const end = [1]byte{0xff}
+const max = [11]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 'm', 'a', 'x'}
+const sip = [16]byte("shestakovda/fdbx")
+
+func Connect(id byte) (_ DB, err error) {
+	db := &database{
+		id:   id,
+		txsc: newStatusCache(),
+	}
+
+	if err = fdb.APIVersion(api); err != nil {
+		return ErrConnect.WithReason(err)
+	}
+
+	if db.root, err = fdb.OpenDefault(); err != nil {
+		return
+	}
+
+	return db, nil
+}
 
 type database struct {
 	id   byte
 	root fdb.Database
+	txsc *statusCache
 }
 
 func (db *database) Begin() (_ Tx, err error) {
+	op := uint32(1)
 	tx := &transaction{
 		start: uint64(time.Now().UTC().UnixNano()),
 		uid:   uuid.New(),
+		op:    &op,
 		db:    db,
 	}
 
@@ -26,14 +49,25 @@ func (db *database) Begin() (_ Tx, err error) {
 		var value [22]byte
 
 		// Запрашиваем список транзакций, открытых на данный момент. Нам нужны их номера
-		list := t.GetRange(fdb.KeyRange{
+		// Фактическое получение пока откладываем, чтобы оно шло параллельно со след. шагом
+		rng := t.GetRange(fdb.KeyRange{
 			Begin: db.key(setTx, idxRunning),
 			Begin: db.key(setTx, idxRunning, end[:]),
-		}, fdb.RangeOptions{Mode: fdb.StreamingModeWantAll}).GetSliceOrPanic()
+		}, fdb.RangeOptions{Mode: fdb.StreamingModeWantAll})
 
+		// Запрашиваем номер последней закоммиченной транзакции на данный момент
+		tx.cmmax = t.Get(db.key(setTx, idxFinished, max[:])).MustGet()
+
+		// За это время список тоже уже должен был подгрузиться, достаем
+		list := rng.GetSliceOrPanic()
+
+		tx.opmax = 0
 		tx.opened = make([]uint64, len(list))
 		for i := range list {
 			tx.opened[i] = binary.BigEndian.Uint64(list[i].Value[:8])
+			if tx.opened[i] > tx.opmax {
+				tx.opmax = tx.opened[i]
+			}
 		}
 
 		// Добавляем в список открытых транзакций новую. Её идентификатор еще не знаем,
