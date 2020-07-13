@@ -6,16 +6,5 @@ type rowValue struct {
 	*models.Row
 }
 
-func (r *rowValue) Bytes() []byte {
-	buf := r.DataBytes()
-
-	// if r.Blob() {
-
-	// }
-
-	// if r.GZip() {
-
-	// }
-
-	return buf
-}
+func (r *rowValue) Bytes() []byte  { return r.DataBytes() }
+func (r *rowValue) String() string { return string(r.DataBytes()) }

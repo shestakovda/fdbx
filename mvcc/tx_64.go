@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/golang/glog"
 	fbs "github.com/google/flatbuffers/go"
 	"github.com/google/uuid"
 	"github.com/shestakovda/errors"
@@ -63,6 +64,12 @@ func Begin(conn db.Connection) (_ Tx, exp error) {
 			})
 		}
 
+		if err = w.DropPair(nsTxTmp, uid[:]); err != nil {
+			return ErrDropTx.WithReason(err).WithDebug(errors.Debug{
+				"uid": uid.String(),
+			})
+		}
+
 		return nil
 	}); exp != nil {
 		return nil, ErrBegin.WithReason(exp)
@@ -76,7 +83,7 @@ type tx64 struct {
 	opid   uint32
 	txid   uint64
 	start  uint64
-	status txStatus
+	status byte
 }
 
 /*
@@ -139,7 +146,7 @@ func (t *tx64) Upsert(key Key, value Value) (exp error) {
 			return
 		}
 
-		if err = t.saveRow(w, opid, pair.NS, key.Bytes(), value.Bytes()); err != nil {
+		if err = t.saveRow(w, opid, key.Bytes(), value.Bytes()); err != nil {
 			return
 		}
 
@@ -208,7 +215,7 @@ func (t *tx64) Cancel() (err error) {
 }
 
 func (t *tx64) isCommitted(local *statusCache, r db.Reader, x uint64) (ok bool, err error) {
-	var status txStatus
+	var status byte
 
 	// Дешевле всего чекнуть в глобальном кеше, вдруг уже знаем такую
 	if status = txCache.get(x); status != txStatusUnknown {
@@ -232,7 +239,7 @@ func (t *tx64) isCommitted(local *statusCache, r db.Reader, x uint64) (ok bool, 
 	}
 
 	// Получаем значение статуса как часть модели
-	status = txStatus(models.GetRootAsTransaction(txPair.Value, 0).Status())
+	status = models.GetRootAsTransaction(txPair.Value, 0).Status()
 
 	// В случае финальных статусов можем положить в глобальный кеш
 	if status == txStatusCommitted || status == txStatusAborted {
@@ -245,28 +252,34 @@ func (t *tx64) isCommitted(local *statusCache, r db.Reader, x uint64) (ok bool, 
 }
 
 func (t *tx64) pack() []byte {
+	tx := &models.TransactionT{
+		TxID:   t.txid,
+		Start:  t.start,
+		Status: t.status,
+	}
 	buf := fbs.NewBuilder(32)
-	models.TransactionStart(buf)
-	models.TransactionAddTxID(buf, t.txid)
-	models.TransactionAddStart(buf, t.start)
-	models.TransactionAddStatus(buf, byte(t.status))
-	buf.Finish(models.TransactionEnd(buf))
+	buf.Finish(tx.Pack(buf))
 	return buf.FinishedBytes()
 }
 
 func (t *tx64) packRow(opid uint32, value []byte) []byte {
+	row := &models.RowT{
+		State: &models.RowStateT{
+			XMin: t.txid,
+			CMin: opid,
+		},
+		Data: value,
+	}
 	buf := fbs.NewBuilder(32)
-	data := buf.CreateByteVector(value)
-
-	models.RowStart(buf)
-	models.RowAddXMin(buf, t.txid)
-	models.RowAddCMin(buf, opid)
-	models.RowAddData(buf, data)
-	buf.Finish(models.RowEnd(buf))
+	buf.Finish(row.Pack(buf))
 	return buf.FinishedBytes()
 }
 
-func (t *tx64) close(status txStatus) (err error) {
+func (t *tx64) close(status byte) (err error) {
+	if t.status == txStatusCommitted || t.status == txStatusAborted {
+		return nil
+	}
+
 	t.status = status
 	dump := t.pack()
 	txbk := t.txbk(t.txid)
@@ -322,32 +335,45 @@ func (t *tx64) close(status txStatus) (err error) {
 */
 func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, key Key) (res *db.Pair, err error) {
 	var comm bool
-	var xmin uint64
 	var list []*db.Pair
 
 	// Загружаем список версий, существующих в рамках этой операции
-	if list, err = r.List(key.Namespace(), key.Bytes(), 0, true); err != nil {
+	if list, err = r.List(nsUser, key.Bytes(), 0, true); err != nil {
 		return nil, ErrFetchRow.WithReason(err).WithDebug(errors.Debug{
 			"key": fmt.Sprintf("%x", key.Bytes()),
 		})
 	}
 
+	glog.Errorf("txid = %d", t.txid)
+	glog.Errorf("opid = %d", opid)
+	glog.Errorf("list = %+v", list)
+	defer func() {
+		glog.Errorf("res = %p", res)
+		glog.Flush()
+	}()
+
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
-		row := models.GetRootAsRow(list[i].Value, 0)
+		row := models.GetRootAsRow(list[i].Value, 0).State(nil).UnPack()
+
+		glog.Errorf("=-=- %d -=-=", i)
+		glog.Errorf("xmin = %d", row.XMin)
+		glog.Errorf("xmax = %d", row.XMax)
+		glog.Errorf("cmin = %d", row.CMin)
+		glog.Errorf("cmax = %d", row.CMax)
 
 		// Частный случай - если запись создана в рамках текущей транзакции
-		if xmin = row.XMin(); xmin == t.txid {
+		if row.XMin == t.txid {
 
 			// Если запись создана позже в рамках данной транзакции, то еще не видна
-			if row.CMin() >= opid {
+			if row.CMin >= opid {
 				continue
 			}
 
 			// Поскольку данная транзакция еще не закоммичена, то версия может быть
 			// Или удалена в этой же транзакции, или вообще не удалена (или 0, или t.txid)
 			// Если запись удалена в текущей транзакции и до этого момента, то уже не видна
-			if row.XMax() == t.txid && row.CMax() < opid {
+			if row.XMax == t.txid && row.CMax < opid {
 				continue
 			}
 
@@ -355,7 +381,7 @@ func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, key Key) (res
 			return list[i], nil
 		}
 
-		if comm, err = t.isCommitted(lc, r, xmin); err != nil {
+		if comm, err = t.isCommitted(lc, r, row.XMin); err != nil {
 			return nil, ErrFetchRow.WithReason(err)
 		}
 
@@ -365,10 +391,10 @@ func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, key Key) (res
 		}
 
 		// Проверяем, возможно запись уже была удалена
-		switch xmax := row.XMax(); xmax {
+		switch row.XMax {
 		case t.txid:
 			// Если она была удалена до этого момента, то уже не видна
-			if row.CMax() < opid {
+			if row.CMax < opid {
 				continue
 			}
 
@@ -378,7 +404,7 @@ func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, key Key) (res
 			// В этом случае объект создан в закоммиченной транзакции и еще не был удален
 			return list[i], nil
 		default:
-			if comm, err = t.isCommitted(lc, r, xmax); err != nil {
+			if comm, err = t.isCommitted(lc, r, row.XMax); err != nil {
 				return nil, ErrFetchRow.WithReason(err)
 			}
 
@@ -397,17 +423,19 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair *db.Pair) (err error) {
 		return nil
 	}
 
-	row := models.GetRootAsRow(pair.Value, 0)
+	glog.Errorf("value = %s", pair.Value)
 
-	if !row.MutateXMax(t.txid) {
+	state := models.GetRootAsRow(pair.Value, 0).State(nil)
+
+	if !state.MutateXMax(t.txid) {
 		return ErrDropRow.WithStack()
 	}
 
-	if !row.MutateCMax(opid) {
+	if !state.MutateCMax(opid) {
 		return ErrDropRow.WithStack()
 	}
 
-	if err = w.SetPair(pair.NS, pair.Key, pair.Value); err != nil {
+	if err = w.SetPair(nsUser, pair.Key, pair.Value); err != nil {
 		return ErrDropRow.WithReason(err).WithDebug(errors.Debug{
 			"key": fmt.Sprintf("%x", pair.Key),
 		})
@@ -416,9 +444,9 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair *db.Pair) (err error) {
 	return nil
 }
 
-func (t *tx64) saveRow(w db.Writer, opid uint32, ns db.Namespace, key []byte, val []byte) (err error) {
+func (t *tx64) saveRow(w db.Writer, opid uint32, key []byte, val []byte) (err error) {
 
-	if err = w.SetPair(ns, append(key, t.txbk(t.txid)...), t.packRow(opid, val)); err != nil {
+	if err = w.SetPair(nsUser, append(key, t.txbk(t.txid)...), t.packRow(opid, val)); err != nil {
 		return ErrSaveRow.WithReason(err).WithDebug(errors.Debug{
 			"key": fmt.Sprintf("%x", key),
 			"len": len(val),

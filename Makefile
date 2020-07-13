@@ -3,7 +3,7 @@
 all: test
 
 fmt:
-	@flatc --go ./models.fbs
+	@flatc --go --gen-mutable --gen-object-api ./models.fbs
 	@goimports -w .
 	@go mod tidy
 
@@ -17,4 +17,4 @@ lint:
 	@golangci-lint run --enable-all --fix --tests=false
 
 mvcc: fmt
-	@go test -count=10 -timeout 60s -run MVCC -race -cover ./...
+	@go test -count=1 -timeout 60s -run MVCC -cover ./mvcc

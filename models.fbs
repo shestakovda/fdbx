@@ -24,13 +24,17 @@ table Transaction {
     Status:uint8=3;
 }
 
-table Row {
+struct RowState {
     XMin:uint64;
-    XMax:uint64=0;
+    XMax:uint64;
     CMin:uint32;
-    CMax:uint32=0;
-    Hash:uint64=0;
-    Blob:bool=false;
-    GZip:bool=false;
+    CMax:uint32;
+}
+
+table Row {
+    State:RowState (required);
+    Hash:uint64;
+    Blob:bool;
+    GZip:bool;
     Data:[uint8];
 }

@@ -70,7 +70,7 @@ type v610Reader struct {
 	tx fdb.ReadTransaction
 }
 
-func (r *v610Reader) fdbKey(ns Namespace, key []byte) (res fdb.Key, err error) {
+func (r *v610Reader) fdbKey(ns byte, key []byte) (res fdb.Key, err error) {
 	const badNS = "Invalid namespace ID: %X"
 
 	if ns == 0xFF {
@@ -89,17 +89,14 @@ func (r *v610Reader) usrKey(key fdb.Key) []byte {
 	return key[2:]
 }
 
-func (r *v610Reader) Pair(ns Namespace, key []byte) (res *Pair, err error) {
+func (r *v610Reader) Pair(ns byte, key []byte) (res *Pair, err error) {
 	var fk fdb.Key
 
 	if fk, err = r.fdbKey(ns, key); err != nil {
 		return nil, ErrGetPair.WithReason(err)
 	}
 
-	res = &Pair{
-		NS:  ns,
-		Key: key,
-	}
+	res = &Pair{Key: key}
 
 	if res.Value, err = r.tx.Get(fk).Get(); err != nil {
 		return nil, ErrGetPair.WithReason(err)
@@ -108,7 +105,7 @@ func (r *v610Reader) Pair(ns Namespace, key []byte) (res *Pair, err error) {
 	return res, nil
 }
 
-func (r *v610Reader) List(ns Namespace, prefix []byte, limit int, reverse bool) (res []*Pair, err error) {
+func (r *v610Reader) List(ns byte, prefix []byte, limit int, reverse bool) (res []*Pair, err error) {
 	var fk fdb.Key
 
 	if fk, err = r.fdbKey(ns, prefix); err != nil {
@@ -117,7 +114,7 @@ func (r *v610Reader) List(ns Namespace, prefix []byte, limit int, reverse bool) 
 
 	rng := r.tx.GetRange(fdb.KeyRange{
 		Begin: fk,
-		End:   append(fk, 0xFF),
+		End:   fdb.Key(append(fk, 0xFF)),
 	}, fdb.RangeOptions{
 		Mode:    fdb.StreamingModeWantAll,
 		Reverse: reverse,
@@ -128,7 +125,6 @@ func (r *v610Reader) List(ns Namespace, prefix []byte, limit int, reverse bool) 
 
 	for i := range rng {
 		res[i] = &Pair{
-			NS:    ns,
 			Key:   r.usrKey(rng[i].Key),
 			Value: rng[i].Value,
 		}
@@ -142,7 +138,7 @@ type v610Writer struct {
 	tx fdb.Transaction
 }
 
-func (w *v610Writer) SetPair(ns Namespace, key, value []byte) (err error) {
+func (w *v610Writer) SetPair(ns byte, key, value []byte) (err error) {
 	var fk fdb.Key
 
 	if fk, err = w.fdbKey(ns, key); err != nil {
@@ -153,7 +149,7 @@ func (w *v610Writer) SetPair(ns Namespace, key, value []byte) (err error) {
 	return nil
 }
 
-func (w *v610Writer) SetVersion(ns Namespace, key []byte) (err error) {
+func (w *v610Writer) SetVersion(ns byte, key []byte) (err error) {
 	var fk fdb.Key
 	var value [14]byte
 
@@ -162,5 +158,16 @@ func (w *v610Writer) SetVersion(ns Namespace, key []byte) (err error) {
 	}
 
 	w.tx.SetVersionstampedValue(fk, value[:])
+	return nil
+}
+
+func (w *v610Writer) DropPair(ns byte, key []byte) (err error) {
+	var fk fdb.Key
+
+	if fk, err = w.fdbKey(ns, key); err != nil {
+		return ErrDropPair.WithReason(err)
+	}
+
+	w.tx.Clear(fk)
 	return nil
 }

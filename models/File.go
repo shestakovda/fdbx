@@ -6,6 +6,43 @@ import (
 	flatbuffers "github.com/google/flatbuffers/go"
 )
 
+type FileT struct {
+	Path  string
+	MTime uint64
+	Data  []byte
+}
+
+func (t *FileT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+	if t == nil {
+		return 0
+	}
+	PathOffset := builder.CreateString(t.Path)
+	DataOffset := flatbuffers.UOffsetT(0)
+	if t.Data != nil {
+		DataOffset = builder.CreateByteString(t.Data)
+	}
+	FileStart(builder)
+	FileAddPath(builder, PathOffset)
+	FileAddMTime(builder, t.MTime)
+	FileAddData(builder, DataOffset)
+	return FileEnd(builder)
+}
+
+func (rcv *File) UnPackTo(t *FileT) {
+	t.Path = string(rcv.Path())
+	t.MTime = rcv.MTime()
+	t.Data = rcv.DataBytes()
+}
+
+func (rcv *File) UnPack() *FileT {
+	if rcv == nil {
+		return nil
+	}
+	t := &FileT{}
+	rcv.UnPackTo(t)
+	return t
+}
+
 type File struct {
 	_tab flatbuffers.Table
 }

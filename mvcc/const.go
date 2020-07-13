@@ -1,23 +1,19 @@
 package mvcc
 
-import "github.com/shestakovda/fdbx/db"
-
 var (
 	txCache = newStatusCache()
 )
 
-type txStatus byte
-
 const (
-	txStatusUnknown   txStatus = 0
-	txStatusRunning   txStatus = 1
-	txStatusAborted   txStatus = 2
-	txStatusCommitted txStatus = 3
+	nsUser  byte = 0
+	nsTx    byte = 1
+	nsTxTmp byte = 2
+	nsBLOB  byte = 3
 )
 
 const (
-	nsUser  db.Namespace = 0
-	nsTx    db.Namespace = 1
-	nsTxTmp db.Namespace = 2
-	nsBLOB  db.Namespace = 3
+	txStatusUnknown   byte = 0
+	txStatusRunning   byte = 1
+	txStatusAborted   byte = 2
+	txStatusCommitted byte = 3
 )

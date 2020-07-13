@@ -2,27 +2,26 @@ package db
 
 import "github.com/shestakovda/errors"
 
-type Namespace byte
-
 type Connection interface {
 	Read(func(Reader) error) error
 	Write(func(Writer) error) error
 }
 
 type Reader interface {
-	Pair(ns Namespace, key []byte) (*Pair, error)
-	List(ns Namespace, prefix []byte, limit int, reverse bool) ([]*Pair, error)
+	Pair(ns byte, key []byte) (*Pair, error)
+	List(ns byte, prefix []byte, limit int, reverse bool) ([]*Pair, error)
 }
 
 type Writer interface {
 	Reader
 
-	SetPair(ns Namespace, key, value []byte) error
-	SetVersion(ns Namespace, key []byte) error
+	SetPair(ns byte, key, value []byte) error
+	SetVersion(ns byte, key []byte) error
+
+	DropPair(ns byte, key []byte) error
 }
 
 type Pair struct {
-	NS    Namespace
 	Key   []byte
 	Value []byte
 }
@@ -40,4 +39,6 @@ var (
 
 	ErrSetPair    = errors.New("set pair")
 	ErrSetVersion = errors.New("set version")
+
+	ErrDropPair = errors.New("drop pair")
 )

@@ -1,17 +1,14 @@
 package mvcc
 
-import (
-	"github.com/shestakovda/errors"
-	"github.com/shestakovda/fdbx/db"
-)
+import "github.com/shestakovda/errors"
 
 type Key interface {
 	Bytes() []byte
-	Namespace() db.Namespace
 }
 
 type Value interface {
 	Bytes() []byte
+	String() string
 }
 
 type Tx interface {
@@ -33,6 +30,7 @@ var (
 	ErrFetchTx  = errors.New("fetch tx")
 	ErrFetchRow = errors.New("fetch row")
 
+	ErrDropTx  = errors.New("drop tx")
 	ErrDropRow = errors.New("drop row")
 
 	ErrSaveTx  = errors.New("save tx")

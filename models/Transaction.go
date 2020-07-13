@@ -6,6 +6,38 @@ import (
 	flatbuffers "github.com/google/flatbuffers/go"
 )
 
+type TransactionT struct {
+	TxID   uint64
+	Start  uint64
+	Status byte
+}
+
+func (t *TransactionT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+	if t == nil {
+		return 0
+	}
+	TransactionStart(builder)
+	TransactionAddTxID(builder, t.TxID)
+	TransactionAddStart(builder, t.Start)
+	TransactionAddStatus(builder, t.Status)
+	return TransactionEnd(builder)
+}
+
+func (rcv *Transaction) UnPackTo(t *TransactionT) {
+	t.TxID = rcv.TxID()
+	t.Start = rcv.Start()
+	t.Status = rcv.Status()
+}
+
+func (rcv *Transaction) UnPack() *TransactionT {
+	if rcv == nil {
+		return nil
+	}
+	t := &TransactionT{}
+	rcv.UnPackTo(t)
+	return t
+}
+
 type Transaction struct {
 	_tab flatbuffers.Table
 }

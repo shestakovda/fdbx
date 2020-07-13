@@ -6,6 +6,69 @@ import (
 	flatbuffers "github.com/google/flatbuffers/go"
 )
 
+type TestRecordT struct {
+	Name    string
+	Number  uint64
+	Float   float64
+	Logic   bool
+	Data    []byte
+	Strings []string
+}
+
+func (t *TestRecordT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+	if t == nil {
+		return 0
+	}
+	NameOffset := builder.CreateString(t.Name)
+	DataOffset := flatbuffers.UOffsetT(0)
+	if t.Data != nil {
+		DataOffset = builder.CreateByteString(t.Data)
+	}
+	StringsOffset := flatbuffers.UOffsetT(0)
+	if t.Strings != nil {
+		StringsLength := len(t.Strings)
+		StringsOffsets := make([]flatbuffers.UOffsetT, StringsLength)
+		for j := 0; j < StringsLength; j++ {
+			StringsOffsets[j] = builder.CreateString(t.Strings[j])
+		}
+		TestRecordStartStringsVector(builder, StringsLength)
+		for j := StringsLength - 1; j >= 0; j-- {
+			builder.PrependUOffsetT(StringsOffsets[j])
+		}
+		StringsOffset = builder.EndVector(StringsLength)
+	}
+	TestRecordStart(builder)
+	TestRecordAddName(builder, NameOffset)
+	TestRecordAddNumber(builder, t.Number)
+	TestRecordAddFloat(builder, t.Float)
+	TestRecordAddLogic(builder, t.Logic)
+	TestRecordAddData(builder, DataOffset)
+	TestRecordAddStrings(builder, StringsOffset)
+	return TestRecordEnd(builder)
+}
+
+func (rcv *TestRecord) UnPackTo(t *TestRecordT) {
+	t.Name = string(rcv.Name())
+	t.Number = rcv.Number()
+	t.Float = rcv.Float()
+	t.Logic = rcv.Logic()
+	t.Data = rcv.DataBytes()
+	StringsLength := rcv.StringsLength()
+	t.Strings = make([]string, StringsLength)
+	for j := 0; j < StringsLength; j++ {
+		t.Strings[j] = string(rcv.Strings(j))
+	}
+}
+
+func (rcv *TestRecord) UnPack() *TestRecordT {
+	if rcv == nil {
+		return nil
+	}
+	t := &TestRecordT{}
+	rcv.UnPackTo(t)
+	return t
+}
+
 type TestRecord struct {
 	_tab flatbuffers.Table
 }
