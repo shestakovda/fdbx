@@ -21,16 +21,16 @@ table TestRecord {
 table Transaction {
     TxID:uint64;
     Start:uint64;
-    Status:uint8=2;
+    Status:uint8=3;
 }
 
 table Row {
     XMin:uint64;
-    XMax:uint64;
+    XMax:uint64=0;
     CMin:uint32;
-    CMax:uint32;
-    Hash:uint64;
-    Blob:bool;
-    GZip:bool;
+    CMax:uint32=0;
+    Hash:uint64=0;
+    Blob:bool=false;
+    GZip:bool=false;
     Data:[uint8];
 }

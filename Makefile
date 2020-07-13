@@ -15,3 +15,6 @@ bench: fmt
 
 lint:
 	@golangci-lint run --enable-all --fix --tests=false
+
+mvcc: fmt
+	@go test -count=10 -timeout 60s -run MVCC -race -cover ./...

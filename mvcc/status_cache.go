@@ -35,7 +35,7 @@ func (c *statusCache) set(txid uint64, status txStatus) {
 	}
 
 	if len(c.cache) > cacheSizeMax {
-		delim := c.min + 0.25*float64(c.max-c.min)
+		delim := c.min + uint64(0.25*float64(c.max-c.min))
 
 		for key := range c.cache {
 			if key < delim {

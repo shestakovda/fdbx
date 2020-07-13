@@ -55,7 +55,7 @@ func (rcv *Transaction) Status() byte {
 	if o != 0 {
 		return rcv._tab.GetByte(o + rcv._tab.Pos)
 	}
-	return 2
+	return 3
 }
 
 func (rcv *Transaction) MutateStatus(n byte) bool {
@@ -72,7 +72,7 @@ func TransactionAddStart(builder *flatbuffers.Builder, Start uint64) {
 	builder.PrependUint64Slot(1, Start, 0)
 }
 func TransactionAddStatus(builder *flatbuffers.Builder, Status byte) {
-	builder.PrependByteSlot(2, Status, 2)
+	builder.PrependByteSlot(2, Status, 3)
 }
 func TransactionEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	return builder.EndObject()
