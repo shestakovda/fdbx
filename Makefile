@@ -18,3 +18,6 @@ lint:
 
 mvcc: fmt
 	@go test -count=1 -timeout 60s -run MVCC -cover ./mvcc
+
+mvcc-bench: fmt
+	@go test -bench=. -benchmem -benchtime 30s ./mvcc

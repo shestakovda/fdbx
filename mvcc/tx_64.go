@@ -344,23 +344,27 @@ func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, key Key) (res
 		})
 	}
 
-	glog.Errorf("txid = %d", t.txid)
-	glog.Errorf("opid = %d", opid)
-	glog.Errorf("list = %+v", list)
-	defer func() {
-		glog.Errorf("res = %p", res)
-		glog.Flush()
-	}()
+	if glog.V(1) {
+		glog.Errorf("txid = %d", t.txid)
+		glog.Errorf("opid = %d", opid)
+		glog.Errorf("list = %+v", list)
+		defer func() {
+			glog.Errorf("res = %p", res)
+			glog.Flush()
+		}()
+	}
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
 		row := models.GetRootAsRow(list[i].Value, 0).State(nil).UnPack()
 
-		glog.Errorf("=-=- %d -=-=", i)
-		glog.Errorf("xmin = %d", row.XMin)
-		glog.Errorf("xmax = %d", row.XMax)
-		glog.Errorf("cmin = %d", row.CMin)
-		glog.Errorf("cmax = %d", row.CMax)
+		if glog.V(1) {
+			glog.Errorf("=-=- %d -=-=", i)
+			glog.Errorf("xmin = %d", row.XMin)
+			glog.Errorf("xmax = %d", row.XMax)
+			glog.Errorf("cmin = %d", row.CMin)
+			glog.Errorf("cmax = %d", row.CMax)
+		}
 
 		// Частный случай - если запись создана в рамках текущей транзакции
 		if row.XMin == t.txid {
@@ -423,7 +427,9 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair *db.Pair) (err error) {
 		return nil
 	}
 
-	glog.Errorf("value = %s", pair.Value)
+	if glog.V(1) {
+		glog.Errorf("value = %s", pair.Value)
+	}
 
 	state := models.GetRootAsRow(pair.Value, 0).State(nil)
 

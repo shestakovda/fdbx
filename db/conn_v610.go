@@ -65,6 +65,19 @@ func (v *v610Conn) Write(hdl func(Writer) error) error {
 	return nil
 }
 
+func (v *v610Conn) Clear() error {
+	if _, err := v.Transact(func(tx fdb.Transaction) (interface{}, error) {
+		tx.ClearRange(fdb.KeyRange{
+			Begin: fdb.Key{v.databaseID},
+			End:   fdb.Key{v.databaseID, 0xFF},
+		})
+		return nil, nil
+	}); err != nil {
+		return ErrClear.WithReason(err)
+	}
+	return nil
+}
+
 type v610Reader struct {
 	cn *v610Conn
 	tx fdb.ReadTransaction

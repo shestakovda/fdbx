@@ -5,6 +5,7 @@ import "github.com/shestakovda/errors"
 type Connection interface {
 	Read(func(Reader) error) error
 	Write(func(Writer) error) error
+	Clear() error
 }
 
 type Reader interface {
@@ -29,6 +30,7 @@ type Pair struct {
 var (
 	ErrRead    = errors.New("read")
 	ErrWrite   = errors.New("write")
+	ErrClear   = errors.New("clear")
 	ErrConnect = errors.New("connection")
 
 	ErrBadDB = errors.New("bad DB")
