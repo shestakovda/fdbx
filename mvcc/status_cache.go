@@ -2,7 +2,7 @@ package mvcc
 
 import "sync"
 
-const cacheSizeMax = 8000000
+var StatusCacheSize = 8000000
 
 func newStatusCache() *statusCache {
 	return &statusCache{
@@ -34,7 +34,7 @@ func (c *statusCache) set(txid uint64, status byte) {
 		c.min = txid
 	}
 
-	if len(c.cache) > cacheSizeMax {
+	if len(c.cache) > StatusCacheSize {
 		delim := c.min + uint64(0.25*float64(c.max-c.min))
 
 		for key := range c.cache {

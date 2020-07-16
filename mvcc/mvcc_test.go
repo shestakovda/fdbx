@@ -1,6 +1,10 @@
 package mvcc_test
 
 import (
+	"fmt"
+	"runtime"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -20,14 +24,17 @@ type MVCCSuite struct {
 	suite.Suite
 
 	tx mvcc.Tx
+	cn db.Connection
 }
 
 func (s *MVCCSuite) SetupTest() {
-	cn, err := db.ConnectV610(TestDB)
-	s.Require().NoError(err)
-	s.Require().NoError(cn.Clear())
+	var err error
 
-	s.tx, err = mvcc.Begin(cn)
+	s.cn, err = db.ConnectV610(TestDB)
+	s.Require().NoError(err)
+	s.Require().NoError(s.cn.Clear())
+
+	s.tx, err = mvcc.Begin(s.cn)
 	s.Require().NoError(err)
 }
 
@@ -42,14 +49,10 @@ func (s *MVCCSuite) TestUpsertIsolationSameKeys() {
 	val1 := mvcc.NewStrValue("val1")
 	val2 := mvcc.NewStrValue("val2")
 
-	// connect
-	cn, err := db.ConnectV610(TestDB)
-	s.Require().NoError(err)
-
 	// start tx
-	tx1, err := mvcc.Begin(cn)
+	tx1, err := mvcc.Begin(s.cn)
 	s.Require().NoError(err)
-	tx2, err := mvcc.Begin(cn)
+	tx2, err := mvcc.Begin(s.cn)
 	s.Require().NoError(err)
 
 	// insert and check inside tx1
@@ -88,14 +91,10 @@ func (s *MVCCSuite) TestUpsertIsolationDiffKeys() {
 	val1 := mvcc.NewStrValue("val1")
 	val2 := mvcc.NewStrValue("val2")
 
-	// connect
-	cn, err := db.ConnectV610(TestDB)
-	s.Require().NoError(err)
-
 	// start tx
-	tx1, err := mvcc.Begin(cn)
+	tx1, err := mvcc.Begin(s.cn)
 	s.Require().NoError(err)
-	tx2, err := mvcc.Begin(cn)
+	tx2, err := mvcc.Begin(s.cn)
 	s.Require().NoError(err)
 
 	// insert and check inside tx1
@@ -165,6 +164,61 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 			s.Nil(sel)
 		}
 	}
+}
+
+func (s *MVCCSuite) TestConcurrentInsideTx() {
+	var wg sync.WaitGroup
+
+	worker := func() {
+		defer wg.Done()
+
+		for i := 0; i < 100; i++ {
+			key := mvcc.NewStrKey(fmt.Sprintf("key%d", i%9))
+			val := mvcc.NewStrValue(strconv.Itoa(i))
+			s.Require().NoError(s.tx.Upsert(key, val))
+		}
+	}
+
+	cpu := runtime.NumCPU()
+	wg.Add(cpu)
+
+	for i := 0; i < cpu; i++ {
+		go worker()
+	}
+
+	wg.Wait()
+}
+
+func (s *MVCCSuite) TestConcurrentBetweenTx() {
+	var wg sync.WaitGroup
+
+	worker := func(n int) {
+		defer wg.Done()
+
+		for i := 0; i < 100; i++ {
+			tx, err := mvcc.Begin(s.cn)
+			s.Require().NoError(err)
+
+			key := mvcc.NewStrKey(fmt.Sprintf("key%d", i%9))
+			val := mvcc.NewStrValue(strconv.Itoa(i))
+			s.Require().NoError(tx.Upsert(key, val))
+
+			if i%n == 0 {
+				s.Require().NoError(tx.Commit())
+			} else {
+				s.Require().NoError(tx.Cancel())
+			}
+		}
+	}
+
+	cpu := runtime.NumCPU()
+	wg.Add(cpu)
+
+	for i := 0; i < cpu; i++ {
+		go worker(i + 1)
+	}
+
+	wg.Wait()
 }
 
 func BenchmarkSequenceWorkflowFourTx(b *testing.B) {
