@@ -2,8 +2,10 @@
 
 all: test
 
-fmt:
+models.fbs:
 	@flatc --go --gen-mutable --gen-object-api ./models.fbs
+
+fmt: models.fbs
 	@goimports -w .
 	@go mod tidy
 
@@ -24,3 +26,6 @@ mvcc-cover:
 
 mvcc-bench: fmt
 	@go test -bench=. -benchmem -benchtime 30s ./mvcc
+
+orm: fmt
+	@go test -count=1 -timeout 60s -run ORM -gcflags=all=-d=checkptr=0 -race -cover -coverprofile=./orm.cover ./orm

@@ -4,6 +4,7 @@ import "github.com/shestakovda/errors"
 
 type Key interface {
 	Bytes() []byte
+	String() string
 }
 
 type Value interface {
