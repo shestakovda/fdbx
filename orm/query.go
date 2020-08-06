@@ -12,7 +12,7 @@ func NewQuery(cl Collection, tx mvcc.Tx) Query {
 		tx: tx,
 		cl: cl,
 
-		filters: make([]Filter, 8),
+		filters: make([]Filter, 0, 8),
 	}
 }
 
@@ -36,13 +36,11 @@ func (q *query) ByID(ids ...mvcc.Key) Query {
 	return q
 }
 
-func (q *query) First() (Model, error) {
-
+func (q *query) First(ctx context.Context) (Model, error) {
 	if q.stream == nil {
-		ctx, cancel := context.WithCancel(context.Background())
+		wctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-
-		q.makeStream(ctx)
+		q.makeStream(wctx)
 	}
 
 	for m := range q.stream {
@@ -50,22 +48,40 @@ func (q *query) First() (Model, error) {
 	}
 
 	for err := range q.errs {
-		return nil, ErrSelect.WithReason(err)
+		return nil, ErrSelectFirst.WithReason(err)
 	}
 
 	return nil, nil
 }
 
-func (q *query) Delete() (err error) {
+func (q *query) All(ctx context.Context) ([]Model, error) {
 	if q.stream == nil {
-		ctx, cancel := context.WithCancel(context.Background())
+		wctx, cancel := context.WithCancel(ctx)
 		defer cancel()
+		q.makeStream(wctx)
+	}
 
-		q.makeStream(ctx)
+	res := make([]Model, 0, 64)
+	for m := range q.stream {
+		res = append(res, m)
+	}
+
+	for err := range q.errs {
+		return nil, ErrSelectAll.WithReason(err)
+	}
+
+	return res, nil
+}
+
+func (q *query) Delete(ctx context.Context) (err error) {
+	if q.stream == nil {
+		wctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		q.makeStream(wctx)
 	}
 
 	for m := range q.stream {
-		if err = q.tx.Delete(q.cl.ID2Key(m.ID())); err != nil {
+		if err = q.tx.Delete(q.cl.SysKey(m.Key())); err != nil {
 			return ErrDelete.WithReason(err)
 		}
 	}

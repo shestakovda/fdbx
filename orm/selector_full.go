@@ -33,10 +33,11 @@ func (s *fullSelector) Select(ctx context.Context, cl Collection) (<-chan Model,
 			To:   mvcc.NewBytesKey([]byte{0xFF}),
 		}
 
-		pairs, errc := s.tx.FullScan(ctx, rng, s.cnt)
+		// pairs, errc := s.tx.FullScan(ctx, rng, s.cnt)
+		pairs, errc := s.tx.SeqScan(ctx, rng)
 
 		for pair := range pairs {
-			mod := cl.Fabric()(cl.Key2ID(pair.Key))
+			mod := cl.Fabric()(cl.UsrKey(pair.Key))
 
 			if err = mod.Unpack(pair.Value); err != nil {
 				errs <- ErrSelectFull.WithReason(err)

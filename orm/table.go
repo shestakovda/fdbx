@@ -25,7 +25,7 @@ func (t *table) Upsert(tx mvcc.Tx, m Model) (err error) {
 	}
 
 	// TODO: параллельная или массовая загрузка
-	if err = tx.Upsert(t.ID2Key(m.ID()), val); err != nil {
+	if err = tx.Upsert(t.SysKey(m.Key()), val); err != nil {
 		return ErrUpsert.WithReason(err)
 	}
 
@@ -34,10 +34,11 @@ func (t *table) Upsert(tx mvcc.Tx, m Model) (err error) {
 
 func (t *table) Select(tx mvcc.Tx) Query { return NewQuery(t, tx) }
 
-func (t *table) ID2Key(id mvcc.Key) mvcc.Key {
-	return mvcc.NewBytesKey([]byte{byte(t.id) >> 8, byte(t.id)}, id.Bytes())
+func (t *table) SysKey(usr mvcc.Key) mvcc.Key {
+	return mvcc.NewBytesKey([]byte{byte(t.id) >> 8, byte(t.id)}, usr.Bytes())
 }
 
-func (t *table) Key2ID(key mvcc.Key) mvcc.Key {
-	return mvcc.NewBytesKey(key.Bytes()[2:])
+func (t *table) UsrKey(sys mvcc.Key) mvcc.Key {
+	sb := sys.Bytes()
+	return mvcc.NewBytesKey(sb[2 : len(sb)-8])
 }

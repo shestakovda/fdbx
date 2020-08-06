@@ -11,8 +11,8 @@ type Collection interface {
 	ID() uint16
 	Fabric() ModelFabric
 
-	ID2Key(mvcc.Key) mvcc.Key
-	Key2ID(mvcc.Key) mvcc.Key
+	SysKey(usr mvcc.Key) mvcc.Key
+	UsrKey(sys mvcc.Key) mvcc.Key
 
 	Upsert(mvcc.Tx, Model) error
 
@@ -22,14 +22,13 @@ type Collection interface {
 type Query interface {
 	ByID(id ...mvcc.Key) Query
 
-	First() (Model, error)
-
-	Delete() error
+	All(ctx context.Context) ([]Model, error)
+	First(ctx context.Context) (Model, error)
+	Delete(ctx context.Context) error
 }
 
 type Model interface {
-	ID() mvcc.Key
-
+	Key() mvcc.Key
 	Pack() (mvcc.Value, error)
 	Unpack(mvcc.Value) error
 }
@@ -53,4 +52,7 @@ var (
 
 	ErrSelectByID = errors.New("select by ids")
 	ErrSelectFull = errors.New("select full")
+
+	ErrSelectAll   = errors.New("select all")
+	ErrSelectFirst = errors.New("select first")
 )

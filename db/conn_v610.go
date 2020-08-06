@@ -124,6 +124,7 @@ func (cn *v610Conn) Serial(ctx context.Context, ns byte, from, to []byte, limit 
 			errs <- ErrSerial.WithReason(err)
 			return
 		}
+
 	}()
 
 	return list, errs

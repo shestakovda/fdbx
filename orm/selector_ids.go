@@ -31,7 +31,7 @@ func (s *idsSelector) Select(ctx context.Context, cl Collection) (<-chan Model, 
 
 		// TODO: параллельная или массовая загрузка
 		for i := range s.ids {
-			if value, err = s.tx.Select(cl.ID2Key(s.ids[i])); err != nil {
+			if value, err = s.tx.Select(cl.SysKey(s.ids[i])); err != nil {
 				errs <- ErrSelectByID.WithReason(err)
 				return
 			}

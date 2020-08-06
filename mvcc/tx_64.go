@@ -1,6 +1,7 @@
 package mvcc
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -225,8 +226,6 @@ func (t *tx64) FullScan(ctx context.Context, rng *Range, workers int) (<-chan *P
 	errs := make(chan error, workers+1)
 
 	go func() {
-		var err error
-
 		defer close(list)
 		defer close(errs)
 
@@ -245,7 +244,7 @@ func (t *tx64) FullScan(ctx context.Context, rng *Range, workers int) (<-chan *P
 
 				for sub := range rngs {
 
-					if err = t.conn.Read(func(r db.Reader) (exp error) {
+					if err := t.conn.Read(func(r db.Reader) (exp error) {
 						var pairs []*db.Pair
 
 						// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
@@ -256,11 +255,11 @@ func (t *tx64) FullScan(ctx context.Context, rng *Range, workers int) (<-chan *P
 							return ErrFullScanRead.WithReason(exp)
 						}
 
-						for i := range pairs {
+						for j := range pairs {
 							select {
 							case list <- &Pair{
-								Key:   NewBytesKey(pairs[i].Key),
-								Value: &rowValue{models.GetRootAsRow(pairs[i].Value, 0)},
+								Key:   NewBytesKey(pairs[j].Key),
+								Value: &rowValue{models.GetRootAsRow(pairs[j].Value, 0)},
 							}:
 							case <-ctx.Done():
 								return ErrFullScanRead.WithReason(ctx.Err())
@@ -278,7 +277,7 @@ func (t *tx64) FullScan(ctx context.Context, rng *Range, workers int) (<-chan *P
 
 		wg.Wait()
 
-		for err = range errc {
+		for err := range errc {
 			errs <- ErrFullScan.WithReason(err)
 			return
 		}
@@ -304,10 +303,18 @@ func (t *tx64) subRanges(ctx context.Context, rng *Range, size int) (<-chan *Ran
 				wctx, cancel := context.WithCancel(ctx)
 				defer cancel()
 
-				last, errc := t.conn.Serial(wctx, nsUser, from.Bytes(), to, size, true)
+				frb := from.Bytes()
+
+				last, errc := t.conn.Serial(wctx, nsUser, frb, to, size, true)
 
 				for pair := range last {
-					key := NewBytesKey(pair.Key)
+					key := NewBytesKey(pair.Key, []byte{0xFF})
+
+					if bytes.Equal(frb, pair.Key) {
+						next = false
+						return nil
+					}
+
 					select {
 					case list <- &Range{From: from, To: key}:
 						from = key
@@ -466,11 +473,7 @@ func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, key Key) (res
 	}
 
 	if glog.V(1) {
-		glog.Errorf("txid = %d", t.txid)
-		glog.Errorf("opid = %d", opid)
-		glog.Errorf("list = %+v", list)
 		defer func() {
-			glog.Errorf("res = %p", res)
 			glog.Flush()
 		}()
 	}
@@ -480,11 +483,6 @@ func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, key Key) (res
 		row := models.GetRootAsRow(list[i].Value, 0).State(nil).UnPack()
 
 		if glog.V(1) {
-			glog.Errorf("=-=- %d -=-=", i)
-			glog.Errorf("xmin = %d", row.XMin)
-			glog.Errorf("xmax = %d", row.XMax)
-			glog.Errorf("cmin = %d", row.CMin)
-			glog.Errorf("cmax = %d", row.CMax)
 		}
 
 		// Частный случай - если запись создана в рамках текущей транзакции
@@ -563,11 +561,6 @@ func (t *tx64) fetchAll(r db.Reader, lc *statusCache, opid uint32, rng *Range) (
 		row := models.GetRootAsRow(list[i].Value, 0).State(nil).UnPack()
 
 		if glog.V(1) {
-			glog.Errorf("=-=- %d -=-=", i)
-			glog.Errorf("xmin = %d", row.XMin)
-			glog.Errorf("xmax = %d", row.XMax)
-			glog.Errorf("cmin = %d", row.CMin)
-			glog.Errorf("cmax = %d", row.CMax)
 		}
 
 		// Частный случай - если запись создана в рамках текущей транзакции
@@ -635,7 +628,6 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair *db.Pair) (err error) {
 	}
 
 	if glog.V(1) {
-		glog.Errorf("value = %s", pair.Value)
 	}
 
 	state := models.GetRootAsRow(pair.Value, 0).State(nil)
