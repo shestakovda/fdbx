@@ -1,16 +1,23 @@
 package db
 
-import "github.com/shestakovda/errors"
+import (
+	"context"
+
+	"github.com/shestakovda/errors"
+)
 
 type Connection interface {
+	Clear() error
+
 	Read(func(Reader) error) error
 	Write(func(Writer) error) error
-	Clear() error
+
+	Serial(ctx context.Context, ns byte, from, to []byte, limit int, reverse bool) (<-chan *Pair, <-chan error)
 }
 
 type Reader interface {
 	Pair(ns byte, key []byte) (*Pair, error)
-	List(ns byte, prefix []byte, limit int, reverse bool) ([]*Pair, error)
+	List(ns byte, from, to []byte, limit int, reverse bool) ([]*Pair, error)
 }
 
 type Writer interface {
@@ -31,6 +38,7 @@ var (
 	ErrRead    = errors.New("read")
 	ErrWrite   = errors.New("write")
 	ErrClear   = errors.New("clear")
+	ErrSerial  = errors.New("serial")
 	ErrConnect = errors.New("connection")
 
 	ErrBadDB = errors.New("bad DB")

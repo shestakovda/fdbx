@@ -4,6 +4,10 @@ var (
 	txCache = newStatusCache()
 )
 
+var (
+	ScanRangeSize = 10000
+)
+
 const (
 	nsUser  byte = 0
 	nsTx    byte = 1

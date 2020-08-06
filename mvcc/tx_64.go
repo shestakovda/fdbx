@@ -1,8 +1,10 @@
 package mvcc
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -86,35 +88,60 @@ type tx64 struct {
 	status byte
 }
 
+func (t *tx64) Commit() (err error) {
+
+	if err = t.close(txStatusCommitted); err != nil {
+		return ErrCommit.WithReason(err)
+	}
+
+	txCache.set(t.txid, txStatusCommitted)
+	return nil
+}
+
+func (t *tx64) Cancel() (err error) {
+
+	if err = t.close(txStatusAborted); err != nil {
+		return ErrCancel.WithReason(err)
+	}
+
+	txCache.set(t.txid, txStatusAborted)
+	return nil
+}
+
 /*
-	Select - выборка актуального в данной транзакции значения ключа.
+	Delete - удаление актуальной в данный момент записи, если она существует.
+
+	Чтобы найти актуальную запись, нужно сделать по сути обычный Select.
+	Удалить - значит обновить значение в служебных полях и записать в тот же ключ.
+
+	Важно, чтобы выборка и обновление шли строго в одной внутренней FDB транзакции.
 */
-func (t *tx64) Select(key Key) (res Value, err error) {
+func (t *tx64) Delete(key Key) (exp error) {
 	// Получаем номер текущей операции
 	// В случае конфликтов и повторов НЕ будет увеличиваться, и это правильно
 	opid := atomic.AddUint32(&t.opid, 1)
 
-	if err = t.conn.Read(func(r db.Reader) (exp error) {
+	if exp = t.conn.Write(func(w db.Writer) (err error) {
 		var pair *db.Pair
 
 		// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
 		// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
 		lc := newStatusCache()
 
-		if pair, exp = t.fetchRow(r, lc, opid, key); exp != nil {
+		if pair, err = t.fetchRow(w, lc, opid, key); err != nil {
 			return
 		}
 
-		if pair != nil {
-			res = &rowValue{models.GetRootAsRow(pair.Value, 0)}
+		if err = t.dropRow(w, opid, pair); err != nil {
+			return
 		}
 
 		return nil
-	}); err != nil {
-		return nil, ErrSelect.WithReason(err)
+	}); exp != nil {
+		return ErrDelete.WithReason(exp)
 	}
 
-	return res, nil
+	return nil
 }
 
 /*
@@ -159,59 +186,151 @@ func (t *tx64) Upsert(key Key, value Value) (exp error) {
 }
 
 /*
-	Delete - удаление актуальной в данный момент записи, если она существует.
-
-	Чтобы найти актуальную запись, нужно сделать по сути обычный Select.
-	Удалить - значит обновить значение в служебных полях и записать в тот же ключ.
-
-	Важно, чтобы выборка и обновление шли строго в одной внутренней FDB транзакции.
+	Select - выборка актуального в данной транзакции значения ключа.
 */
-func (t *tx64) Delete(key Key) (exp error) {
+func (t *tx64) Select(key Key) (res Value, err error) {
 	// Получаем номер текущей операции
 	// В случае конфликтов и повторов НЕ будет увеличиваться, и это правильно
 	opid := atomic.AddUint32(&t.opid, 1)
 
-	if exp = t.conn.Write(func(w db.Writer) (err error) {
+	if err = t.conn.Read(func(r db.Reader) (exp error) {
 		var pair *db.Pair
 
 		// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
 		// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
 		lc := newStatusCache()
 
-		if pair, err = t.fetchRow(w, lc, opid, key); err != nil {
+		if pair, exp = t.fetchRow(r, lc, opid, key); exp != nil {
 			return
 		}
 
-		if err = t.dropRow(w, opid, pair); err != nil {
-			return
+		if pair != nil {
+			res = &rowValue{models.GetRootAsRow(pair.Value, 0)}
 		}
 
 		return nil
-	}); exp != nil {
-		return ErrDelete.WithReason(exp)
+	}); err != nil {
+		return nil, ErrSelect.WithReason(err)
 	}
 
-	return nil
+	return res, nil
 }
 
-func (t *tx64) Commit() (err error) {
-
-	if err = t.close(txStatusCommitted); err != nil {
-		return ErrCommit.WithReason(err)
-	}
-
-	txCache.set(t.txid, txStatusCommitted)
-	return nil
+func (t *tx64) SeqScan(ctx context.Context, rng *Range) (<-chan *Pair, <-chan error) {
+	return t.FullScan(ctx, rng, 1)
 }
 
-func (t *tx64) Cancel() (err error) {
+func (t *tx64) FullScan(ctx context.Context, rng *Range, workers int) (<-chan *Pair, <-chan error) {
+	list := make(chan *Pair)
+	errs := make(chan error, workers+1)
 
-	if err = t.close(txStatusAborted); err != nil {
-		return ErrCancel.WithReason(err)
-	}
+	go func() {
+		var err error
 
-	txCache.set(t.txid, txStatusAborted)
-	return nil
+		defer close(list)
+		defer close(errs)
+
+		// Получаем номер текущей операции
+		// В случае конфликтов и повторов НЕ будет увеличиваться, и это правильно
+		opid := atomic.AddUint32(&t.opid, 1)
+
+		rngs, errc := t.subRanges(ctx, rng, ScanRangeSize)
+
+		wg := new(sync.WaitGroup)
+		wg.Add(workers)
+
+		for i := 0; i < workers; i++ {
+			go func() {
+				defer wg.Done()
+
+				for sub := range rngs {
+
+					if err = t.conn.Read(func(r db.Reader) (exp error) {
+						var pairs []*db.Pair
+
+						// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
+						// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
+						lc := newStatusCache()
+
+						if pairs, exp = t.fetchAll(r, lc, opid, sub); exp != nil {
+							return ErrFullScanRead.WithReason(exp)
+						}
+
+						for i := range pairs {
+							select {
+							case list <- &Pair{
+								Key:   NewBytesKey(pairs[i].Key),
+								Value: &rowValue{models.GetRootAsRow(pairs[i].Value, 0)},
+							}:
+							case <-ctx.Done():
+								return ErrFullScanRead.WithReason(ctx.Err())
+							}
+						}
+
+						return nil
+					}); err != nil {
+						errs <- ErrFullScan.WithReason(err)
+						return
+					}
+				}
+			}()
+		}
+
+		wg.Wait()
+
+		for err = range errc {
+			errs <- ErrFullScan.WithReason(err)
+			return
+		}
+	}()
+
+	return list, errs
+}
+
+func (t *tx64) subRanges(ctx context.Context, rng *Range, size int) (<-chan *Range, <-chan error) {
+	list := make(chan *Range)
+	errs := make(chan error, 1)
+
+	go func() {
+		defer close(list)
+		defer close(errs)
+
+		to := rng.To.Bytes()
+		from := rng.From
+		next := true
+
+		for next && ctx.Err() == nil {
+			if err := func() error {
+				wctx, cancel := context.WithCancel(ctx)
+				defer cancel()
+
+				last, errc := t.conn.Serial(wctx, nsUser, from.Bytes(), to, size, true)
+
+				for pair := range last {
+					key := NewBytesKey(pair.Key)
+					select {
+					case list <- &Range{From: from, To: key}:
+						from = key
+						return nil
+					case <-wctx.Done():
+						return ErrSubRanges.WithReason(wctx.Err())
+					}
+				}
+
+				for exp := range errc {
+					return ErrSubRanges.WithReason(exp)
+				}
+
+				next = false
+				return nil
+			}(); err != nil {
+				errs <- err
+				return
+			}
+		}
+	}()
+
+	return list, errs
 }
 
 func (t *tx64) isCommitted(local *statusCache, r db.Reader, x uint64) (ok bool, err error) {
@@ -336,11 +455,13 @@ func (t *tx64) close(status byte) (err error) {
 func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, key Key) (res *db.Pair, err error) {
 	var comm bool
 	var list []*db.Pair
+	from := key.Bytes()
+	to := append(from, 0xFF)
 
 	// Загружаем список версий, существующих в рамках этой операции
-	if list, err = r.List(nsUser, key.Bytes(), 0, true); err != nil {
+	if list, err = r.List(nsUser, from, to, 0, true); err != nil {
 		return nil, ErrFetchRow.WithReason(err).WithDebug(errors.Debug{
-			"key": fmt.Sprintf("%x", key.Bytes()),
+			"key": fmt.Sprintf("%x", from),
 		})
 	}
 
@@ -420,6 +541,92 @@ func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, key Key) (res
 	}
 
 	return nil, nil
+}
+
+// Аналогично fetchRow, но все актуальные версии всех ключей по диапазону
+func (t *tx64) fetchAll(r db.Reader, lc *statusCache, opid uint32, rng *Range) (res []*db.Pair, err error) {
+	var comm bool
+	var list []*db.Pair
+	from := rng.From.Bytes()
+	to := rng.To.Bytes()
+	res = make([]*db.Pair, 0, 64)
+
+	// Загружаем список версий, существующих в рамках этой операции
+	if list, err = r.List(nsUser, from, to, 0, false); err != nil {
+		return nil, ErrFetchRow.WithReason(err).WithDebug(errors.Debug{
+			"rng": fmt.Sprintf("%x -> %x", from, to),
+		})
+	}
+
+	// Проверяем все версии, пока не получим актуальную
+	for i := range list {
+		row := models.GetRootAsRow(list[i].Value, 0).State(nil).UnPack()
+
+		if glog.V(1) {
+			glog.Errorf("=-=- %d -=-=", i)
+			glog.Errorf("xmin = %d", row.XMin)
+			glog.Errorf("xmax = %d", row.XMax)
+			glog.Errorf("cmin = %d", row.CMin)
+			glog.Errorf("cmax = %d", row.CMax)
+		}
+
+		// Частный случай - если запись создана в рамках текущей транзакции
+		if row.XMin == t.txid {
+
+			// Если запись создана позже в рамках данной транзакции, то еще не видна
+			if row.CMin >= opid {
+				continue
+			}
+
+			// Поскольку данная транзакция еще не закоммичена, то версия может быть
+			// Или удалена в этой же транзакции, или вообще не удалена (или 0, или t.txid)
+			// Если запись удалена в текущей транзакции и до этого момента, то уже не видна
+			if row.XMax == t.txid && row.CMax < opid {
+				continue
+			}
+
+			// В этом случае объект создан в данной транзакции и еще не удален, можем прочитать
+			res = append(res, list[i])
+			continue
+		}
+
+		if comm, err = t.isCommitted(lc, r, row.XMin); err != nil {
+			return nil, ErrFetchRow.WithReason(err)
+		}
+
+		// Если запись создана другой транзакцией и она еще не закоммичена, то еще не видна
+		if !comm {
+			continue
+		}
+
+		// Проверяем, возможно запись уже была удалена
+		switch row.XMax {
+		case t.txid:
+			// Если она была удалена до этого момента, то уже не видна
+			if row.CMax < opid {
+				continue
+			}
+
+			// В этом случае объект создан в закоммиченной транзакции и удален позже, чем мы тут читаем
+			fallthrough
+		case 0:
+			// В этом случае объект создан в закоммиченной транзакции и еще не был удален
+			res = append(res, list[i])
+			continue
+		default:
+			if comm, err = t.isCommitted(lc, r, row.XMax); err != nil {
+				return nil, ErrFetchRow.WithReason(err)
+			}
+
+			// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
+			if !comm {
+				res = append(res, list[i])
+				continue
+			}
+		}
+	}
+
+	return res, nil
 }
 
 func (t *tx64) dropRow(w db.Writer, opid uint32, pair *db.Pair) (err error) {

@@ -2,12 +2,13 @@ package orm
 
 import (
 	"context"
+	"runtime"
 
 	"github.com/shestakovda/fdbx/mvcc"
 )
 
-func NewTableQuery(cl Collection, tx mvcc.Tx) Query {
-	return &tableQuery{
+func NewQuery(cl Collection, tx mvcc.Tx) Query {
+	return &query{
 		tx: tx,
 		cl: cl,
 
@@ -15,7 +16,7 @@ func NewTableQuery(cl Collection, tx mvcc.Tx) Query {
 	}
 }
 
-type tableQuery struct {
+type query struct {
 	tx mvcc.Tx
 	cl Collection
 
@@ -26,7 +27,7 @@ type tableQuery struct {
 	stream chan Model
 }
 
-func (q *tableQuery) ByID(ids ...string) Query {
+func (q *query) ByID(ids ...mvcc.Key) Query {
 	if q.search == nil {
 		q.search = NewIDsSelector(q.tx, ids...)
 	} else {
@@ -35,7 +36,7 @@ func (q *tableQuery) ByID(ids ...string) Query {
 	return q
 }
 
-func (q *tableQuery) First() (Model, error) {
+func (q *query) First() (Model, error) {
 
 	if q.stream == nil {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -55,7 +56,7 @@ func (q *tableQuery) First() (Model, error) {
 	return nil, nil
 }
 
-func (q *tableQuery) Delete() (err error) {
+func (q *query) Delete() (err error) {
 	if q.stream == nil {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -64,7 +65,7 @@ func (q *tableQuery) Delete() (err error) {
 	}
 
 	for m := range q.stream {
-		if err = q.tx.Delete(m.ID()); err != nil {
+		if err = q.tx.Delete(q.cl.ID2Key(m.ID())); err != nil {
 			return ErrDelete.WithReason(err)
 		}
 	}
@@ -76,9 +77,13 @@ func (q *tableQuery) Delete() (err error) {
 	return nil
 }
 
-func (q *tableQuery) makeStream(ctx context.Context) {
+func (q *query) makeStream(ctx context.Context) {
 	q.stream = make(chan Model)
 	q.errs = make(chan error, 1)
+
+	if q.search == nil {
+		q.search = NewFullSelector(q.tx, runtime.NumCPU())
+	}
 
 	go func() {
 		var err error
@@ -87,13 +92,13 @@ func (q *tableQuery) makeStream(ctx context.Context) {
 		defer close(q.stream)
 		defer close(q.errs)
 
-		list, errs := q.search.Select()
+		list, errs := q.search.Select(ctx, q.cl)
 
 	loop:
 		for m := range list {
 			for i := range q.filters {
 				if skip, err = q.filters[i].Skip(m); err != nil {
-					q.errs <- ErrFilter.WithReason(err)
+					q.errs <- ErrStream.WithReason(err)
 					return
 				}
 

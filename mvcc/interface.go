@@ -1,6 +1,20 @@
 package mvcc
 
-import "github.com/shestakovda/errors"
+import (
+	"context"
+
+	"github.com/shestakovda/errors"
+)
+
+type Pair struct {
+	Key   Key
+	Value Value
+}
+
+type Range struct {
+	From Key
+	To   Key
+}
 
 type Key interface {
 	Bytes() []byte
@@ -13,11 +27,15 @@ type Value interface {
 }
 
 type Tx interface {
-	Select(Key) (Value, error)
-	Upsert(Key, Value) error
-	Delete(Key) error
 	Commit() error
 	Cancel() error
+
+	Delete(Key) error
+	Upsert(Key, Value) error
+	Select(Key) (Value, error)
+
+	SeqScan(ctx context.Context, rng *Range) (<-chan *Pair, <-chan error)
+	FullScan(ctx context.Context, rng *Range, workers int) (<-chan *Pair, <-chan error)
 }
 
 var (
@@ -27,6 +45,11 @@ var (
 	ErrDelete = errors.New("delete")
 	ErrCommit = errors.New("commit")
 	ErrCancel = errors.New("cancel")
+
+	ErrFullScan     = errors.New("full scan")
+	ErrFullScanRead = errors.New("full scan read")
+
+	ErrSubRanges = errors.New("sub ranges")
 
 	ErrFetchTx  = errors.New("fetch tx")
 	ErrFetchRow = errors.New("fetch row")

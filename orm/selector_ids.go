@@ -1,8 +1,12 @@
 package orm
 
-import "github.com/shestakovda/fdbx/mvcc"
+import (
+	"context"
 
-func NewIDsSelector(tx mvcc.Tx, ids ...string) Selector {
+	"github.com/shestakovda/fdbx/mvcc"
+)
+
+func NewIDsSelector(tx mvcc.Tx, ids ...mvcc.Key) Selector {
 	return &idsSelector{
 		tx:  tx,
 		ids: ids,
@@ -11,10 +15,10 @@ func NewIDsSelector(tx mvcc.Tx, ids ...string) Selector {
 
 type idsSelector struct {
 	tx  mvcc.Tx
-	ids []string
+	ids []mvcc.Key
 }
 
-func (s *idsSelector) Select() (<-chan Model, <-chan error) {
+func (s *idsSelector) Select(ctx context.Context, cl Collection) (<-chan Model, <-chan error) {
 	list := make(chan Model)
 	errs := make(chan error, 1)
 
@@ -27,19 +31,24 @@ func (s *idsSelector) Select() (<-chan Model, <-chan error) {
 
 		// TODO: параллельная или массовая загрузка
 		for i := range s.ids {
-			if value, err = s.tx.Select(mvcc.NewStrKey(s.ids[i])); err != nil {
-				errs <- err
+			if value, err = s.tx.Select(cl.ID2Key(s.ids[i])); err != nil {
+				errs <- ErrSelectByID.WithReason(err)
 				return
 			}
 
-			mod := NewTableModel(s.ids[i])
+			mod := cl.Fabric()(s.ids[i])
 
 			if err = mod.Unpack(value); err != nil {
-				errs <- err
+				errs <- ErrSelectByID.WithReason(err)
 				return
 			}
 
-			list <- mod
+			select {
+			case list <- mod:
+			case <-ctx.Done():
+				errs <- ErrSelectByID.WithReason(ctx.Err())
+				return
+			}
 		}
 	}()
 
