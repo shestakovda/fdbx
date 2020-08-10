@@ -35,7 +35,8 @@ type Tx interface {
 	Select(Key) (Value, error)
 
 	SeqScan(ctx context.Context, rng *Range) (<-chan *Pair, <-chan error)
-	FullScan(ctx context.Context, rng *Range, workers int) (<-chan *Pair, <-chan error)
+
+	UpsertBatch(...*Pair) error
 }
 
 var (

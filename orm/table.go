@@ -17,19 +17,41 @@ type table struct {
 func (t *table) ID() uint16          { return t.id }
 func (t *table) Fabric() ModelFabric { return t.fabric }
 
-func (t *table) Upsert(tx mvcc.Tx, m Model) (err error) {
+func (t *table) Upsert(tx mvcc.Tx, mods ...Model) (err error) {
 	var val mvcc.Value
 
-	if val, err = m.Pack(); err != nil {
-		return ErrUpsert.WithReason(err)
-	}
+	switch len(mods) {
+	case 0:
+		return nil
+	case 1:
+		if val, err = mods[0].Pack(); err != nil {
+			return ErrUpsert.WithReason(err)
+		}
 
-	// TODO: параллельная или массовая загрузка
-	if err = tx.Upsert(t.SysKey(m.Key()), val); err != nil {
-		return ErrUpsert.WithReason(err)
-	}
+		if err = tx.Upsert(t.SysKey(mods[0].Key()), val); err != nil {
+			return ErrUpsert.WithReason(err)
+		}
 
-	return nil
+		return nil
+	default:
+		batch := make([]*mvcc.Pair, len(mods))
+
+		for i := range mods {
+			batch[i] = &mvcc.Pair{
+				Key: t.SysKey(mods[i].Key()),
+			}
+
+			if batch[i].Value, err = mods[i].Pack(); err != nil {
+				return ErrUpsert.WithReason(err)
+			}
+		}
+
+		if err = tx.UpsertBatch(batch...); err != nil {
+			return ErrUpsert.WithReason(err)
+		}
+
+		return nil
+	}
 }
 
 func (t *table) Select(tx mvcc.Tx) Query { return NewQuery(t, tx) }

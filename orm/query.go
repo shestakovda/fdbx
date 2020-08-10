@@ -23,8 +23,8 @@ type query struct {
 	search  Selector
 	filters []Filter
 
-	errs   chan error
-	stream chan Model
+	rows chan Row
+	errs chan error
 }
 
 func (q *query) ByID(ids ...mvcc.Key) Query {
@@ -36,52 +36,84 @@ func (q *query) ByID(ids ...mvcc.Key) Query {
 	return q
 }
 
-func (q *query) First(ctx context.Context) (Model, error) {
-	if q.stream == nil {
+func (q *query) First(ctx context.Context) (res Model, err error) {
+	if q.rows == nil {
 		wctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		q.makeStream(wctx)
+		q.makeRows(wctx)
 	}
 
-	for m := range q.stream {
-		return m, nil
+	for r := range q.rows {
+		if res, err = r.Model(); err != nil {
+			return nil, ErrSelectFirst.WithReason(err)
+		}
+
+		return res, nil
 	}
 
-	for err := range q.errs {
+	for err = range q.errs {
 		return nil, ErrSelectFirst.WithReason(err)
 	}
 
 	return nil, nil
 }
 
-func (q *query) All(ctx context.Context) ([]Model, error) {
-	if q.stream == nil {
+func (q *query) All(ctx context.Context) (res []Model, err error) {
+	var mod Model
+
+	if q.rows == nil {
 		wctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		q.makeStream(wctx)
+		q.makeRows(wctx)
 	}
 
-	res := make([]Model, 0, 64)
-	for m := range q.stream {
-		res = append(res, m)
+	res = make([]Model, 0, 64)
+	for r := range q.rows {
+		if mod, err = r.Model(); err != nil {
+			return nil, ErrSelectAll.WithReason(err)
+		}
+
+		res = append(res, mod)
 	}
 
-	for err := range q.errs {
+	for err = range q.errs {
 		return nil, ErrSelectAll.WithReason(err)
 	}
 
 	return res, nil
 }
 
-func (q *query) Delete(ctx context.Context) (err error) {
-	if q.stream == nil {
+func (q *query) Agg(ctx context.Context, funcs ...AggFunc) (err error) {
+	if q.rows == nil {
 		wctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		q.makeStream(wctx)
+		q.makeRows(wctx)
 	}
 
-	for m := range q.stream {
-		if err = q.tx.Delete(q.cl.SysKey(m.Key())); err != nil {
+	for row := range q.rows {
+		for i := range funcs {
+			if err = funcs[i](row); err != nil {
+				return ErrSelectAgg.WithReason(err)
+			}
+		}
+	}
+
+	for err = range q.errs {
+		return ErrSelectAgg.WithReason(err)
+	}
+
+	return nil
+}
+
+func (q *query) Delete(ctx context.Context) (err error) {
+	if q.rows == nil {
+		wctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		q.makeRows(wctx)
+	}
+
+	for r := range q.rows {
+		if err = q.tx.Delete(q.cl.SysKey(r.Key())); err != nil {
 			return ErrDelete.WithReason(err)
 		}
 	}
@@ -93,8 +125,8 @@ func (q *query) Delete(ctx context.Context) (err error) {
 	return nil
 }
 
-func (q *query) makeStream(ctx context.Context) {
-	q.stream = make(chan Model)
+func (q *query) makeRows(ctx context.Context) {
+	q.rows = make(chan Row)
 	q.errs = make(chan error, 1)
 
 	if q.search == nil {
@@ -105,15 +137,15 @@ func (q *query) makeStream(ctx context.Context) {
 		var err error
 		var skip bool
 
-		defer close(q.stream)
+		defer close(q.rows)
 		defer close(q.errs)
 
 		list, errs := q.search.Select(ctx, q.cl)
 
 	loop:
-		for m := range list {
+		for r := range list {
 			for i := range q.filters {
-				if skip, err = q.filters[i].Skip(m); err != nil {
+				if skip, err = q.filters[i].Skip(r); err != nil {
 					q.errs <- ErrStream.WithReason(err)
 					return
 				}
@@ -124,7 +156,7 @@ func (q *query) makeStream(ctx context.Context) {
 			}
 
 			select {
-			case q.stream <- m:
+			case q.rows <- r:
 			case <-ctx.Done():
 				q.errs <- ErrStream.WithReason(ctx.Err())
 				return

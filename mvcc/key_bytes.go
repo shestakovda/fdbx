@@ -1,19 +1,26 @@
 package mvcc
 
 func NewBytesKey(parts ...[]byte) Value {
-	cnt := 0
+	switch len(parts) {
+	case 0:
+		return nil
+	case 1:
+		return bytesKey(parts[0])
+	default:
+		cnt := 0
 
-	for i := range parts {
-		cnt += len(parts[i])
+		for i := range parts {
+			cnt += len(parts[i])
+		}
+
+		key := make(bytesKey, 0, cnt)
+
+		for i := range parts {
+			key = append(key, parts[i]...)
+		}
+
+		return key
 	}
-
-	key := make(bytesKey, 0, cnt)
-
-	for i := range parts {
-		key = append(key, parts[i]...)
-	}
-
-	return key
 }
 
 type bytesKey []byte

@@ -12,6 +12,6 @@ type idsFilter struct {
 	ids []mvcc.Key
 }
 
-func (f *idsFilter) Skip(m Model) (bool, error) {
+func (f *idsFilter) Skip(r Row) (bool, error) {
 	return false, nil
 }

@@ -98,7 +98,7 @@ func (cn *v610Conn) Serial(ctx context.Context, ns byte, from, to []byte, limit 
 			return
 		}
 
-		if fTo, err = cn.fdbKey(ns, to); err != nil {
+		if fTo, err = cn.fdbKey(ns, append(to, 0xff)); err != nil {
 			errs <- ErrSerial.WithReason(err)
 			return
 		}
@@ -168,29 +168,19 @@ func (r *v610Reader) Pair(ns byte, key []byte) (res *Pair, err error) {
 	return res, nil
 }
 
-func (r *v610Reader) List(ns byte, from, to []byte, limit int, reverse bool) (res []*Pair, err error) {
+func (r *v610Reader) List(ns byte, from, to []byte, limit int, reverse bool) (_ ListPromise, err error) {
 	var fFrom, fTo fdb.Key
 
 	if fFrom, err = r.cn.fdbKey(ns, from); err != nil {
 		return nil, ErrGetList.WithReason(err)
 	}
 
-	if fTo, err = r.cn.fdbKey(ns, to); err != nil {
+	if fTo, err = r.cn.fdbKey(ns, append(to, 0xff)); err != nil {
 		return nil, ErrGetList.WithReason(err)
 	}
 
 	opts := fdb.RangeOptions{Mode: fdb.StreamingModeWantAll, Reverse: reverse, Limit: limit}
-	rng := r.tx.GetRange(fdb.KeyRange{Begin: fFrom, End: fTo}, opts).GetSliceOrPanic()
-	res = make([]*Pair, len(rng))
-
-	for i := range rng {
-		res[i] = &Pair{
-			Key:   r.cn.usrKey(rng[i].Key),
-			Value: rng[i].Value,
-		}
-	}
-
-	return res, nil
+	return &listPromise{cn: r.cn, rs: r.tx.GetRange(fdb.KeyRange{Begin: fFrom, End: fTo}, opts)}, nil
 }
 
 type v610Writer struct {
@@ -230,4 +220,22 @@ func (w *v610Writer) DropPair(ns byte, key []byte) (err error) {
 
 	w.tx.Clear(fk)
 	return nil
+}
+
+type listPromise struct {
+	cn *v610Conn
+	rs fdb.RangeResult
+}
+
+func (p *listPromise) Resolve() []*Pair {
+	rng := p.rs.GetSliceOrPanic()
+	res := make([]*Pair, len(rng))
+	for i := range rng {
+		res[i] = &Pair{
+			Key:   p.cn.usrKey(rng[i].Key),
+			Value: rng[i].Value,
+		}
+	}
+
+	return res
 }

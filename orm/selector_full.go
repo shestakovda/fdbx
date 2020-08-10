@@ -18,8 +18,8 @@ type fullSelector struct {
 	cnt int
 }
 
-func (s *fullSelector) Select(ctx context.Context, cl Collection) (<-chan Model, <-chan error) {
-	list := make(chan Model)
+func (s *fullSelector) Select(ctx context.Context, cl Collection) (<-chan Row, <-chan error) {
+	list := make(chan Row)
 	errs := make(chan error, 1)
 
 	go func() {
@@ -29,23 +29,15 @@ func (s *fullSelector) Select(ctx context.Context, cl Collection) (<-chan Model,
 		defer close(errs)
 
 		rng := &mvcc.Range{
-			From: mvcc.NewBytesKey([]byte{0x00}),
-			To:   mvcc.NewBytesKey([]byte{0xFF}),
+			From: cl.SysKey(mvcc.NewBytesKey([]byte{0x00})),
+			To:   cl.SysKey(mvcc.NewBytesKey([]byte{0xFF})),
 		}
 
-		// pairs, errc := s.tx.FullScan(ctx, rng, s.cnt)
 		pairs, errc := s.tx.SeqScan(ctx, rng)
 
 		for pair := range pairs {
-			mod := cl.Fabric()(cl.UsrKey(pair.Key))
-
-			if err = mod.Unpack(pair.Value); err != nil {
-				errs <- ErrSelectFull.WithReason(err)
-				return
-			}
-
 			select {
-			case list <- mod:
+			case list <- &row{key: cl.UsrKey(pair.Key), val: pair.Value, fab: cl.Fabric()}:
 			case <-ctx.Done():
 				errs <- ErrSelectFull.WithReason(ctx.Err())
 				return

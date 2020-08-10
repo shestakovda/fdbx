@@ -1,15 +1,12 @@
 package mvcc
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/golang/glog"
 	fbs "github.com/google/flatbuffers/go"
 	"github.com/google/uuid"
 	"github.com/shestakovda/errors"
@@ -124,12 +121,17 @@ func (t *tx64) Delete(key Key) (exp error) {
 
 	if exp = t.conn.Write(func(w db.Writer) (err error) {
 		var pair *db.Pair
+		var lp db.ListPromise
 
 		// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
 		// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
 		lc := newStatusCache()
 
-		if pair, err = t.fetchRow(w, lc, opid, key); err != nil {
+		if lp, err = t.rowPromise(w, key); err != nil {
+			return
+		}
+
+		if pair, err = t.fetchRow(w, lc, opid, lp); err != nil {
 			return
 		}
 
@@ -161,12 +163,17 @@ func (t *tx64) Upsert(key Key, value Value) (exp error) {
 
 	if exp = t.conn.Write(func(w db.Writer) (err error) {
 		var pair *db.Pair
+		var lp db.ListPromise
 
 		// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
 		// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
 		lc := newStatusCache()
 
-		if pair, err = t.fetchRow(w, lc, opid, key); err != nil {
+		if lp, err = t.rowPromise(w, key); err != nil {
+			return
+		}
+
+		if pair, err = t.fetchRow(w, lc, opid, lp); err != nil {
 			return
 		}
 
@@ -176,6 +183,49 @@ func (t *tx64) Upsert(key Key, value Value) (exp error) {
 
 		if err = t.saveRow(w, opid, key.Bytes(), value.Bytes()); err != nil {
 			return
+		}
+
+		return nil
+	}); exp != nil {
+		return ErrUpsert.WithReason(exp)
+	}
+
+	return nil
+}
+
+func (t *tx64) UpsertBatch(pairs ...*Pair) (exp error) {
+	// Получаем номер текущей операции
+	// В случае конфликтов и повторов НЕ будет увеличиваться, и это правильно
+	opid := atomic.AddUint32(&t.opid, 1)
+
+	if exp = t.conn.Write(func(w db.Writer) (err error) {
+		var pair *db.Pair
+
+		// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
+		// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
+		lc := newStatusCache()
+
+		lps := make([]db.ListPromise, len(pairs))
+
+		for i := range pairs {
+			if lps[i], err = t.rowPromise(w, pairs[i].Key); err != nil {
+				return
+			}
+		}
+
+		for i := range lps {
+
+			if pair, err = t.fetchRow(w, lc, opid, lps[i]); err != nil {
+				return
+			}
+
+			if err = t.dropRow(w, opid, pair); err != nil {
+				return
+			}
+
+			if err = t.saveRow(w, opid, pairs[i].Key.Bytes(), pairs[i].Value.Bytes()); err != nil {
+				return
+			}
 		}
 
 		return nil
@@ -196,12 +246,17 @@ func (t *tx64) Select(key Key) (res Value, err error) {
 
 	if err = t.conn.Read(func(r db.Reader) (exp error) {
 		var pair *db.Pair
+		var lp db.ListPromise
 
 		// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
 		// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
 		lc := newStatusCache()
 
-		if pair, exp = t.fetchRow(r, lc, opid, key); exp != nil {
+		if lp, err = t.rowPromise(r, key); err != nil {
+			return
+		}
+
+		if pair, exp = t.fetchRow(r, lc, opid, lp); exp != nil {
 			return
 		}
 
@@ -218,12 +273,8 @@ func (t *tx64) Select(key Key) (res Value, err error) {
 }
 
 func (t *tx64) SeqScan(ctx context.Context, rng *Range) (<-chan *Pair, <-chan error) {
-	return t.FullScan(ctx, rng, 1)
-}
-
-func (t *tx64) FullScan(ctx context.Context, rng *Range, workers int) (<-chan *Pair, <-chan error) {
 	list := make(chan *Pair)
-	errs := make(chan error, workers+1)
+	errs := make(chan error, 1)
 
 	go func() {
 		defer close(list)
@@ -232,106 +283,47 @@ func (t *tx64) FullScan(ctx context.Context, rng *Range, workers int) (<-chan *P
 		// Получаем номер текущей операции
 		// В случае конфликтов и повторов НЕ будет увеличиваться, и это правильно
 		opid := atomic.AddUint32(&t.opid, 1)
-
-		rngs, errc := t.subRanges(ctx, rng, ScanRangeSize)
-
-		wg := new(sync.WaitGroup)
-		wg.Add(workers)
-
-		for i := 0; i < workers; i++ {
-			go func() {
-				defer wg.Done()
-
-				for sub := range rngs {
-
-					if err := t.conn.Read(func(r db.Reader) (exp error) {
-						var pairs []*db.Pair
-
-						// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
-						// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
-						lc := newStatusCache()
-
-						if pairs, exp = t.fetchAll(r, lc, opid, sub); exp != nil {
-							return ErrFullScanRead.WithReason(exp)
-						}
-
-						for j := range pairs {
-							select {
-							case list <- &Pair{
-								Key:   NewBytesKey(pairs[j].Key),
-								Value: &rowValue{models.GetRootAsRow(pairs[j].Value, 0)},
-							}:
-							case <-ctx.Done():
-								return ErrFullScanRead.WithReason(ctx.Err())
-							}
-						}
-
-						return nil
-					}); err != nil {
-						errs <- ErrFullScan.WithReason(err)
-						return
-					}
-				}
-			}()
-		}
-
-		wg.Wait()
-
-		for err := range errc {
-			errs <- ErrFullScan.WithReason(err)
-			return
-		}
-	}()
-
-	return list, errs
-}
-
-func (t *tx64) subRanges(ctx context.Context, rng *Range, size int) (<-chan *Range, <-chan error) {
-	list := make(chan *Range)
-	errs := make(chan error, 1)
-
-	go func() {
-		defer close(list)
-		defer close(errs)
-
-		to := rng.To.Bytes()
-		from := rng.From
+		from := rng.From.Bytes()
 		next := true
 
 		for next && ctx.Err() == nil {
-			if err := func() error {
-				wctx, cancel := context.WithCancel(ctx)
-				defer cancel()
+			sub := &Range{From: NewBytesKey(from), To: rng.To}
 
-				frb := from.Bytes()
+			if err := t.conn.Read(func(r db.Reader) (exp error) {
+				var pairs []*db.Pair
+				var lp db.ListPromise
 
-				last, errc := t.conn.Serial(wctx, nsUser, frb, to, size, true)
+				// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
+				// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
+				lc := newStatusCache()
 
-				for pair := range last {
-					key := NewBytesKey(pair.Key, []byte{0xFF})
+				if lp, exp = t.allPromise(r, sub, ScanRangeSize); exp != nil {
+					return
+				}
 
-					if bytes.Equal(frb, pair.Key) {
-						next = false
-						return nil
-					}
+				if pairs, exp = t.fetchAll(r, lc, opid, lp); exp != nil {
+					return ErrFullScanRead.WithReason(exp)
+				}
 
+				for j := range pairs {
 					select {
-					case list <- &Range{From: from, To: key}:
-						from = key
-						return nil
-					case <-wctx.Done():
-						return ErrSubRanges.WithReason(wctx.Err())
+					case list <- &Pair{
+						Key:   NewBytesKey(pairs[j].Key),
+						Value: &rowValue{models.GetRootAsRow(pairs[j].Value, 0)},
+					}:
+					case <-ctx.Done():
+						return ErrFullScanRead.WithReason(ctx.Err())
 					}
 				}
 
-				for exp := range errc {
-					return ErrSubRanges.WithReason(exp)
+				if len(pairs) > 0 {
+					from = append(pairs[len(pairs)-1].Key, 0xff)
+				} else {
+					next = false
 				}
-
-				next = false
 				return nil
-			}(); err != nil {
-				errs <- err
+			}); err != nil {
+				errs <- ErrFullScan.WithReason(err)
 				return
 			}
 		}
@@ -426,6 +418,17 @@ func (t *tx64) close(status byte) (err error) {
 	return nil
 }
 
+func (t *tx64) rowPromise(r db.Reader, key Key) (lp db.ListPromise, err error) {
+	from := key.Bytes()
+	if lp, err = r.List(nsUser, from, from, 0, true); err != nil {
+		return nil, ErrFetchRow.WithReason(err).WithDebug(errors.Debug{
+			"key": fmt.Sprintf("%x", from),
+		})
+	}
+
+	return lp, nil
+}
+
 /*
 	fetchRow - выборка одного актуального в данной транзакции значения ключа.
 
@@ -459,31 +462,15 @@ func (t *tx64) close(status byte) (err error) {
 	сработает внутренний механизм конфликтов fdb, так что одновременно двух актуальных
 	версий не должно появиться. Один из обработчиков увидит изменения и изменит поведение.
 */
-func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, key Key) (res *db.Pair, err error) {
+func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, lp db.ListPromise) (res *db.Pair, err error) {
 	var comm bool
-	var list []*db.Pair
-	from := key.Bytes()
-	to := append(from, 0xFF)
 
 	// Загружаем список версий, существующих в рамках этой операции
-	if list, err = r.List(nsUser, from, to, 0, true); err != nil {
-		return nil, ErrFetchRow.WithReason(err).WithDebug(errors.Debug{
-			"key": fmt.Sprintf("%x", from),
-		})
-	}
-
-	if glog.V(1) {
-		defer func() {
-			glog.Flush()
-		}()
-	}
+	list := lp.Resolve()
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
 		row := models.GetRootAsRow(list[i].Value, 0).State(nil).UnPack()
-
-		if glog.V(1) {
-		}
 
 		// Частный случай - если запись создана в рамках текущей транзакции
 		if row.XMin == t.txid {
@@ -541,27 +528,28 @@ func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, key Key) (res
 	return nil, nil
 }
 
-// Аналогично fetchRow, но все актуальные версии всех ключей по диапазону
-func (t *tx64) fetchAll(r db.Reader, lc *statusCache, opid uint32, rng *Range) (res []*db.Pair, err error) {
-	var comm bool
-	var list []*db.Pair
+func (t *tx64) allPromise(r db.Reader, rng *Range, limit int) (lp db.ListPromise, err error) {
 	from := rng.From.Bytes()
 	to := rng.To.Bytes()
-	res = make([]*db.Pair, 0, 64)
-
-	// Загружаем список версий, существующих в рамках этой операции
-	if list, err = r.List(nsUser, from, to, 0, false); err != nil {
+	if lp, err = r.List(nsUser, from, to, limit, false); err != nil {
 		return nil, ErrFetchRow.WithReason(err).WithDebug(errors.Debug{
 			"rng": fmt.Sprintf("%x -> %x", from, to),
 		})
 	}
 
+	return lp, nil
+}
+
+// Аналогично fetchRow, но все актуальные версии всех ключей по диапазону
+func (t *tx64) fetchAll(r db.Reader, lc *statusCache, opid uint32, lp db.ListPromise) (res []*db.Pair, err error) {
+	var comm bool
+
+	list := lp.Resolve()
+	res = make([]*db.Pair, 0, len(list))
+
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
 		row := models.GetRootAsRow(list[i].Value, 0).State(nil).UnPack()
-
-		if glog.V(1) {
-		}
 
 		// Частный случай - если запись создана в рамках текущей транзакции
 		if row.XMin == t.txid {
@@ -625,9 +613,6 @@ func (t *tx64) fetchAll(r db.Reader, lc *statusCache, opid uint32, rng *Range) (
 func (t *tx64) dropRow(w db.Writer, opid uint32, pair *db.Pair) (err error) {
 	if pair == nil {
 		return nil
-	}
-
-	if glog.V(1) {
 	}
 
 	state := models.GetRootAsRow(pair.Value, 0).State(nil)

@@ -17,7 +17,7 @@ type Connection interface {
 
 type Reader interface {
 	Pair(ns byte, key []byte) (*Pair, error)
-	List(ns byte, from, to []byte, limit int, reverse bool) ([]*Pair, error)
+	List(ns byte, from, to []byte, limit int, reverse bool) (ListPromise, error)
 }
 
 type Writer interface {
@@ -32,6 +32,10 @@ type Writer interface {
 type Pair struct {
 	Key   []byte
 	Value []byte
+}
+
+type ListPromise interface {
+	Resolve() []*Pair
 }
 
 var (

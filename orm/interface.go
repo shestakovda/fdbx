@@ -14,7 +14,7 @@ type Collection interface {
 	SysKey(usr mvcc.Key) mvcc.Key
 	UsrKey(sys mvcc.Key) mvcc.Key
 
-	Upsert(mvcc.Tx, Model) error
+	Upsert(mvcc.Tx, ...Model) error
 
 	Select(mvcc.Tx) Query
 }
@@ -25,6 +25,8 @@ type Query interface {
 	All(ctx context.Context) ([]Model, error)
 	First(ctx context.Context) (Model, error)
 	Delete(ctx context.Context) error
+
+	Agg(ctx context.Context, funcs ...AggFunc) (err error)
 }
 
 type Model interface {
@@ -33,13 +35,21 @@ type Model interface {
 	Unpack(mvcc.Value) error
 }
 
+type Row interface {
+	Key() mvcc.Key
+	Value() mvcc.Value
+	Model() (Model, error)
+}
+
 type Selector interface {
-	Select(context.Context, Collection) (<-chan Model, <-chan error)
+	Select(context.Context, Collection) (<-chan Row, <-chan error)
 }
 
 type Filter interface {
-	Skip(Model) (bool, error)
+	Skip(Row) (bool, error)
 }
+
+type AggFunc func(Row) error
 
 type ModelFabric func(id mvcc.Key) Model
 
@@ -52,7 +62,10 @@ var (
 
 	ErrSelectByID = errors.New("select by ids")
 	ErrSelectFull = errors.New("select full")
+	ErrSelectAgg  = errors.New("select agg")
 
 	ErrSelectAll   = errors.New("select all")
 	ErrSelectFirst = errors.New("select first")
+
+	ErrRowModel = errors.New("row model")
 )

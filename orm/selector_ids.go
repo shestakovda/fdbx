@@ -18,12 +18,11 @@ type idsSelector struct {
 	ids []mvcc.Key
 }
 
-func (s *idsSelector) Select(ctx context.Context, cl Collection) (<-chan Model, <-chan error) {
-	list := make(chan Model)
+func (s *idsSelector) Select(ctx context.Context, cl Collection) (<-chan Row, <-chan error) {
+	list := make(chan Row)
 	errs := make(chan error, 1)
 
 	go func() {
-		var err error
 		var value mvcc.Value
 
 		defer close(list)
@@ -31,20 +30,8 @@ func (s *idsSelector) Select(ctx context.Context, cl Collection) (<-chan Model, 
 
 		// TODO: параллельная или массовая загрузка
 		for i := range s.ids {
-			if value, err = s.tx.Select(cl.SysKey(s.ids[i])); err != nil {
-				errs <- ErrSelectByID.WithReason(err)
-				return
-			}
-
-			mod := cl.Fabric()(s.ids[i])
-
-			if err = mod.Unpack(value); err != nil {
-				errs <- ErrSelectByID.WithReason(err)
-				return
-			}
-
 			select {
-			case list <- mod:
+			case list <- &row{key: s.ids[i], val: value, fab: cl.Fabric()}:
 			case <-ctx.Done():
 				errs <- ErrSelectByID.WithReason(ctx.Err())
 				return

@@ -29,3 +29,8 @@ mvcc-bench: fmt
 
 orm: fmt
 	@go test -count=1 -timeout 60s -run ORM -gcflags=all=-d=checkptr=0 -race -cover -coverprofile=./orm.cover ./orm
+
+orm-bench: fmt
+# 	@go test -bench=. -benchmem -benchtime 60s  ./orm
+# 	@go test -bench=UpsertBatch -benchmem -memprofile=mem.out -cpuprofile=cpu.out -benchtime 10s  ./orm
+	@go test -bench=Count -benchmem -benchtime 60s  ./orm
