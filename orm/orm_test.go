@@ -25,7 +25,7 @@ type ORMSuite struct {
 
 	tx  mvcc.Tx
 	cn  db.Connection
-	tbl orm.Collection
+	tbl orm.Table
 }
 
 func (s *ORMSuite) SetupTest() {
@@ -38,7 +38,7 @@ func (s *ORMSuite) SetupTest() {
 	s.tx, err = mvcc.Begin(s.cn)
 	s.Require().NoError(err)
 
-	s.tbl = orm.Table(TestTable, newModel)
+	s.tbl = orm.NewTable(TestTable, newModel)
 }
 
 func (s *ORMSuite) TearDownTest() {
@@ -119,7 +119,7 @@ func BenchmarkUpsert(b *testing.B) {
 	require.NoError(b, err)
 	defer tx.Cancel()
 
-	tbl := orm.Table(TestTable, newModel)
+	tbl := orm.NewTable(TestTable, newModel)
 
 	b.ResetTimer()
 
@@ -139,7 +139,7 @@ func BenchmarkUpsertBatch(b *testing.B) {
 	require.NoError(b, err)
 	defer tx.Cancel()
 
-	tbl := orm.Table(TestTable, newModel)
+	tbl := orm.NewTable(TestTable, newModel)
 
 	count := 10000
 	batch := make([]orm.Model, count)
@@ -169,7 +169,7 @@ func BenchmarkCount(b *testing.B) {
 	tx, err := mvcc.Begin(cn)
 	require.NoError(b, err)
 
-	tbl := orm.Table(TestTable, newModel)
+	tbl := orm.NewTable(TestTable, newModel)
 
 	for k := 0; k < count/mvcc.ScanRangeSize; k++ {
 		batch := make([]orm.Model, mvcc.ScanRangeSize)

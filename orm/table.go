@@ -2,7 +2,7 @@ package orm
 
 import "github.com/shestakovda/fdbx/mvcc"
 
-func Table(id uint16, fab ModelFabric) Collection {
+func NewTable(id uint16, fab ModelFabric) Table {
 	return &table{
 		id:     id,
 		fabric: fab,
@@ -14,8 +14,20 @@ type table struct {
 	fabric ModelFabric
 }
 
-func (t *table) ID() uint16          { return t.id }
-func (t *table) Fabric() ModelFabric { return t.fabric }
+func (t *table) ID() uint16 { return t.id }
+
+func (t *table) SysKey(usr mvcc.Key) mvcc.Key {
+	return mvcc.NewBytesKey([]byte{byte(t.id) >> 8, byte(t.id)}, usr.Bytes())
+}
+
+func (t *table) UsrKey(sys mvcc.Key) mvcc.Key {
+	sb := sys.Bytes()
+	return mvcc.NewBytesKey(sb[2 : len(sb)-8])
+}
+
+func (t *table) NewRow(key mvcc.Key, val mvcc.Value) Row {
+	return &tableRow{key: key, val: val, fab: t.fabric}
+}
 
 func (t *table) Upsert(tx mvcc.Tx, mods ...Model) (err error) {
 	var val mvcc.Value
@@ -55,12 +67,3 @@ func (t *table) Upsert(tx mvcc.Tx, mods ...Model) (err error) {
 }
 
 func (t *table) Select(tx mvcc.Tx) Query { return NewQuery(t, tx) }
-
-func (t *table) SysKey(usr mvcc.Key) mvcc.Key {
-	return mvcc.NewBytesKey([]byte{byte(t.id) >> 8, byte(t.id)}, usr.Bytes())
-}
-
-func (t *table) UsrKey(sys mvcc.Key) mvcc.Key {
-	sb := sys.Bytes()
-	return mvcc.NewBytesKey(sb[2 : len(sb)-8])
-}

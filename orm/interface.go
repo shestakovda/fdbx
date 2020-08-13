@@ -9,14 +9,16 @@ import (
 
 type Collection interface {
 	ID() uint16
-	Fabric() ModelFabric
+	SysKey(mvcc.Key) mvcc.Key
+	UsrKey(mvcc.Key) mvcc.Key
+	NewRow(mvcc.Key, mvcc.Value) Row
+}
 
-	SysKey(usr mvcc.Key) mvcc.Key
-	UsrKey(sys mvcc.Key) mvcc.Key
-
-	Upsert(mvcc.Tx, ...Model) error
+type Table interface {
+	Collection
 
 	Select(mvcc.Tx) Query
+	Upsert(mvcc.Tx, ...Model) error
 }
 
 type Query interface {

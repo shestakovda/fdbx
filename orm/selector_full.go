@@ -37,7 +37,7 @@ func (s *fullSelector) Select(ctx context.Context, cl Collection) (<-chan Row, <
 
 		for pair := range pairs {
 			select {
-			case list <- &row{key: cl.UsrKey(pair.Key), val: pair.Value, fab: cl.Fabric()}:
+			case list <- cl.NewRow(cl.UsrKey(pair.Key), pair.Value):
 			case <-ctx.Done():
 				errs <- ErrSelectFull.WithReason(ctx.Err())
 				return

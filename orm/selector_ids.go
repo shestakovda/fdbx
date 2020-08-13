@@ -31,7 +31,7 @@ func (s *idsSelector) Select(ctx context.Context, cl Collection) (<-chan Row, <-
 		// TODO: параллельная или массовая загрузка
 		for i := range s.ids {
 			select {
-			case list <- &row{key: s.ids[i], val: value, fab: cl.Fabric()}:
+			case list <- cl.NewRow(s.ids[i], value):
 			case <-ctx.Done():
 				errs <- ErrSelectByID.WithReason(ctx.Err())
 				return
