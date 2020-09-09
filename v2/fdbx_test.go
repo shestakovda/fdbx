@@ -3,7 +3,7 @@ package fdbx_test
 import (
 	"testing"
 
-	"github.com/shestakovda/fdbx"
+	"github.com/shestakovda/fdbx/v2"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )

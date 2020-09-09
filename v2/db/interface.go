@@ -2,7 +2,7 @@ package db
 
 import (
 	"github.com/shestakovda/errx"
-	"github.com/shestakovda/fdbx"
+	"github.com/shestakovda/fdbx/v2"
 )
 
 // ListGetter - метод для отложенного получения списка значений

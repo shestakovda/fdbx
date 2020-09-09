@@ -4,7 +4,7 @@ import (
 	"bytes"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/shestakovda/fdbx"
+	"github.com/shestakovda/fdbx/v2"
 )
 
 var tail = bytes.Repeat([]byte{0xFF}, 256)

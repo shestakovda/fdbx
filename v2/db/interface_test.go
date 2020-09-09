@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/shestakovda/errx"
-	"github.com/shestakovda/fdbx"
-	"github.com/shestakovda/fdbx/db"
+	"github.com/shestakovda/fdbx/v2"
+	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/stretchr/testify/suite"
 )
 

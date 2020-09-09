@@ -2,8 +2,8 @@ package orm
 
 import (
 	"github.com/shestakovda/errx"
-	"github.com/shestakovda/fdbx"
-	"github.com/shestakovda/fdbx/mvcc"
+	"github.com/shestakovda/fdbx/v2"
+	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
 // Collection - универсальный интерфейс коллекции, чтобы работать с запросами

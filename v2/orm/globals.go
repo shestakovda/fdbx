@@ -5,8 +5,8 @@ import (
 
 	fbs "github.com/google/flatbuffers/go"
 
-	"github.com/shestakovda/fdbx"
-	"github.com/shestakovda/fdbx/models"
+	"github.com/shestakovda/fdbx/v2"
+	"github.com/shestakovda/fdbx/v2/models"
 )
 
 var fbsPool = sync.Pool{New: func() interface{} { return fbs.NewBuilder(128) }}

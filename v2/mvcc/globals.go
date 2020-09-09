@@ -4,8 +4,8 @@ import (
 	"encoding/binary"
 	"sync"
 
-	"github.com/shestakovda/fdbx"
-	"github.com/shestakovda/fdbx/models"
+	"github.com/shestakovda/fdbx/v2"
+	"github.com/shestakovda/fdbx/v2/models"
 
 	fbs "github.com/google/flatbuffers/go"
 )

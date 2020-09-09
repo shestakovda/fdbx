@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/shestakovda/fdbx"
+	"github.com/shestakovda/fdbx/v2"
 )
 
 type v610Writer struct {

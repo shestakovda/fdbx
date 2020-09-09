@@ -1,8 +1,8 @@
 package orm
 
 import (
-	"github.com/shestakovda/fdbx"
-	"github.com/shestakovda/fdbx/mvcc"
+	"github.com/shestakovda/fdbx/v2"
+	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
 func NewQuery(cl Collection, tx mvcc.Tx) Query {

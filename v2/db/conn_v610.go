@@ -2,7 +2,7 @@ package db
 
 import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/shestakovda/fdbx"
+	"github.com/shestakovda/fdbx/v2"
 )
 
 func newConnV610(id byte, opts ...Option) (cn *v610Conn, err error) {

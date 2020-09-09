@@ -7,9 +7,9 @@ import (
 
 	fbs "github.com/google/flatbuffers/go"
 	"github.com/google/uuid"
-	"github.com/shestakovda/fdbx"
-	"github.com/shestakovda/fdbx/db"
-	"github.com/shestakovda/fdbx/models"
+	"github.com/shestakovda/fdbx/v2"
+	"github.com/shestakovda/fdbx/v2/db"
+	"github.com/shestakovda/fdbx/v2/models"
 )
 
 /*

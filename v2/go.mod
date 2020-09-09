@@ -1,4 +1,4 @@
-module github.com/shestakovda/fdbx
+module github.com/shestakovda/fdbx/v2
 
 go 1.13
 

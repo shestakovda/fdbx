@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/shestakovda/fdbx"
-	"github.com/shestakovda/fdbx/db"
-	"github.com/shestakovda/fdbx/mvcc"
+	"github.com/shestakovda/fdbx/v2"
+	"github.com/shestakovda/fdbx/v2/db"
+	"github.com/shestakovda/fdbx/v2/mvcc"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
