@@ -1,0 +1,19 @@
+// FlatBuffers Schema
+// http://google.github.io/flatbuffers/
+
+namespace models;
+
+table File {
+	Path:string;
+	MTime:uint64;
+	Data:[uint8];
+}
+
+table TestRecord {
+	Name:string;
+	Number:uint64;
+	Float:float64;
+	Logic:bool;
+	Data:[uint8];
+	Strings:[string];
+}
