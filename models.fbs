@@ -3,21 +3,6 @@
 
 namespace models;
 
-table File {
-	Path:string;
-	MTime:uint64;
-	Data:[uint8];
-}
-
-table TestRecord {
-	Name:string;
-	Number:uint64;
-	Float:float64;
-	Logic:bool;
-	Data:[uint8];
-	Strings:[string];
-}
-
 table Transaction {
     TxID:uint64;
     Start:uint64;
@@ -33,8 +18,12 @@ struct RowState {
 
 table Row {
     State:RowState (required);
-    Hash:uint64;
+    Data:[uint8];
+}
+
+table Value {
     Blob:bool;
     GZip:bool;
+    Hash:uint64;
     Data:[uint8];
 }

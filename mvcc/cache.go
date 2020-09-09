@@ -2,28 +2,26 @@ package mvcc
 
 import "sync"
 
-var StatusCacheSize = 8000000
-
-func newStatusCache() *statusCache {
-	return &statusCache{
-		cache: make(map[uint64]byte, 64),
+func makeCache() *txCache {
+	return &txCache{
+		cache: make(map[uint64]byte, 8),
 	}
 }
 
-type statusCache struct {
+type txCache struct {
 	sync.RWMutex
 	min   uint64
 	max   uint64
 	cache map[uint64]byte
 }
 
-func (c *statusCache) get(txid uint64) byte {
+func (c *txCache) get(txid uint64) byte {
 	c.RLock()
 	defer c.RUnlock()
 	return c.cache[txid]
 }
 
-func (c *statusCache) set(txid uint64, status byte) {
+func (c *txCache) set(txid uint64, status byte) {
 	c.Lock()
 	defer c.Unlock()
 	c.cache[txid] = status
@@ -34,7 +32,7 @@ func (c *statusCache) set(txid uint64, status byte) {
 		c.min = txid
 	}
 
-	if len(c.cache) > StatusCacheSize {
+	if len(c.cache) > TxCacheSize {
 		delim := c.min + uint64(0.25*float64(c.max-c.min))
 
 		for key := range c.cache {

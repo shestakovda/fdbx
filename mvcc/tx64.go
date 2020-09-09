@@ -1,21 +1,19 @@
 package mvcc
 
 import (
-	"context"
 	"encoding/binary"
-	"fmt"
 	"sync/atomic"
 	"time"
 
 	fbs "github.com/google/flatbuffers/go"
 	"github.com/google/uuid"
-	"github.com/shestakovda/errors"
+	"github.com/shestakovda/fdbx"
 	"github.com/shestakovda/fdbx/db"
 	"github.com/shestakovda/fdbx/models"
 )
 
 /*
-	Begin - создание и старт новой транзакции MVCC поверх транзакций FDB.
+	newTx64 - создание и старт новой транзакции MVCC поверх транзакций FDB.
 
 	В первой транзакции мы создаем новый объект, после чего записываем его в новый случайный ключ.
 	В момент записи FDB автоматически добавит в значение версию, которую и будем использовать для
@@ -27,52 +25,31 @@ import (
 	* Получить монотонно возрастающий идентификатор транзакции, синхронизированный между всеми инстансами
 	* Не создать ни одного конфликта записи/чтения между параллельно стартующими транзакциями
 */
-func Begin(conn db.Connection) (_ Tx, exp error) {
-	t := &tx64{
+func newTx64(conn db.Connection) (t *tx64, err error) {
+	t = &tx64{
 		conn:   conn,
 		start:  uint64(time.Now().UTC().UnixNano()),
 		status: txStatusRunning,
 	}
 
 	uid := uuid.New()
+	key := fdbx.Key(uid[:]).LPart(nsTxTmp)
 
-	if exp = conn.Write(func(w db.Writer) (err error) {
-		if err = w.SetVersion(nsTxTmp, uid[:]); err != nil {
-			return ErrSaveTx.WithReason(err)
-		}
-
+	if err = conn.Write(func(w db.Writer) error {
+		w.Versioned(key)
 		return nil
-	}); exp != nil {
-		return nil, ErrBegin.WithReason(exp)
+	}); err != nil {
+		return nil, ErrBegin.WithReason(err)
 	}
 
-	if exp = conn.Write(func(w db.Writer) (err error) {
-		var ver *db.Pair
-
-		if ver, err = w.Pair(nsTxTmp, uid[:]); err != nil {
-			return ErrFetchTx.WithReason(err).WithDebug(errors.Debug{
-				"uid": uid.String(),
-			})
-		}
-
-		t.txid = binary.BigEndian.Uint64(ver.Value[:8])
-
-		if err = w.SetPair(nsTx, ver.Value[:8], t.pack()); err != nil {
-			return ErrSaveTx.WithReason(err).WithDebug(errors.Debug{
-				"txid": t.txid,
-				"txbk": t.txbk(t.txid),
-			})
-		}
-
-		if err = w.DropPair(nsTxTmp, uid[:]); err != nil {
-			return ErrDropTx.WithReason(err).WithDebug(errors.Debug{
-				"uid": uid.String(),
-			})
-		}
-
+	if err = conn.Write(func(w db.Writer) error {
+		ver := w.Data(key).Value()[:8]
+		t.txid = binary.BigEndian.Uint64(ver)
+		w.Upsert(fdbx.NewPair(fdbx.Key(ver).LPart(nsTx), t.pack()))
+		w.Delete(key)
 		return nil
-	}); exp != nil {
-		return nil, ErrBegin.WithReason(exp)
+	}); err != nil {
+		return nil, ErrBegin.WithReason(err)
 	}
 
 	return t, nil
@@ -87,22 +64,20 @@ type tx64 struct {
 }
 
 func (t *tx64) Commit() (err error) {
-
 	if err = t.close(txStatusCommitted); err != nil {
-		return ErrCommit.WithReason(err)
+		return
 	}
 
-	txCache.set(t.txid, txStatusCommitted)
+	globCache.set(t.txid, txStatusCommitted)
 	return nil
 }
 
 func (t *tx64) Cancel() (err error) {
-
 	if err = t.close(txStatusAborted); err != nil {
-		return ErrCancel.WithReason(err)
+		return
 	}
 
-	txCache.set(t.txid, txStatusAborted)
+	globCache.set(t.txid, txStatusAborted)
 	return nil
 }
 
@@ -114,34 +89,29 @@ func (t *tx64) Cancel() (err error) {
 
 	Важно, чтобы выборка и обновление шли строго в одной внутренней FDB транзакции.
 */
-func (t *tx64) Delete(key Key) (exp error) {
-	// Получаем номер текущей операции
-	// В случае конфликтов и повторов НЕ будет увеличиваться, и это правильно
+func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
+	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
 
-	if exp = t.conn.Write(func(w db.Writer) (err error) {
-		var pair *db.Pair
-		var lp db.ListPromise
+	if err = t.conn.Write(func(w db.Writer) (exp error) {
+		lc := makeCache()
+		cp := make([]fdbx.Key, len(keys))
+		lg := make([]db.ListGetter, len(keys))
 
-		// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
-		// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
-		lc := newStatusCache()
-
-		if lp, err = t.rowPromise(w, key); err != nil {
-			return
+		for i := range keys {
+			cp[i] = usrWrapper(keys[i])
+			lg[i] = w.List(cp[i], cp[i], 0, true)
 		}
 
-		if pair, err = t.fetchRow(w, lc, opid, lp); err != nil {
-			return
-		}
-
-		if err = t.dropRow(w, opid, pair); err != nil {
-			return
+		for i := range cp {
+			if exp = t.dropRow(w, opid, t.fetchRow(w, lc, opid, lg[i]), opts.onDelete); exp != nil {
+				return
+			}
 		}
 
 		return nil
-	}); exp != nil {
-		return ErrDelete.WithReason(exp)
+	}); err != nil {
+		return ErrDelete.WithReason(err)
 	}
 
 	return nil
@@ -156,81 +126,40 @@ func (t *tx64) Delete(key Key) (exp error) {
 
 	Важно, чтобы выборка и обновление шли строго в одной внутренней FDB транзакции.
 */
-func (t *tx64) Upsert(key Key, value Value) (exp error) {
-	// Получаем номер текущей операции
-	// В случае конфликтов и повторов НЕ будет увеличиваться, и это правильно
+func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
+	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
 
-	if exp = t.conn.Write(func(w db.Writer) (err error) {
-		var pair *db.Pair
-		var lp db.ListPromise
-
-		// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
-		// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
-		lc := newStatusCache()
-
-		if lp, err = t.rowPromise(w, key); err != nil {
-			return
-		}
-
-		if pair, err = t.fetchRow(w, lc, opid, lp); err != nil {
-			return
-		}
-
-		if err = t.dropRow(w, opid, pair); err != nil {
-			return
-		}
-
-		if err = t.saveRow(w, opid, key.Bytes(), value.Bytes()); err != nil {
-			return
-		}
-
-		return nil
-	}); exp != nil {
-		return ErrUpsert.WithReason(exp)
-	}
-
-	return nil
-}
-
-func (t *tx64) UpsertBatch(pairs ...*Pair) (exp error) {
-	// Получаем номер текущей операции
-	// В случае конфликтов и повторов НЕ будет увеличиваться, и это правильно
-	opid := atomic.AddUint32(&t.opid, 1)
-
-	if exp = t.conn.Write(func(w db.Writer) (err error) {
-		var pair *db.Pair
-
-		// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
-		// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
-		lc := newStatusCache()
-
-		lps := make([]db.ListPromise, len(pairs))
+	if err = t.conn.Write(func(w db.Writer) (exp error) {
+		lc := makeCache()
+		cp := make([]fdbx.Pair, len(pairs))
+		lg := make([]db.ListGetter, len(pairs))
 
 		for i := range pairs {
-			if lps[i], err = t.rowPromise(w, pairs[i].Key); err != nil {
-				return
-			}
+			cp[i] = pairs[i].WrapKey(usrWrapper)
+			ukey := cp[i].Key()
+			lg[i] = w.List(ukey, ukey, 0, true)
 		}
 
-		for i := range lps {
-
-			if pair, err = t.fetchRow(w, lc, opid, lps[i]); err != nil {
+		for i := range cp {
+			if exp = t.dropRow(w, opid, t.fetchRow(w, lc, opid, lg[i]), opts.onDelete); exp != nil {
 				return
 			}
 
-			if err = t.dropRow(w, opid, pair); err != nil {
-				return
+			w.Upsert(cp[i].WrapKey(t.txWrapper).WrapValue(t.packWrapper(opid)))
+
+			if opts.onInsert == nil {
+				continue
 			}
 
-			if err = t.saveRow(w, opid, pairs[i].Key.Bytes(), pairs[i].Value.Bytes()); err != nil {
+			if exp = opts.onInsert(t, cp[i]); exp != nil {
 				return
 			}
 		}
 
 		return nil
-	}); exp != nil {
-		return ErrUpsert.WithReason(exp)
+	}); err != nil {
+		return ErrUpsert.WithReason(err)
 	}
 
 	return nil
@@ -239,29 +168,17 @@ func (t *tx64) UpsertBatch(pairs ...*Pair) (exp error) {
 /*
 	Select - выборка актуального в данной транзакции значения ключа.
 */
-func (t *tx64) Select(key Key) (res Value, err error) {
-	// Получаем номер текущей операции
-	// В случае конфликтов и повторов НЕ будет увеличиваться, и это правильно
+func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
+	ukey := usrWrapper(key)
 	opid := atomic.AddUint32(&t.opid, 1)
 
 	if err = t.conn.Read(func(r db.Reader) (exp error) {
-		var pair *db.Pair
-		var lp db.ListPromise
-
-		// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
-		// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
-		lc := newStatusCache()
-
-		if lp, err = t.rowPromise(r, key); err != nil {
-			return
-		}
-
-		if pair, exp = t.fetchRow(r, lc, opid, lp); exp != nil {
-			return
-		}
+		pair := t.fetchRow(r, nil, opid, r.List(ukey, ukey, 0, true))
 
 		if pair != nil {
-			res = &rowValue{models.GetRootAsRow(pair.Value, 0)}
+			res = pair.WrapValue(valWrapper)
+		} else {
+			res = fdbx.NewPair(key, nil)
 		}
 
 		return nil
@@ -272,101 +189,81 @@ func (t *tx64) Select(key Key) (res Value, err error) {
 	return res, nil
 }
 
-func (t *tx64) SeqScan(ctx context.Context, rng *Range) (<-chan *Pair, <-chan error) {
-	list := make(chan *Pair)
-	errs := make(chan error, 1)
+func (t *tx64) SeqScan(from, to fdbx.Key) (res []fdbx.Pair, err error) {
+	size := 0
+	next := true
+	opid := atomic.AddUint32(&t.opid, 1)
+	list := make([][]fdbx.Pair, 0, 64)
+	from = usrWrapper(from)
+	to = usrWrapper(to)
 
-	go func() {
-		defer close(list)
-		defer close(errs)
+	for next {
+		if err = t.conn.Read(func(r db.Reader) error {
+			pairs := t.fetchAll(r, nil, opid, r.List(from, to, ScanRangeSize, false))
 
-		// Получаем номер текущей операции
-		// В случае конфликтов и повторов НЕ будет увеличиваться, и это правильно
-		opid := atomic.AddUint32(&t.opid, 1)
-		from := rng.From.Bytes()
-		next := true
+			switch len(pairs) {
+			case 0:
+				next = false
+			case 1:
+				list = append(list, []fdbx.Pair{pairs[0].WrapValue(valWrapper)})
+				next = false
+				size++
+			default:
+				cnt := len(pairs) - 1
+				from = usrWrapper(pairs[cnt].Key())
 
-		for next && ctx.Err() == nil {
-			sub := &Range{From: NewBytesKey(from), To: rng.To}
-
-			if err := t.conn.Read(func(r db.Reader) (exp error) {
-				var pairs []*db.Pair
-				var lp db.ListPromise
-
-				// Локальный кеш статусов транзакций, чтобы не лазать 100500 раз по незавершенным
-				// При конфликте и повторах инициализируется каждый раз заново, и это правильно!
-				lc := newStatusCache()
-
-				if lp, exp = t.allPromise(r, sub, ScanRangeSize); exp != nil {
-					return
+				for i := 0; i < cnt; i++ {
+					pairs[i] = pairs[i].WrapValue(valWrapper)
 				}
 
-				if pairs, exp = t.fetchAll(r, lc, opid, lp); exp != nil {
-					return ErrFullScanRead.WithReason(exp)
-				}
-
-				for j := range pairs {
-					select {
-					case list <- &Pair{
-						Key:   NewBytesKey(pairs[j].Key),
-						Value: &rowValue{models.GetRootAsRow(pairs[j].Value, 0)},
-					}:
-					case <-ctx.Done():
-						return ErrFullScanRead.WithReason(ctx.Err())
-					}
-				}
-
-				if len(pairs) > 0 {
-					from = append(pairs[len(pairs)-1].Key, 0xff)
-				} else {
-					next = false
-				}
-				return nil
-			}); err != nil {
-				errs <- ErrFullScan.WithReason(err)
-				return
+				list = append(list, pairs[:cnt])
+				size += cnt
 			}
+			return nil
+		}); err != nil {
+			return nil, ErrSeqScan.WithReason(err)
 		}
-	}()
+	}
 
-	return list, errs
+	res = make([]fdbx.Pair, 0, size)
+
+	for i := range list {
+		res = append(res, list[i]...)
+	}
+
+	return res, nil
 }
 
-func (t *tx64) isCommitted(local *statusCache, r db.Reader, x uint64) (ok bool, err error) {
+func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) bool {
+	var buf []byte
 	var status byte
 
 	// Дешевле всего чекнуть в глобальном кеше, вдруг уже знаем такую
-	if status = txCache.get(x); status != txStatusUnknown {
-		return status == txStatusCommitted, nil
+	if status = globCache.get(x); status != txStatusUnknown {
+		return status == txStatusCommitted
 	}
 
 	// Возможно, это открытая транзакция из локального кеша
 	if status = local.get(x); status != txStatusUnknown {
-		return status == txStatusCommitted, nil
+		return status == txStatusCommitted
 	}
 
-	var txPair *db.Pair
-	txbk := t.txbk(x)
-
 	// Придется слазать в БД за статусом и положить в кеш
-	if txPair, err = r.Pair(nsTx, txbk); err != nil {
-		return false, ErrFetchTx.WithReason(err).WithDebug(errors.Debug{
-			"txid": x,
-			"txbk": txbk,
-		})
+	if buf = r.Data(txKey(x)).Value(); len(buf) == 0 {
+		return false
 	}
 
 	// Получаем значение статуса как часть модели
-	status = models.GetRootAsTransaction(txPair.Value, 0).Status()
+	status = models.GetRootAsTransaction(buf, 0).Status()
 
 	// В случае финальных статусов можем положить в глобальный кеш
 	if status == txStatusCommitted || status == txStatusAborted {
-		txCache.set(x, status)
+		globCache.set(x, status)
 	}
 
 	// В локальный кеш можем положить в любом случае, затем вернуть
 	local.set(x, status)
-	return status == txStatusCommitted, nil
+	return status == txStatusCommitted
 }
 
 func (t *tx64) pack() []byte {
@@ -375,22 +272,32 @@ func (t *tx64) pack() []byte {
 		Start:  t.start,
 		Status: t.status,
 	}
-	buf := fbs.NewBuilder(32)
+
+	buf := fbsPool.Get().(*fbs.Builder)
 	buf.Finish(tx.Pack(buf))
-	return buf.FinishedBytes()
+	res := buf.FinishedBytes()
+	buf.Reset()
+	fbsPool.Put(buf)
+	return res
 }
 
-func (t *tx64) packRow(opid uint32, value []byte) []byte {
-	row := &models.RowT{
-		State: &models.RowStateT{
-			XMin: t.txid,
-			CMin: opid,
-		},
-		Data: value,
+func (t *tx64) packWrapper(opid uint32) fdbx.ValueWrapper {
+	return func(v fdbx.Value) fdbx.Value {
+		row := &models.RowT{
+			State: &models.RowStateT{
+				XMin: t.txid,
+				CMin: opid,
+			},
+			Data: v,
+		}
+
+		buf := fbsPool.Get().(*fbs.Builder)
+		buf.Finish(row.Pack(buf))
+		res := buf.FinishedBytes()
+		buf.Reset()
+		fbsPool.Put(buf)
+		return res
 	}
-	buf := fbs.NewBuilder(32)
-	buf.Finish(row.Pack(buf))
-	return buf.FinishedBytes()
 }
 
 func (t *tx64) close(status byte) (err error) {
@@ -400,33 +307,16 @@ func (t *tx64) close(status byte) (err error) {
 
 	t.status = status
 	dump := t.pack()
-	txbk := t.txbk(t.txid)
+	txid := txKey(t.txid)
 
 	if err = t.conn.Write(func(w db.Writer) (exp error) {
-		if exp = w.SetPair(nsTx, txbk, dump); exp != nil {
-			return ErrSaveTx.WithReason(err).WithDebug(errors.Debug{
-				"txid": t.txid,
-				"txbk": txbk,
-			})
-		}
-
+		w.Upsert(fdbx.NewPair(txid, dump))
 		return nil
 	}); err != nil {
-		return ErrCloseTx.WithReason(err)
+		return ErrClose.WithReason(err)
 	}
 
 	return nil
-}
-
-func (t *tx64) rowPromise(r db.Reader, key Key) (lp db.ListPromise, err error) {
-	from := key.Bytes()
-	if lp, err = r.List(nsUser, from, from, 0, true); err != nil {
-		return nil, ErrFetchRow.WithReason(err).WithDebug(errors.Debug{
-			"key": fmt.Sprintf("%x", from),
-		})
-	}
-
-	return lp, nil
 }
 
 /*
@@ -462,15 +352,26 @@ func (t *tx64) rowPromise(r db.Reader, key Key) (lp db.ListPromise, err error) {
 	сработает внутренний механизм конфликтов fdb, так что одновременно двух актуальных
 	версий не должно появиться. Один из обработчиков увидит изменения и изменит поведение.
 */
-func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, lp db.ListPromise) (res *db.Pair, err error) {
-	var comm bool
+func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter) fdbx.Pair {
+	var buf models.RowState
+	var row models.RowStateT
+
+	if lc == nil {
+		lc = makeCache()
+	}
 
 	// Загружаем список версий, существующих в рамках этой операции
-	list := lp.Resolve()
+	list := lg()
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
-		row := models.GetRootAsRow(list[i].Value, 0).State(nil).UnPack()
+		val := list[i].Value()
+
+		if len(val) == 0 {
+			continue
+		}
+
+		models.GetRootAsRow(val, 0).State(&buf).UnPackTo(&row)
 
 		// Частный случай - если запись создана в рамках текущей транзакции
 		if row.XMin == t.txid {
@@ -488,12 +389,10 @@ func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, lp db.ListPro
 			}
 
 			// В этом случае объект создан в данной транзакции и еще не удален, можем прочитать
-			return list[i], nil
+			return list[i].WrapKey(sysWrapper)
 		}
 
-		if comm, err = t.isCommitted(lc, r, row.XMin); err != nil {
-			return nil, ErrFetchRow.WithReason(err)
-		}
+		comm := t.isCommitted(lc, r, row.XMin)
 
 		// Если запись создана другой транзакцией и она еще не закоммичена, то еще не видна
 		if !comm {
@@ -512,44 +411,39 @@ func (t *tx64) fetchRow(r db.Reader, lc *statusCache, opid uint32, lp db.ListPro
 			fallthrough
 		case 0:
 			// В этом случае объект создан в закоммиченной транзакции и еще не был удален
-			return list[i], nil
+			return list[i].WrapKey(sysWrapper)
 		default:
-			if comm, err = t.isCommitted(lc, r, row.XMax); err != nil {
-				return nil, ErrFetchRow.WithReason(err)
-			}
-
 			// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
-			if !comm {
-				return list[i], nil
+			if !t.isCommitted(lc, r, row.XMax) {
+				return list[i].WrapKey(sysWrapper)
 			}
 		}
 	}
 
-	return nil, nil
-}
-
-func (t *tx64) allPromise(r db.Reader, rng *Range, limit int) (lp db.ListPromise, err error) {
-	from := rng.From.Bytes()
-	to := rng.To.Bytes()
-	if lp, err = r.List(nsUser, from, to, limit, false); err != nil {
-		return nil, ErrFetchRow.WithReason(err).WithDebug(errors.Debug{
-			"rng": fmt.Sprintf("%x -> %x", from, to),
-		})
-	}
-
-	return lp, nil
+	return nil
 }
 
 // Аналогично fetchRow, но все актуальные версии всех ключей по диапазону
-func (t *tx64) fetchAll(r db.Reader, lc *statusCache, opid uint32, lp db.ListPromise) (res []*db.Pair, err error) {
-	var comm bool
+func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter) []fdbx.Pair {
+	var buf models.RowState
+	var row models.RowStateT
 
-	list := lp.Resolve()
-	res = make([]*db.Pair, 0, len(list))
+	if lc == nil {
+		lc = makeCache()
+	}
+
+	list := lg()
+	res := list[:0]
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
-		row := models.GetRootAsRow(list[i].Value, 0).State(nil).UnPack()
+		val := list[i].Value()
+
+		if len(val) == 0 {
+			continue
+		}
+
+		models.GetRootAsRow(val, 0).State(&buf).UnPackTo(&row)
 
 		// Частный случай - если запись создана в рамках текущей транзакции
 		if row.XMin == t.txid {
@@ -567,13 +461,11 @@ func (t *tx64) fetchAll(r db.Reader, lc *statusCache, opid uint32, lp db.ListPro
 			}
 
 			// В этом случае объект создан в данной транзакции и еще не удален, можем прочитать
-			res = append(res, list[i])
+			res = append(res, list[i].WrapKey(sysWrapper))
 			continue
 		}
 
-		if comm, err = t.isCommitted(lc, r, row.XMin); err != nil {
-			return nil, ErrFetchRow.WithReason(err)
-		}
+		comm := t.isCommitted(lc, r, row.XMin)
 
 		// Если запись создана другой транзакцией и она еще не закоммичена, то еще не видна
 		if !comm {
@@ -592,62 +484,72 @@ func (t *tx64) fetchAll(r db.Reader, lc *statusCache, opid uint32, lp db.ListPro
 			fallthrough
 		case 0:
 			// В этом случае объект создан в закоммиченной транзакции и еще не был удален
-			res = append(res, list[i])
+			res = append(res, list[i].WrapKey(sysWrapper))
 			continue
 		default:
-			if comm, err = t.isCommitted(lc, r, row.XMax); err != nil {
-				return nil, ErrFetchRow.WithReason(err)
-			}
-
 			// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
-			if !comm {
-				res = append(res, list[i])
+			if !t.isCommitted(lc, r, row.XMax) {
+				res = append(res, list[i].WrapKey(sysWrapper))
 				continue
 			}
 		}
 	}
 
-	return res, nil
+	// Стираем хвост, чтобы сборщик мусора пришел за ним
+	for i := len(res); i < len(list); i++ {
+		list[i] = nil
+	}
+
+	return res
 }
 
-func (t *tx64) dropRow(w db.Writer, opid uint32, pair *db.Pair) (err error) {
+func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handler) (err error) {
 	if pair == nil {
 		return nil
 	}
 
-	state := models.GetRootAsRow(pair.Value, 0).State(nil)
+	var data fdbx.Value
 
-	if !state.MutateXMax(t.txid) {
-		return ErrDropRow.WithStack()
+	w.Upsert(pair.WrapKey(usrWrapper).WrapValue(func(v fdbx.Value) fdbx.Value {
+		if len(v) > 0 {
+			var state models.RowState
+
+			row := models.GetRootAsRow(v, 0)
+
+			if onDelete != nil {
+				data = row.DataBytes()
+			}
+
+			row.State(&state)
+
+			// В модели состояния поля указаны как required
+			// Обновление должно произойти 100%, если только это не косяк модели или баг библиотеки
+			// Именно поэтому тут паника. Если это не получилось сделать - использовать приложение нельзя!
+			if !(state.MutateXMax(t.txid) && state.MutateCMax(opid)) {
+				panic(ErrUpsert.WithStack())
+			}
+		}
+
+		return v
+	}))
+
+	if onDelete == nil {
+		return nil
 	}
 
-	if !state.MutateCMax(opid) {
-		return ErrDropRow.WithStack()
-	}
-
-	if err = w.SetPair(nsUser, pair.Key, pair.Value); err != nil {
-		return ErrDropRow.WithReason(err).WithDebug(errors.Debug{
-			"key": fmt.Sprintf("%x", pair.Key),
-		})
+	if err = onDelete(t, fdbx.NewPair(pair.Key(), data)); err != nil {
+		return ErrDelete.WithReason(err)
 	}
 
 	return nil
 }
 
-func (t *tx64) saveRow(w db.Writer, opid uint32, key []byte, val []byte) (err error) {
-
-	if err = w.SetPair(nsUser, append(key, t.txbk(t.txid)...), t.packRow(opid, val)); err != nil {
-		return ErrSaveRow.WithReason(err).WithDebug(errors.Debug{
-			"key": fmt.Sprintf("%x", key),
-			"len": len(val),
-		})
+func (t *tx64) txWrapper(key fdbx.Key) fdbx.Key {
+	if key == nil {
+		return nil
 	}
 
-	return nil
-}
-
-func (t *tx64) txbk(x uint64) []byte {
 	var txid [8]byte
-	binary.BigEndian.PutUint64(txid[:], x)
-	return txid[:]
+	binary.BigEndian.PutUint64(txid[:], t.txid)
+	return key.RPart(txid[:]...)
 }

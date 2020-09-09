@@ -1,58 +1,60 @@
 package db
 
 import (
-	"context"
-
-	"github.com/shestakovda/errors"
+	"github.com/shestakovda/errx"
+	"github.com/shestakovda/fdbx"
 )
 
-type Connection interface {
-	Clear() error
+// ListGetter - метод для отложенного получения списка значений
+type ListGetter func() []fdbx.Pair
 
-	Read(func(Reader) error) error
-	Write(func(Writer) error) error
-
-	Serial(ctx context.Context, ns byte, from, to []byte, limit int, reverse bool) (<-chan *Pair, <-chan error)
-}
-
+// Reader - обработчик чтения значений из БД
 type Reader interface {
-	Pair(ns byte, key []byte) (*Pair, error)
-	List(ns byte, from, to []byte, limit int, reverse bool) (ListPromise, error)
+	Data(fdbx.Key) fdbx.Pair
+	List(from, to fdbx.Key, limit uint64, reverse bool) ListGetter
 }
 
+// Reader - обработчик модификации значений в БД
 type Writer interface {
 	Reader
 
-	SetPair(ns byte, key, value []byte) error
-	SetVersion(ns byte, key []byte) error
+	Upsert(fdbx.Pair)
+	Delete(fdbx.Key)
 
-	DropPair(ns byte, key []byte) error
+	Versioned(fdbx.Key)
+	Increment(fdbx.Key, uint64)
 }
 
-type Pair struct {
-	Key   []byte
-	Value []byte
+// Connection - объект подключения к БД, а также фабрика элементов
+type Connection interface {
+	// Получение номера БД, для контроля или формирования ключей
+	DB() byte
+
+	// ОПАСНО! Единовременная и полная очистка всех данных в БД
+	// Рекомендуется использовать только в unit-тестах!
+	Clear() error
+
+	// Основные функции транзакций
+	Read(func(Reader) error) error
+	Write(func(Writer) error) error
 }
 
-type ListPromise interface {
-	Resolve() []*Pair
+// ConnectV610 - создание нового подключения к серверу FDB и базе данных.
+//
+// Идентификатор базы всего 1 байт, потому что пока не рассчитываем на то, что разных БД будет так много.
+// Особое значение 0xFF (255) запрещено, т.к. с этого байта начинается служебная область видимости FDB.
+//
+// Если указан путь к файлу, то подключается к нему. Иначе идет по стандартному (зависит от ОС).
+//
+// Этот драйвер настроен на совместимость с конкретной версией клиента, с другими может не заработать.
+func ConnectV610(databaseID byte, opts ...Option) (Connection, error) {
+	return newConnV610(databaseID, opts...)
 }
 
+// Ошибки модуля
 var (
-	ErrRead    = errors.New("read")
-	ErrWrite   = errors.New("write")
-	ErrClear   = errors.New("clear")
-	ErrSerial  = errors.New("serial")
-	ErrConnect = errors.New("connection")
-
-	ErrBadDB = errors.New("bad DB")
-	ErrBadNS = errors.New("bad NS")
-
-	ErrGetPair = errors.New("get pair")
-	ErrGetList = errors.New("get list")
-
-	ErrSetPair    = errors.New("set pair")
-	ErrSetVersion = errors.New("set version")
-
-	ErrDropPair = errors.New("drop pair")
+	ErrRead    = errx.New("Ошибка транзакции чтения")
+	ErrWrite   = errx.New("Ошибка транзакции записи")
+	ErrClear   = errx.New("Ошибка транзакции очистки")
+	ErrConnect = errx.New("Ошибка подключения к FoundationDB")
 )

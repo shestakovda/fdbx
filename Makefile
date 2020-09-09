@@ -1,36 +1,36 @@
-.PHONY: all fmt test
-
 all: test
 
-models.fbs:
+models:
 	@flatc --go --gen-mutable --gen-object-api ./models.fbs
 
-fmt: models.fbs
+fmt: models
 	@goimports -w .
 	@go mod tidy
 
-test: fmt
-	@go test -count=10 -timeout 60s -run . -race -cover ./...
+test: test-fdbx test-db test-mvcc test-orm
 
-bench: fmt
-	@go test -bench . -benchmem -benchtime 30s .
+test-fdbx: fmt
+	@go test -timeout 10s -run . -race -gcflags=all=-d=checkptr=0 -count=1 -cover -coverprofile=./fdbx.cover .
 
-lint:
-	@golangci-lint run --enable-all --fix --tests=false
+test-db: fmt
+	@go test -timeout 10s -run . -race -gcflags=all=-d=checkptr=0 -count=1 -cover -coverprofile=./db.cover ./db
 
-mvcc: fmt
-	@go test -count=1 -timeout 60s -run MVCC -gcflags=all=-d=checkptr=0 -race -cover -coverprofile=./mvcc.cover ./mvcc
+test-mvcc: fmt
+	@go test -timeout 60s -run . -race -gcflags=all=-d=checkptr=0 -count=1 -cover -coverprofile=./mvcc.cover ./mvcc
 
-mvcc-cover:
-	@go tool cover -html=./mvcc.cover
+test-orm: fmt
+	@go test -timeout 10s -run . -race -gcflags=all=-d=checkptr=0 -count=1 -cover -coverprofile=./orm.cover ./orm
 
-mvcc-bench: fmt
-	@go test -bench=. -benchmem -benchtime 30s ./mvcc
+bench: bench-fdbx bench-mvcc bench-orm
 
-orm: fmt
-	@go test -count=1 -timeout 60s -run ORM -gcflags=all=-d=checkptr=0 -race -cover -coverprofile=./orm.cover ./orm
+bench-fdbx: fmt
+	@go test -bench . -benchtime=3s -benchmem -memprofile=fdbx.mem .
 
-orm-bench: fmt
-# 	@go test -bench=. -benchmem -benchtime 60s  ./orm
-# 	@go test -bench=UpsertBatch -benchmem -memprofile=mem.out -cpuprofile=cpu.out -benchtime 10s  ./orm
-	@go test -bench=Count -benchmem -benchtime 60s  ./orm
+bench-mvcc: fmt
+	@go test -bench . -benchtime=3s -benchmem -memprofile=mvcc.mem ./mvcc
+	
+bench-orm: fmt
+	@go test -bench . -benchtime=3s -benchmem -memprofile=orm.mem ./orm
+
+cover: test
+	@go tool cover -html=./fdbx.cover

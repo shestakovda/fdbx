@@ -1,65 +1,44 @@
 package mvcc
 
 import (
-	"context"
-
-	"github.com/shestakovda/errors"
+	"github.com/shestakovda/errx"
+	"github.com/shestakovda/fdbx"
+	"github.com/shestakovda/fdbx/db"
 )
 
-type Pair struct {
-	Key   Key
-	Value Value
-}
+// TxCacheSize - размер глобального кеша статусов завершенных транзакций
+var TxCacheSize = 8000000
 
-type Range struct {
-	From Key
-	To   Key
-}
+// ScanRangeSize - кол-во строк в одной "физической" транзакции выборки
+var ScanRangeSize uint64 = 10000
 
-type Key interface {
-	Bytes() []byte
-	String() string
-}
-
-type Value interface {
-	Bytes() []byte
-	String() string
-}
-
+// Tx - объект "логической" транзакции MVCC поверх "физической" транзакции FDB
 type Tx interface {
 	Commit() error
 	Cancel() error
 
-	Delete(Key) error
-	Upsert(Key, Value) error
-	Select(Key) (Value, error)
+	Select(fdbx.Key) (fdbx.Pair, error)
+	Delete([]fdbx.Key, ...Option) error
+	Upsert([]fdbx.Pair, ...Option) error
 
-	SeqScan(ctx context.Context, rng *Range) (<-chan *Pair, <-chan error)
-
-	UpsertBatch(...*Pair) error
+	SeqScan(from, to fdbx.Key) ([]fdbx.Pair, error)
 }
 
+// Option - дополнительный аргумент при выполнении команды
+type Option func(*options)
+
+// DeleteHandler - обработчик события удаления записи
+type Handler func(Tx, fdbx.Pair) error
+
+// Begin - создание и старт новой транзакции
+func Begin(conn db.Connection) (Tx, error) { return newTx64(conn) }
+
+// Ошибки модуля
 var (
-	ErrBegin  = errors.New("begin")
-	ErrSelect = errors.New("select")
-	ErrUpsert = errors.New("upsert")
-	ErrDelete = errors.New("delete")
-	ErrCommit = errors.New("commit")
-	ErrCancel = errors.New("cancel")
-
-	ErrFullScan     = errors.New("full scan")
-	ErrFullScanRead = errors.New("full scan read")
-
-	ErrSubRanges = errors.New("sub ranges")
-
-	ErrFetchTx  = errors.New("fetch tx")
-	ErrFetchRow = errors.New("fetch row")
-
-	ErrDropTx  = errors.New("drop tx")
-	ErrDropRow = errors.New("drop row")
-
-	ErrSaveTx  = errors.New("save tx")
-	ErrSaveRow = errors.New("save row")
-
-	ErrCloseTx = errors.New("close tx")
+	ErrBegin   = errx.New("Ошибка старта транзакции")
+	ErrClose   = errx.New("Ошибка завершения транзакции")
+	ErrSelect  = errx.New("Ошибка получения данных")
+	ErrUpsert  = errx.New("Ошибка обновления данных")
+	ErrDelete  = errx.New("Ошибка удаления данных")
+	ErrSeqScan = errx.New("Ошибка полной выборки данных")
 )

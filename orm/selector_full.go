@@ -1,54 +1,31 @@
 package orm
 
 import (
-	"context"
-
+	"github.com/shestakovda/fdbx"
 	"github.com/shestakovda/fdbx/mvcc"
 )
 
-func NewFullSelector(tx mvcc.Tx, cnt int) Selector {
-	return &fullSelector{
-		tx:  tx,
-		cnt: cnt,
+func NewFullSelector(tx mvcc.Tx) Selector {
+	s := fullSelector{
+		tx: tx,
 	}
+	return &s
 }
 
 type fullSelector struct {
-	tx  mvcc.Tx
-	cnt int
+	tx mvcc.Tx
 }
 
-func (s *fullSelector) Select(ctx context.Context, cl Collection) (<-chan Row, <-chan error) {
-	list := make(chan Row)
-	errs := make(chan error, 1)
+func (s fullSelector) Select(cl Collection) (list []fdbx.Pair, err error) {
+	key := usrKeyWrapper(cl.ID())(nil)
 
-	go func() {
-		var err error
+	if list, err = s.tx.SeqScan(key, key); err != nil {
+		return nil, ErrSelect.WithReason(err)
+	}
 
-		defer close(list)
-		defer close(errs)
+	for i := range list {
+		list[i] = list[i].WrapKey(sysKeyWrapper).WrapValue(sysValWrapper)
+	}
 
-		rng := &mvcc.Range{
-			From: cl.SysKey(mvcc.NewBytesKey([]byte{0x00})),
-			To:   cl.SysKey(mvcc.NewBytesKey([]byte{0xFF})),
-		}
-
-		pairs, errc := s.tx.SeqScan(ctx, rng)
-
-		for pair := range pairs {
-			select {
-			case list <- cl.NewRow(cl.UsrKey(pair.Key), pair.Value):
-			case <-ctx.Done():
-				errs <- ErrSelectFull.WithReason(ctx.Err())
-				return
-			}
-		}
-
-		for err = range errc {
-			errs <- ErrSelectFull.WithReason(err)
-			return
-		}
-	}()
-
-	return list, errs
+	return list, nil
 }

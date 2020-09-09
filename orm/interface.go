@@ -1,73 +1,54 @@
 package orm
 
 import (
-	"context"
-
-	"github.com/shestakovda/errors"
+	"github.com/shestakovda/errx"
+	"github.com/shestakovda/fdbx"
 	"github.com/shestakovda/fdbx/mvcc"
 )
 
+// Collection - универсальный интерфейс коллекции, чтобы работать с запросами
 type Collection interface {
 	ID() uint16
-	SysKey(mvcc.Key) mvcc.Key
-	UsrKey(mvcc.Key) mvcc.Key
-	NewRow(mvcc.Key, mvcc.Value) Row
-}
-
-type Table interface {
-	Collection
 
 	Select(mvcc.Tx) Query
-	Upsert(mvcc.Tx, ...Model) error
+	Upsert(mvcc.Tx, ...fdbx.Pair) error
+	Delete(mvcc.Tx, ...fdbx.Pair) error
 }
 
+// AggFunc - описание функции-агрегатора для запросов
+type AggFunc func(fdbx.Pair) error
+
+// Query - универсальный интерфейс объекта запроса данных, основная логика
 type Query interface {
-	ByID(id ...mvcc.Key) Query
+	All() ([]fdbx.Pair, error)
+	First() (fdbx.Pair, error)
+	Delete() error
 
-	All(ctx context.Context) ([]Model, error)
-	First(ctx context.Context) (Model, error)
-	Delete(ctx context.Context) error
-
-	Agg(ctx context.Context, funcs ...AggFunc) (err error)
+	Agg(...AggFunc) error
 }
 
-type Model interface {
-	Key() mvcc.Key
-	Pack() (mvcc.Value, error)
-	Unpack(mvcc.Value) error
-}
-
-type Row interface {
-	Key() mvcc.Key
-	Value() mvcc.Value
-	Model() (Model, error)
-}
-
+// Selector - поставщик сырых данных для запроса
 type Selector interface {
-	Select(context.Context, Collection) (<-chan Row, <-chan error)
+	Select(Collection) ([]fdbx.Pair, error)
 }
 
+// Filter - управляющий объект для фильтрации выборок
 type Filter interface {
-	Skip(Row) (bool, error)
+	Skip(fdbx.Pair) (bool, error)
 }
 
-type AggFunc func(Row) error
+// IndexKey - для получения ключа при индексации коллекций
+type IndexKey func(fdbx.Value) fdbx.Key
 
-type ModelFabric func(id mvcc.Key) Model
+// Option - доп.аргумент для инициализации коллекций
+type Option func(*options)
 
+// Ошибки модуля
 var (
-	ErrSelect = errors.New("select")
-	ErrUpsert = errors.New("upsert")
-	ErrDelete = errors.New("delete")
-	ErrStream = errors.New("stream")
-	ErrFilter = errors.New("filter")
-
-	ErrSelectByID = errors.New("select by ids")
-	ErrSelectFull = errors.New("select full")
-	ErrSelectAgg  = errors.New("select agg")
-
-	ErrSelectAll   = errors.New("select all")
-	ErrSelectFirst = errors.New("select first")
-
-	ErrRowModel = errors.New("row model")
+	ErrAgg       = errx.New("Ошибка агрегации объектов коллекции")
+	ErrSelect    = errx.New("Ошибка загрузки объектов коллекции")
+	ErrDelete    = errx.New("Ошибка удаления объектов коллекции")
+	ErrUpsert    = errx.New("Ошибка обновления объектов коллекции")
+	ErrIdxDelete = errx.New("Ошибка очистки индекса")
+	ErrIdxUpsert = errx.New("Ошибка обновления индекса")
 )
