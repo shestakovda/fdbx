@@ -10,19 +10,19 @@ type ListGetter func() []fdbx.Pair
 
 // Reader - обработчик чтения значений из БД
 type Reader interface {
-	Data(fdbx.Key) fdbx.Pair
-	List(from, to fdbx.Key, limit uint64, reverse bool) ListGetter
+	Data(fdbx.Key) (fdbx.Pair, error)
+	List(from, to fdbx.Key, limit uint64, reverse bool) (ListGetter, error)
 }
 
 // Reader - обработчик модификации значений в БД
 type Writer interface {
 	Reader
 
-	Upsert(fdbx.Pair)
-	Delete(fdbx.Key)
+	Upsert(fdbx.Pair) error
+	Delete(fdbx.Key) error
 
-	Versioned(fdbx.Key)
-	Increment(fdbx.Key, uint64)
+	Versioned(fdbx.Key) error
+	Increment(fdbx.Key, uint64) error
 }
 
 // Connection - объект подключения к БД, а также фабрика элементов

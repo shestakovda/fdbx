@@ -34,13 +34,13 @@ func txKey(x uint64) fdbx.Key {
 	return txid[:]
 }
 
-func sysWrapper(key fdbx.Key) fdbx.Key { return key.LSkip(1) }
+func sysWrapper(key fdbx.Key) (fdbx.Key, error) { return key.LSkip(1), nil }
 
-func usrWrapper(key fdbx.Key) fdbx.Key { return key.LPart(nsUser) }
+func usrWrapper(key fdbx.Key) (fdbx.Key, error) { return key.LPart(nsUser), nil }
 
-func valWrapper(v fdbx.Value) fdbx.Value {
+func valWrapper(v fdbx.Value) (fdbx.Value, error) {
 	if len(v) == 0 {
-		return nil
+		return nil, nil
 	}
-	return models.GetRootAsRow(v, 0).DataBytes()
+	return models.GetRootAsRow(v, 0).DataBytes(), nil
 }

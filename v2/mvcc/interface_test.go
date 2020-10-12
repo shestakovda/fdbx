@@ -46,6 +46,7 @@ func (s *MVCCSuite) TearDownTest() {
 func (s *MVCCSuite) TestUpsertIsolationSameKeys() {
 	// test pairs
 	var sel fdbx.Pair
+	var val fdbx.Value
 	key := fdbx.Key("key1")
 	val1 := fdbx.Value("val1")
 	val2 := fdbx.Value("val2")
@@ -59,20 +60,26 @@ func (s *MVCCSuite) TestUpsertIsolationSameKeys() {
 	// insert and check inside tx1
 	if err = tx1.Upsert([]fdbx.Pair{fdbx.NewPair(key, val1)}); s.NoError(err) {
 		if sel, err = tx1.Select(key); s.NoError(err) {
-			s.Equal(val1.String(), sel.Value().String())
+			if val, err = sel.Value(); s.NoError(err) {
+				s.Equal(val1.String(), val.String())
+			}
 		}
 	}
 
 	// insert and check inside tx2
 	if err = tx2.Upsert([]fdbx.Pair{fdbx.NewPair(key, val2)}); s.NoError(err) {
 		if sel, err = tx2.Select(key); s.NoError(err) {
-			s.Equal(val2.String(), sel.Value().String())
+			if val, err = sel.Value(); s.NoError(err) {
+				s.Equal(val2.String(), val.String())
+			}
 		}
 	}
 
 	// check no value change inside tx1
 	if sel, err = tx1.Select(key); s.NoError(err) {
-		s.Equal(val1.String(), sel.Value().String())
+		if val, err = sel.Value(); s.NoError(err) {
+			s.Equal(val1.String(), val.String())
+		}
 	}
 
 	// commit tx2
@@ -80,13 +87,16 @@ func (s *MVCCSuite) TestUpsertIsolationSameKeys() {
 
 	// check there are key change inside tx1
 	if sel, err = tx1.Select(key); s.NoError(err) {
-		s.Equal(val2.String(), sel.Value().String())
+		if val, err = sel.Value(); s.NoError(err) {
+			s.Equal(val2.String(), val.String())
+		}
 	}
 }
 
 func (s *MVCCSuite) TestUpsertIsolationDiffKeys() {
 	// test pairs
 	var sel fdbx.Pair
+	var val fdbx.Value
 	key1 := fdbx.Key("key1")
 	key2 := fdbx.Key("key2")
 	val1 := fdbx.Value("val1")
@@ -101,14 +111,18 @@ func (s *MVCCSuite) TestUpsertIsolationDiffKeys() {
 	// insert and check inside tx1
 	if err = tx1.Upsert([]fdbx.Pair{fdbx.NewPair(key1, val1)}); s.NoError(err) {
 		if sel, err = tx1.Select(key1); s.NoError(err) {
-			s.Equal(val1.String(), sel.Value().String())
+			if val, err = sel.Value(); s.NoError(err) {
+				s.Equal(val1.String(), val.String())
+			}
 		}
 	}
 
 	// insert and check inside tx2
 	if err = tx2.Upsert([]fdbx.Pair{fdbx.NewPair(key2, val2)}); s.NoError(err) {
 		if sel, err = tx2.Select(key2); s.NoError(err) {
-			s.Equal(val2.String(), sel.Value().String())
+			if val, err = sel.Value(); s.NoError(err) {
+				s.Equal(val2.String(), val.String())
+			}
 		}
 	}
 
@@ -127,7 +141,9 @@ func (s *MVCCSuite) TestUpsertIsolationDiffKeys() {
 
 	// check there are key2 inside tx1
 	if sel, err = tx1.Select(key2); s.NoError(err) {
-		s.Equal(val2.String(), sel.Value().String())
+		if val, err = sel.Value(); s.NoError(err) {
+			s.Equal(val2.String(), val.String())
+		}
 	}
 }
 
@@ -135,6 +151,7 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 	// test pairs
 	var err error
 	var sel fdbx.Pair
+	var val fdbx.Value
 	key1 := fdbx.Key("key1")
 	key2 := fdbx.Key("key2")
 	val1 := fdbx.Value("val1")
@@ -143,7 +160,9 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 	// insert and check val1
 	if err = s.tx.Upsert([]fdbx.Pair{fdbx.NewPair(key1, val1)}); s.NoError(err) {
 		if sel, err = s.tx.Select(key1); s.NoError(err) {
-			s.Equal(val1.String(), sel.Value().String())
+			if val, err = sel.Value(); s.NoError(err) {
+				s.Equal(val1.String(), val.String())
+			}
 		}
 	}
 
@@ -155,7 +174,9 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 	// insert and check val2
 	if err = s.tx.Upsert([]fdbx.Pair{fdbx.NewPair(key2, val2)}); s.NoError(err) {
 		if sel, err = s.tx.Select(key2); s.NoError(err) {
-			s.Equal(val2.String(), sel.Value().String())
+			if val, err = sel.Value(); s.NoError(err) {
+				s.Equal(val2.String(), val.String())
+			}
 		}
 	}
 
@@ -249,7 +270,9 @@ func BenchmarkSequenceWorkflowFourTx(b *testing.B) {
 		require.NoError(b, err)
 		sl, err := tx.Select(key)
 		require.NoError(b, err)
-		require.Equal(b, val2.String(), sl.Value().String())
+		vv, err := sl.Value()
+		require.NoError(b, err)
+		require.Equal(b, val2.String(), vv.String())
 		require.NoError(b, tx.Delete([]fdbx.Key{key}))
 		require.NoError(b, tx.Commit())
 
@@ -258,7 +281,9 @@ func BenchmarkSequenceWorkflowFourTx(b *testing.B) {
 		require.NoError(b, err)
 		sl, err = tx.Select(key)
 		require.NoError(b, err)
-		require.Nil(b, sl.Value())
+		vv, err = sl.Value()
+		require.NoError(b, err)
+		require.Nil(b, vv)
 		require.NoError(b, tx.Cancel())
 	}
 }
@@ -287,13 +312,17 @@ func BenchmarkSequenceWorkflowSameTx(b *testing.B) {
 		// SELECT / DELETE
 		sl, err := tx.Select(key)
 		require.NoError(b, err)
-		require.Equal(b, val2.String(), sl.Value().String())
+		vv, err := sl.Value()
+		require.NoError(b, err)
+		require.Equal(b, val2.String(), vv.String())
 		require.NoError(b, tx.Delete([]fdbx.Key{key}))
 
 		// SELECT EMPTY
 		sl, err = tx.Select(key)
 		require.NoError(b, err)
-		require.Nil(b, sl.Value())
+		vv, err = sl.Value()
+		require.NoError(b, err)
+		require.Nil(b, vv)
 		require.NoError(b, tx.Commit())
 	}
 }
@@ -324,7 +353,9 @@ func BenchmarkOperationsSameTx(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			sl, err := tx.Select(key)
 			require.NoError(b, err)
-			require.Equal(b, string(val), string(sl.Value()))
+			vv, err := sl.Value()
+			require.NoError(b, err)
+			require.Equal(b, string(val), string(vv))
 		}
 	})
 

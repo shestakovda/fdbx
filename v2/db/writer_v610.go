@@ -12,18 +12,54 @@ type v610Writer struct {
 	tx fdb.Transaction
 }
 
-func (w v610Writer) Delete(key fdbx.Key) { w.tx.Clear(w.usrWrapper(key).Bytes()) }
-func (w v610Writer) Upsert(pair fdbx.Pair) {
-	w.tx.Set(pair.WrapKey(w.usrWrapper).Key().Bytes(), pair.Value())
+func (w v610Writer) Delete(key fdbx.Key) (err error) {
+	var wrk fdbx.Key
+
+	if wrk, err = w.usrWrapper(key); err != nil {
+		return
+	}
+
+	w.tx.Clear(wrk.Bytes())
+	return nil
 }
 
-func (w v610Writer) Versioned(key fdbx.Key) {
+func (w v610Writer) Upsert(pair fdbx.Pair) (err error) {
+	var key fdbx.Key
+	var val fdbx.Value
+
+	if key, err = pair.WrapKey(w.usrWrapper).Key(); err != nil {
+		return
+	}
+
+	if val, err = pair.Value(); err != nil {
+		return
+	}
+
+	w.tx.Set(key.Bytes(), val)
+	return nil
+}
+
+func (w v610Writer) Versioned(key fdbx.Key) (err error) {
+	var wrk fdbx.Key
 	var data [14]byte
-	w.tx.SetVersionstampedValue(w.usrWrapper(key).Bytes(), data[:])
+
+	if wrk, err = w.usrWrapper(key); err != nil {
+		return
+	}
+
+	w.tx.SetVersionstampedValue(wrk.Bytes(), data[:])
+	return nil
 }
 
-func (w v610Writer) Increment(key fdbx.Key, delta uint64) {
+func (w v610Writer) Increment(key fdbx.Key, delta uint64) (err error) {
+	var wrk fdbx.Key
 	var data [8]byte
+
+	if wrk, err = w.usrWrapper(key); err != nil {
+		return
+	}
+
 	binary.LittleEndian.PutUint64(data[:], delta)
-	w.tx.Add(w.usrWrapper(key).Bytes(), data[:])
+	w.tx.Add(wrk.Bytes(), data[:])
+	return nil
 }

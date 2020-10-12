@@ -35,6 +35,9 @@ func (s *InterfaceSuite) TestConnection() {
 	s.Equal(TestDB, cn.DB())
 
 	var buf [8]byte
+	var val fdbx.Value
+	var pair fdbx.Pair
+	var lgt db.ListGetter
 	const num uint64 = 123
 	const add uint64 = 321
 	binary.LittleEndian.PutUint64(buf[:], num)
@@ -51,9 +54,21 @@ func (s *InterfaceSuite) TestConnection() {
 	}))
 
 	s.Require().NoError(cn.Read(func(r db.Reader) error {
-		s.Equal("val1", r.Data(key1).Value().String())
-		s.Equal(num, binary.LittleEndian.Uint64(r.Data(key2).Value()))
-		s.Len(r.Data(key3).Value(), 10)
+		if pair, err = r.Data(key1); s.NoError(err) {
+			if val, err = pair.Value(); s.NoError(err) {
+				s.Equal("val1", val.String())
+			}
+		}
+		if pair, err = r.Data(key2); s.NoError(err) {
+			if val, err = pair.Value(); s.NoError(err) {
+				s.Equal(num, binary.LittleEndian.Uint64(val))
+			}
+		}
+		if pair, err = r.Data(key3); s.NoError(err) {
+			if val, err = pair.Value(); s.NoError(err) {
+				s.Len(val, 10)
+			}
+		}
 		return nil
 	}))
 
@@ -65,10 +80,24 @@ func (s *InterfaceSuite) TestConnection() {
 	}))
 
 	s.Require().NoError(cn.Read(func(r db.Reader) error {
-		s.Equal("val2", r.Data(key1).Value().String())
-		s.Equal(num+add, binary.LittleEndian.Uint64(r.Data(key2).Value()))
-		s.Empty(r.Data(key3).Value())
-		s.Len(r.List(nil, nil, 0, false)(), 2)
+		if pair, err = r.Data(key1); s.NoError(err) {
+			if val, err = pair.Value(); s.NoError(err) {
+				s.Equal("val2", val.String())
+			}
+		}
+		if pair, err = r.Data(key2); s.NoError(err) {
+			if val, err = pair.Value(); s.NoError(err) {
+				s.Equal(num+add, binary.LittleEndian.Uint64(val))
+			}
+		}
+		if pair, err = r.Data(key3); s.NoError(err) {
+			if val, err = pair.Value(); s.NoError(err) {
+				s.Empty(val)
+			}
+		}
+		if lgt, err = r.List(nil, nil, 0, false); s.NoError(err) {
+			s.Len(lgt(), 2)
+		}
 		return nil
 	}))
 }

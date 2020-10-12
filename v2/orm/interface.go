@@ -51,4 +51,6 @@ var (
 	ErrUpsert    = errx.New("Ошибка обновления объектов коллекции")
 	ErrIdxDelete = errx.New("Ошибка очистки индекса")
 	ErrIdxUpsert = errx.New("Ошибка обновления индекса")
+	ErrValPack   = errx.New("Ошибка упаковки значения")
+	ErrValUnpack = errx.New("Ошибка распаковки значения")
 )

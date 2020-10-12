@@ -33,9 +33,12 @@ func (t v1Table) Upsert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
 		return nil
 	}
 
+	valWrapper := usrValWrapper(tx)
+	keyWrapper := usrKeyWrapper(t.id)
+
 	cp := make([]fdbx.Pair, len(pairs))
 	for i := range pairs {
-		cp[i] = pairs[i].WrapKey(usrKeyWrapper(t.id)).WrapValue(usrValWrapper)
+		cp[i] = pairs[i].WrapKey(keyWrapper).WrapValue(valWrapper)
 	}
 
 	if err = tx.Upsert(cp, mvcc.OnDelete(t.onDelete)); err != nil {
@@ -50,9 +53,13 @@ func (t v1Table) Delete(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
 		return nil
 	}
 
+	keyWrapper := usrKeyWrapper(t.id)
+
 	cp := make([]fdbx.Key, len(pairs))
 	for i := range pairs {
-		cp[i] = pairs[i].WrapKey(usrKeyWrapper(t.id)).Key()
+		if cp[i], err = pairs[i].WrapKey(keyWrapper).Key(); err != nil {
+			return ErrDelete.WithReason(err)
+		}
 	}
 
 	if err = tx.Delete(cp, mvcc.OnDelete(t.onDelete)); err != nil {
@@ -67,11 +74,18 @@ func (t v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 		return nil
 	}
 
+	var val fdbx.Value
 	var ups [1]fdbx.Key
-	val := pair.Value()
+
+	if val, err = pair.Value(); err != nil {
+		return ErrIdxDelete.WithReason(err)
+	}
 
 	for idxid, fnc := range t.options.indexes {
-		ups[0] = idxKeyWrapper(idxid)(fnc(val))
+		if ups[0], err = idxKeyWrapper(idxid)(fnc(val)); err != nil {
+			return ErrIdxDelete.WithReason(err)
+		}
+
 		if err = tx.Delete(ups[:]); err != nil {
 			return ErrIdxDelete.WithReason(err).WithDebug(errx.Debug{"idx": idxid})
 		}
@@ -85,11 +99,20 @@ func (t v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 		return nil
 	}
 
+	var key fdbx.Key
+	var val fdbx.Value
 	var ups [1]fdbx.Pair
-	val := pair.Value()
+
+	if val, err = pair.Value(); err != nil {
+		return ErrIdxUpsert.WithReason(err)
+	}
 
 	for idxid, fnc := range t.options.indexes {
-		ups[0] = fdbx.NewPair(fnc(val), fdbx.Value(pair.Key().Bytes())).WrapKey(idxKeyWrapper(idxid))
+		if key, err = pair.Key(); err != nil {
+			return ErrIdxUpsert.WithReason(err)
+		}
+
+		ups[0] = fdbx.NewPair(fnc(val), fdbx.Value(key.Bytes())).WrapKey(idxKeyWrapper(idxid))
 		if err = tx.Upsert(ups[:]); err != nil {
 			return ErrIdxUpsert.WithReason(err).WithDebug(errx.Debug{"idx": idxid})
 		}

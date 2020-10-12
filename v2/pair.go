@@ -17,36 +17,40 @@ type pair struct {
 	vc []ValueWrapper
 }
 
-func (p pair) Key() Key {
+func (p pair) Key() (k Key, err error) {
 	var kcl int
 
 	if kcl = len(p.kc); kcl == 0 {
-		return p.k
+		return p.k, nil
 	}
 
-	k := p.k
+	k = p.k
 
 	for i := range p.kc {
-		k = p.kc[i](k)
+		if k, err = p.kc[i](k); err != nil {
+			return nil, ErrKey.WithReason(err)
+		}
 	}
 
-	return k
+	return k, nil
 }
 
-func (p pair) Value() Value {
+func (p pair) Value() (v Value, err error) {
 	var vcl int
 
 	if vcl = len(p.vc); vcl == 0 {
-		return p.v
+		return p.v, nil
 	}
 
-	v := p.v
+	v = p.v
 
 	for i := range p.vc {
-		v = p.vc[i](v)
+		if v, err = p.vc[i](v); err != nil {
+			return nil, ErrValue.WithReason(err)
+		}
 	}
 
-	return v
+	return v, nil
 }
 
 func (p *pair) WrapKey(w KeyWrapper) Pair {

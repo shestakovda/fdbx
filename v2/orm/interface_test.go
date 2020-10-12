@@ -1,6 +1,7 @@
 package orm_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -45,23 +46,41 @@ func (s *ORMSuite) TearDownTest() {
 }
 
 func (s *ORMSuite) TestWorkflow() {
+	var key fdbx.Key
+	var val fdbx.Value
+
+	// Чтобы потестить сжатие в gzip
+	longMsg := strings.Repeat("msg3", 300)
+
 	s.Require().NoError(s.tbl.Upsert(s.tx,
 		fdbx.NewPair(fdbx.Key("id1"), fdbx.Value("msg1")),
 		fdbx.NewPair(fdbx.Key("id2"), fdbx.Value("msg2")),
-		fdbx.NewPair(fdbx.Key("id3"), fdbx.Value("msg3")),
+		fdbx.NewPair(fdbx.Key("id3"), fdbx.Value(longMsg)),
 	))
 
 	if list, err := s.tbl.Select(s.tx).All(); s.NoError(err) {
 		s.Len(list, 3)
 
-		s.Equal("id1", list[0].Key().String())
-		s.Equal("msg1", list[0].Value().String())
+		if key, err = list[0].Key(); s.NoError(err) {
+			s.Equal("id1", key.String())
+		}
+		if val, err = list[0].Value(); s.NoError(err) {
+			s.Equal("msg1", val.String())
+		}
 
-		s.Equal("id2", list[1].Key().String())
-		s.Equal("msg2", list[1].Value().String())
+		if key, err = list[1].Key(); s.NoError(err) {
+			s.Equal("id2", key.String())
+		}
+		if val, err = list[1].Value(); s.NoError(err) {
+			s.Equal("msg2", val.String())
+		}
 
-		s.Equal("id3", list[2].Key().String())
-		s.Equal("msg3", list[2].Value().String())
+		if key, err = list[2].Key(); s.NoError(err) {
+			s.Equal("id3", key.String())
+		}
+		if val, err = list[2].Value(); s.NoError(err) {
+			s.Equal(longMsg, val.String())
+		}
 	}
 
 	s.Require().NoError(s.tbl.Select(s.tx).Delete())

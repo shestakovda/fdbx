@@ -42,10 +42,20 @@ func newTx64(conn db.Connection) (t *tx64, err error) {
 		return nil, ErrBegin.WithReason(err)
 	}
 
-	if err = conn.Write(func(w db.Writer) error {
-		ver := w.Data(key).Value()[:8]
-		t.txid = binary.BigEndian.Uint64(ver)
-		w.Upsert(fdbx.NewPair(fdbx.Key(ver).LPart(nsTx), t.pack()))
+	if err = conn.Write(func(w db.Writer) (exp error) {
+		var val fdbx.Value
+		var pair fdbx.Pair
+
+		if pair, exp = w.Data(key); exp != nil {
+			return
+		}
+
+		if val, exp = pair.Value(); exp != nil {
+			return
+		}
+
+		t.txid = binary.BigEndian.Uint64(val[:8])
+		w.Upsert(fdbx.NewPair(fdbx.Key(val[:8]).LPart(nsTx), t.pack()))
 		w.Delete(key)
 		return nil
 	}); err != nil {
@@ -99,12 +109,22 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 		lg := make([]db.ListGetter, len(keys))
 
 		for i := range keys {
-			cp[i] = usrWrapper(keys[i])
-			lg[i] = w.List(cp[i], cp[i], 0, true)
+			if cp[i], exp = usrWrapper(keys[i]); exp != nil {
+				return
+			}
+			if lg[i], exp = w.List(cp[i], cp[i], 0, true); exp != nil {
+				return
+			}
 		}
 
+		var row fdbx.Pair
+
 		for i := range cp {
-			if exp = t.dropRow(w, opid, t.fetchRow(w, lc, opid, lg[i]), opts.onDelete); exp != nil {
+			if row, exp = t.fetchRow(w, lc, opid, lg[i]); exp != nil {
+				return
+			}
+
+			if exp = t.dropRow(w, opid, row, opts.onDelete); exp != nil {
 				return
 			}
 		}
@@ -131,22 +151,37 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 	opid := atomic.AddUint32(&t.opid, 1)
 
 	if err = t.conn.Write(func(w db.Writer) (exp error) {
+		var ukey fdbx.Key
+		var row fdbx.Pair
+
 		lc := makeCache()
 		cp := make([]fdbx.Pair, len(pairs))
 		lg := make([]db.ListGetter, len(pairs))
 
 		for i := range pairs {
 			cp[i] = pairs[i].WrapKey(usrWrapper)
-			ukey := cp[i].Key()
-			lg[i] = w.List(ukey, ukey, 0, true)
-		}
 
-		for i := range cp {
-			if exp = t.dropRow(w, opid, t.fetchRow(w, lc, opid, lg[i]), opts.onDelete); exp != nil {
+			if ukey, exp = cp[i].Key(); exp != nil {
 				return
 			}
 
-			w.Upsert(cp[i].WrapKey(t.txWrapper).WrapValue(t.packWrapper(opid)))
+			if lg[i], exp = w.List(ukey, ukey, 0, true); exp != nil {
+				return
+			}
+		}
+
+		for i := range cp {
+			if row, exp = t.fetchRow(w, lc, opid, lg[i]); exp != nil {
+				return
+			}
+
+			if exp = t.dropRow(w, opid, row, opts.onDelete); exp != nil {
+				return
+			}
+
+			if exp = w.Upsert(cp[i].WrapKey(t.txWrapper).WrapValue(t.packWrapper(opid))); exp != nil {
+				return
+			}
 
 			if opts.onInsert == nil {
 				continue
@@ -169,14 +204,27 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 	Select - выборка актуального в данной транзакции значения ключа.
 */
 func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
-	ukey := usrWrapper(key)
+	var ukey fdbx.Key
 	opid := atomic.AddUint32(&t.opid, 1)
 
-	if err = t.conn.Read(func(r db.Reader) (exp error) {
-		pair := t.fetchRow(r, nil, opid, r.List(ukey, ukey, 0, true))
+	if ukey, err = usrWrapper(key); err != nil {
+		return
+	}
 
-		if pair != nil {
-			res = pair.WrapValue(valWrapper)
+	if err = t.conn.Read(func(r db.Reader) (exp error) {
+		var row fdbx.Pair
+		var lgt db.ListGetter
+
+		if lgt, exp = r.List(ukey, ukey, 0, true); exp != nil {
+			return
+		}
+
+		if row, exp = t.fetchRow(r, nil, opid, lgt); exp != nil {
+			return
+		}
+
+		if row != nil {
+			res = row.WrapValue(valWrapper)
 		} else {
 			res = fdbx.NewPair(key, nil)
 		}
@@ -194,29 +242,52 @@ func (t *tx64) SeqScan(from, to fdbx.Key) (res []fdbx.Pair, err error) {
 	next := true
 	opid := atomic.AddUint32(&t.opid, 1)
 	list := make([][]fdbx.Pair, 0, 64)
-	from = usrWrapper(from)
-	to = usrWrapper(to)
+
+	if from, err = usrWrapper(from); err != nil {
+		return
+	}
+
+	if to, err = usrWrapper(to); err != nil {
+		return
+	}
 
 	for next {
-		if err = t.conn.Read(func(r db.Reader) error {
-			pairs := t.fetchAll(r, nil, opid, r.List(from, to, ScanRangeSize, false))
+		if err = t.conn.Read(func(r db.Reader) (exp error) {
+			var key fdbx.Key
+			var lgt db.ListGetter
+			var rows []fdbx.Pair
 
-			switch len(pairs) {
+			if lgt, exp = r.List(from, to, ScanRangeSize, false); exp != nil {
+				return
+			}
+
+			if rows, exp = t.fetchAll(r, nil, opid, lgt); exp != nil {
+				return
+			}
+
+			switch len(rows) {
 			case 0:
 				next = false
 			case 1:
-				list = append(list, []fdbx.Pair{pairs[0].WrapValue(valWrapper)})
+				list = append(list, []fdbx.Pair{rows[0].WrapValue(valWrapper)})
 				next = false
 				size++
 			default:
-				cnt := len(pairs) - 1
-				from = usrWrapper(pairs[cnt].Key())
+				cnt := len(rows) - 1
 
-				for i := 0; i < cnt; i++ {
-					pairs[i] = pairs[i].WrapValue(valWrapper)
+				if key, exp = rows[cnt].Key(); exp != nil {
+					return
 				}
 
-				list = append(list, pairs[:cnt])
+				if from, exp = usrWrapper(key); exp != nil {
+					return
+				}
+
+				for i := 0; i < cnt; i++ {
+					rows[i] = rows[i].WrapValue(valWrapper)
+				}
+
+				list = append(list, rows[:cnt])
 				size += cnt
 			}
 			return nil
@@ -234,27 +305,37 @@ func (t *tx64) SeqScan(from, to fdbx.Key) (res []fdbx.Pair, err error) {
 	return res, nil
 }
 
-func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) bool {
-	var buf []byte
+func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) (_ bool, err error) {
 	var status byte
 
 	// Дешевле всего чекнуть в глобальном кеше, вдруг уже знаем такую
 	if status = globCache.get(x); status != txStatusUnknown {
-		return status == txStatusCommitted
+		return status == txStatusCommitted, nil
 	}
 
 	// Возможно, это открытая транзакция из локального кеша
 	if status = local.get(x); status != txStatusUnknown {
-		return status == txStatusCommitted
+		return status == txStatusCommitted, nil
 	}
 
 	// Придется слазать в БД за статусом и положить в кеш
-	if buf = r.Data(txKey(x)).Value(); len(buf) == 0 {
-		return false
+	var val fdbx.Value
+	var pair fdbx.Pair
+
+	if pair, err = r.Data(txKey(x)); err != nil {
+		return
+	}
+
+	if val, err = pair.Value(); err != nil {
+		return
+	}
+
+	if len(val) == 0 {
+		return false, nil
 	}
 
 	// Получаем значение статуса как часть модели
-	status = models.GetRootAsTransaction(buf, 0).Status()
+	status = models.GetRootAsTransaction(val, 0).Status()
 
 	// В случае финальных статусов можем положить в глобальный кеш
 	if status == txStatusCommitted || status == txStatusAborted {
@@ -263,7 +344,7 @@ func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) bool {
 
 	// В локальный кеш можем положить в любом случае, затем вернуть
 	local.set(x, status)
-	return status == txStatusCommitted
+	return status == txStatusCommitted, nil
 }
 
 func (t *tx64) pack() []byte {
@@ -282,7 +363,7 @@ func (t *tx64) pack() []byte {
 }
 
 func (t *tx64) packWrapper(opid uint32) fdbx.ValueWrapper {
-	return func(v fdbx.Value) fdbx.Value {
+	return func(v fdbx.Value) (fdbx.Value, error) {
 		row := &models.RowT{
 			State: &models.RowStateT{
 				XMin: t.txid,
@@ -296,7 +377,7 @@ func (t *tx64) packWrapper(opid uint32) fdbx.ValueWrapper {
 		res := buf.FinishedBytes()
 		buf.Reset()
 		fbsPool.Put(buf)
-		return res
+		return res, nil
 	}
 }
 
@@ -352,7 +433,9 @@ func (t *tx64) close(status byte) (err error) {
 	сработает внутренний механизм конфликтов fdb, так что одновременно двух актуальных
 	версий не должно появиться. Один из обработчиков увидит изменения и изменит поведение.
 */
-func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter) fdbx.Pair {
+func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter) (_ fdbx.Pair, err error) {
+	var comm bool
+	var val fdbx.Value
 	var buf models.RowState
 	var row models.RowStateT
 
@@ -365,7 +448,9 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
-		val := list[i].Value()
+		if val, err = list[i].Value(); err != nil {
+			return
+		}
 
 		if len(val) == 0 {
 			continue
@@ -389,10 +474,12 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 			}
 
 			// В этом случае объект создан в данной транзакции и еще не удален, можем прочитать
-			return list[i].WrapKey(sysWrapper)
+			return list[i].WrapKey(sysWrapper), nil
 		}
 
-		comm := t.isCommitted(lc, r, row.XMin)
+		if comm, err = t.isCommitted(lc, r, row.XMin); err != nil {
+			return
+		}
 
 		// Если запись создана другой транзакцией и она еще не закоммичена, то еще не видна
 		if !comm {
@@ -411,20 +498,26 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 			fallthrough
 		case 0:
 			// В этом случае объект создан в закоммиченной транзакции и еще не был удален
-			return list[i].WrapKey(sysWrapper)
+			return list[i].WrapKey(sysWrapper), nil
 		default:
 			// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
-			if !t.isCommitted(lc, r, row.XMax) {
-				return list[i].WrapKey(sysWrapper)
+			if comm, err = t.isCommitted(lc, r, row.XMax); err != nil {
+				return
+			}
+
+			if !comm {
+				return list[i].WrapKey(sysWrapper), nil
 			}
 		}
 	}
 
-	return nil
+	return nil, nil
 }
 
 // Аналогично fetchRow, но все актуальные версии всех ключей по диапазону
-func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter) []fdbx.Pair {
+func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter) (res []fdbx.Pair, err error) {
+	var comm bool
+	var val fdbx.Value
 	var buf models.RowState
 	var row models.RowStateT
 
@@ -433,11 +526,13 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 	}
 
 	list := lg()
-	res := list[:0]
+	res = list[:0]
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
-		val := list[i].Value()
+		if val, err = list[i].Value(); err != nil {
+			return
+		}
 
 		if len(val) == 0 {
 			continue
@@ -465,7 +560,9 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 			continue
 		}
 
-		comm := t.isCommitted(lc, r, row.XMin)
+		if comm, err = t.isCommitted(lc, r, row.XMin); err != nil {
+			return
+		}
 
 		// Если запись создана другой транзакцией и она еще не закоммичена, то еще не видна
 		if !comm {
@@ -488,7 +585,10 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 			continue
 		default:
 			// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
-			if !t.isCommitted(lc, r, row.XMax) {
+			if comm, err = t.isCommitted(lc, r, row.XMax); err != nil {
+				return
+			}
+			if !comm {
 				res = append(res, list[i].WrapKey(sysWrapper))
 				continue
 			}
@@ -500,7 +600,7 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 		list[i] = nil
 	}
 
-	return res
+	return res, nil
 }
 
 func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handler) (err error) {
@@ -508,9 +608,10 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handle
 		return nil
 	}
 
+	var key fdbx.Key
 	var data fdbx.Value
 
-	w.Upsert(pair.WrapKey(usrWrapper).WrapValue(func(v fdbx.Value) fdbx.Value {
+	w.Upsert(pair.WrapKey(usrWrapper).WrapValue(func(v fdbx.Value) (fdbx.Value, error) {
 		if len(v) > 0 {
 			var state models.RowState
 
@@ -524,32 +625,35 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handle
 
 			// В модели состояния поля указаны как required
 			// Обновление должно произойти 100%, если только это не косяк модели или баг библиотеки
-			// Именно поэтому тут паника. Если это не получилось сделать - использовать приложение нельзя!
 			if !(state.MutateXMax(t.txid) && state.MutateCMax(opid)) {
-				panic(ErrUpsert.WithStack())
+				return nil, ErrUpsert.WithStack()
 			}
 		}
 
-		return v
+		return v, nil
 	}))
 
 	if onDelete == nil {
 		return nil
 	}
 
-	if err = onDelete(t, fdbx.NewPair(pair.Key(), data)); err != nil {
+	if key, err = pair.Key(); err != nil {
+		return
+	}
+
+	if err = onDelete(t, fdbx.NewPair(key, data)); err != nil {
 		return ErrDelete.WithReason(err)
 	}
 
 	return nil
 }
 
-func (t *tx64) txWrapper(key fdbx.Key) fdbx.Key {
+func (t *tx64) txWrapper(key fdbx.Key) (fdbx.Key, error) {
 	if key == nil {
-		return nil
+		return nil, nil
 	}
 
 	var txid [8]byte
 	binary.BigEndian.PutUint64(txid[:], t.txid)
-	return key.RPart(txid[:]...)
+	return key.RPart(txid[:]...), nil
 }
