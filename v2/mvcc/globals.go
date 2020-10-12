@@ -10,6 +10,9 @@ import (
 	fbs "github.com/google/flatbuffers/go"
 )
 
+var loLimit = 100000
+var txLimit = 10000000
+
 var globCache = makeCache()
 
 var fbsPool = sync.Pool{New: func() interface{} { return fbs.NewBuilder(128) }}
@@ -18,6 +21,7 @@ const (
 	nsUser  byte = 0
 	nsTx    byte = 1
 	nsTxTmp byte = 2
+	nsBLOB  byte = 3
 )
 
 const (
@@ -37,6 +41,8 @@ func txKey(x uint64) fdbx.Key {
 func sysWrapper(key fdbx.Key) (fdbx.Key, error) { return key.LSkip(1), nil }
 
 func usrWrapper(key fdbx.Key) (fdbx.Key, error) { return key.LPart(nsUser), nil }
+
+func blobWrapper(key fdbx.Key) (fdbx.Key, error) { return key.LPart(nsBLOB), nil }
 
 func valWrapper(v fdbx.Value) (fdbx.Value, error) {
 	if len(v) == 0 {

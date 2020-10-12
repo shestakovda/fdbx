@@ -23,6 +23,8 @@ type Writer interface {
 
 	Versioned(fdbx.Key) error
 	Increment(fdbx.Key, uint64) error
+
+	Erase(fdbx.Key, fdbx.Key) error
 }
 
 // Connection - объект подключения к БД, а также фабрика элементов

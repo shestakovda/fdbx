@@ -2,10 +2,10 @@ TESTARGS=-run . -failfast -race -gcflags=all=-d=checkptr=0 -count=1 -cover
 
 all: test
 
-models:
+fbs:
 	@flatc --go --gen-mutable --gen-object-api ./models.fbs
 
-fmt: models
+fmt: fbs
 	@goimports -w .
 	@go mod tidy
 

@@ -7,10 +7,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/mvcc"
+	"github.com/shestakovda/typex"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -248,10 +248,9 @@ func BenchmarkSequenceWorkflowFourTx(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		uid := uuid.New()
-		key := fdbx.Key(uid[:])
-		val := fdbx.Value(uuid.New().String())
-		val2 := fdbx.Value(uuid.New().String())
+		key := fdbx.Key(typex.NewUUID())
+		val := fdbx.Value(typex.NewUUID().String())
+		val2 := fdbx.Value(typex.NewUUID().String())
 
 		// INSERT
 		tx, err := mvcc.Begin(cn)
@@ -296,10 +295,9 @@ func BenchmarkSequenceWorkflowSameTx(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		uid := uuid.New()
-		key := fdbx.Key(uid[:])
-		val := fdbx.Value(uuid.New().String())
-		val2 := fdbx.Value(uuid.New().String())
+		key := fdbx.Key(typex.NewUUID())
+		val := fdbx.Value(typex.NewUUID().String())
+		val2 := fdbx.Value(typex.NewUUID().String())
 
 		// INSERT
 		tx, err := mvcc.Begin(cn)
@@ -332,20 +330,20 @@ func BenchmarkOperationsSameTx(b *testing.B) {
 	require.NoError(b, err)
 	require.NoError(b, cn.Clear())
 
-	uid := uuid.New()
-	key := fdbx.Key(uid[:])
-	val := uid[:]
+	uid := []byte(typex.NewUUID())
+	key := fdbx.Key(uid)
+	val := uid
 
 	tx, err := mvcc.Begin(cn)
 	require.NoError(b, err)
-	require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(uid[:], uid[:])}))
+	require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(uid, uid)}))
 
 	b.ResetTimer()
 
 	b.Run("UPSERT", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			uid := uuid.New()
-			require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(uid[:], uid[:])}))
+			uid := []byte(typex.NewUUID())
+			require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(uid, uid)}))
 		}
 	})
 
@@ -361,9 +359,9 @@ func BenchmarkOperationsSameTx(b *testing.B) {
 
 	b.Run("DELETE", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			uid := uuid.New()
-			require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(uid[:], uid[:])}))
-			require.NoError(b, tx.Delete([]fdbx.Key{uid[:]}))
+			uid := []byte(typex.NewUUID())
+			require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(uid, uid)}))
+			require.NoError(b, tx.Delete([]fdbx.Key{uid}))
 		}
 	})
 }

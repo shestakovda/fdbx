@@ -22,6 +22,9 @@ type Tx interface {
 	Upsert([]fdbx.Pair, ...Option) error
 
 	SeqScan(from, to fdbx.Key) ([]fdbx.Pair, error)
+
+	SaveBLOB(fdbx.Value) (fdbx.Key, error)
+	LoadBLOB(fdbx.Key, uint32) (fdbx.Value, error)
 }
 
 // Option - дополнительный аргумент при выполнении команды
@@ -35,10 +38,13 @@ func Begin(conn db.Connection) (Tx, error) { return newTx64(conn) }
 
 // Ошибки модуля
 var (
-	ErrBegin   = errx.New("Ошибка старта транзакции")
-	ErrClose   = errx.New("Ошибка завершения транзакции")
-	ErrSelect  = errx.New("Ошибка получения данных")
-	ErrUpsert  = errx.New("Ошибка обновления данных")
-	ErrDelete  = errx.New("Ошибка удаления данных")
-	ErrSeqScan = errx.New("Ошибка полной выборки данных")
+	ErrBegin    = errx.New("Ошибка старта транзакции")
+	ErrClose    = errx.New("Ошибка завершения транзакции")
+	ErrSelect   = errx.New("Ошибка получения данных")
+	ErrUpsert   = errx.New("Ошибка обновления данных")
+	ErrDelete   = errx.New("Ошибка удаления данных")
+	ErrSeqScan  = errx.New("Ошибка полной выборки данных")
+	ErrBLOBLoad = errx.New("Ошибка загрузки BLOB")
+	ErrBLOBDrop = errx.New("Ошибка удаления BLOB")
+	ErrBLOBSave = errx.New("Ошибка сохранения BLOB")
 )

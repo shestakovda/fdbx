@@ -63,3 +63,21 @@ func (w v610Writer) Increment(key fdbx.Key, delta uint64) (err error) {
 	w.tx.Add(wrk.Bytes(), data[:])
 	return nil
 }
+
+func (w v610Writer) Erase(from fdbx.Key, to fdbx.Key) (err error) {
+	var uwk, ewk fdbx.Key
+
+	if uwk, err = w.usrWrapper(from); err != nil {
+		return
+	}
+
+	if ewk, err = w.endWrapper(to); err != nil {
+		return
+	}
+
+	w.tx.ClearRange(fdb.KeyRange{
+		Begin: uwk.Bytes(),
+		End:   ewk.Bytes(),
+	})
+	return nil
+}

@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/uuid"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 	"github.com/shestakovda/fdbx/v2/orm"
+	"github.com/shestakovda/typex"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -50,12 +50,30 @@ func (s *ORMSuite) TestWorkflow() {
 	var val fdbx.Value
 
 	// Чтобы потестить сжатие в gzip
-	longMsg := strings.Repeat("msg3", 300)
+	baseMsg := "message"
+
+	parts := make([]string, 0, 200)
+	for {
+		parts = append(parts, typex.NewUUID().String())
+		if len(parts) > 200 { // около 7 кб
+			break
+		}
+	}
+	longMsg := strings.Join(parts, "")
+
+	parts = make([]string, 0, 200000)
+	for {
+		parts = append(parts, typex.NewUUID().String())
+		if len(parts) > 200000 { // около 7 кб
+			break
+		}
+	}
+	hugeMsg := strings.Join(parts, "") // около 7 мб
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdbx.NewPair(fdbx.Key("id1"), fdbx.Value("msg1")),
-		fdbx.NewPair(fdbx.Key("id2"), fdbx.Value("msg2")),
-		fdbx.NewPair(fdbx.Key("id3"), fdbx.Value(longMsg)),
+		fdbx.NewPair(fdbx.Key("id1"), fdbx.Value(baseMsg)),
+		fdbx.NewPair(fdbx.Key("id2"), fdbx.Value(longMsg)),
+		fdbx.NewPair(fdbx.Key("id3"), fdbx.Value(hugeMsg)),
 	))
 
 	if list, err := s.tbl.Select(s.tx).All(); s.NoError(err) {
@@ -65,21 +83,21 @@ func (s *ORMSuite) TestWorkflow() {
 			s.Equal("id1", key.String())
 		}
 		if val, err = list[0].Value(); s.NoError(err) {
-			s.Equal("msg1", val.String())
+			s.Equal(baseMsg, val.String())
 		}
 
 		if key, err = list[1].Key(); s.NoError(err) {
 			s.Equal("id2", key.String())
 		}
 		if val, err = list[1].Value(); s.NoError(err) {
-			s.Equal("msg2", val.String())
+			s.Equal(longMsg, val.String())
 		}
 
 		if key, err = list[2].Key(); s.NoError(err) {
 			s.Equal("id3", key.String())
 		}
 		if val, err = list[2].Value(); s.NoError(err) {
-			s.Equal(longMsg, val.String())
+			s.Equal(hugeMsg, val.String())
 		}
 	}
 
@@ -121,8 +139,8 @@ func BenchmarkUpsert(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		uid := uuid.New()
-		require.NoError(b, tbl.Upsert(tx, fdbx.NewPair(uid[:], uid[:])))
+		uid := []byte(typex.NewUUID())
+		require.NoError(b, tbl.Upsert(tx, fdbx.NewPair(uid, uid)))
 	}
 }
 
@@ -145,8 +163,8 @@ func BenchmarkUpsertBatch(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		for i := range batch {
-			uid := uuid.New()
-			batch[i] = fdbx.NewPair(uid[:], uid[:])
+			uid := []byte(typex.NewUUID())
+			batch[i] = fdbx.NewPair(uid, uid)
 		}
 		require.NoError(b, tbl.Upsert(tx, batch...))
 	}
@@ -174,8 +192,8 @@ func BenchmarkCount(b *testing.B) {
 	for k := 0; k < count/int(batchSize); k++ {
 		batch := make([]fdbx.Pair, batchSize)
 		for i := 0; i < int(batchSize); i++ {
-			uid := uuid.New()
-			batch[i] = fdbx.NewPair(uid[:], uid[:])
+			uid := []byte(typex.NewUUID())
+			batch[i] = fdbx.NewPair(uid, uid)
 		}
 		require.NoError(b, tbl.Upsert(tx, batch...))
 	}

@@ -13,7 +13,9 @@ import (
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
-var gzLimit = 840
+var gzLimit uint32 = 840
+var loLimit uint32 = 100000
+
 var zipPool = sync.Pool{New: func() interface{} { return new(bytes.Buffer) }}
 var fbsPool = sync.Pool{New: func() interface{} { return fbs.NewBuilder(128) }}
 
@@ -43,12 +45,13 @@ func usrValWrapper(tx mvcc.Tx) fdbx.ValueWrapper {
 		mod := models.ValueT{
 			Blob: false,
 			GZip: false,
+			Size: uint32(len(v)),
 			Hash: 0,
 			Data: v,
 		}
 
 		// Достаточно длинное значение, чтобы можно было пытаться сжать его
-		if len(mod.Data) > gzLimit {
+		if mod.Size > gzLimit {
 			buf := zipPool.Get().(*bytes.Buffer)
 			gzw := gzip.NewWriter(buf)
 
@@ -62,9 +65,22 @@ func usrValWrapper(tx mvcc.Tx) fdbx.ValueWrapper {
 
 			mod.GZip = true
 			mod.Data = buf.Bytes()
+			mod.Size = uint32(len(mod.Data))
 
 			buf.Reset()
 			zipPool.Put(buf)
+		}
+
+		// Слишком длинное значение, даже после сжатия не влезает в ячейку
+		if mod.Size > loLimit {
+			var uid fdbx.Key
+
+			if uid, err = tx.SaveBLOB(mod.Data); err != nil {
+				return nil, ErrValPack.WithReason(err)
+			}
+
+			mod.Blob = true
+			mod.Data = fdbx.Value(uid)
 		}
 
 		buf := fbsPool.Get().(*fbs.Builder)
@@ -77,35 +93,46 @@ func usrValWrapper(tx mvcc.Tx) fdbx.ValueWrapper {
 }
 
 // sysValWrapper - преобразователь системного значения в пользовательское, для выборки
-func sysValWrapper(v fdbx.Value) (_ fdbx.Value, err error) {
-	if v == nil {
-		return nil, nil
-	}
-
-	var mod models.ValueT
-	models.GetRootAsValue(v, 0).UnPackTo(&mod)
-
-	// Если значение было сжато, надо расжать
-	if mod.GZip {
-		var gzr *gzip.Reader
-
-		buf := zipPool.Get().(*bytes.Buffer)
-
-		if gzr, err = gzip.NewReader(bytes.NewReader(mod.Data)); err != nil {
-			return nil, ErrValUnpack.WithReason(err)
+func sysValWrapper(tx mvcc.Tx) fdbx.ValueWrapper {
+	return func(v fdbx.Value) (_ fdbx.Value, err error) {
+		if v == nil {
+			return nil, nil
 		}
 
-		if _, err = io.Copy(buf, gzr); err != nil {
-			return nil, ErrValUnpack.WithReason(err)
+		var mod models.ValueT
+		models.GetRootAsValue(v, 0).UnPackTo(&mod)
+
+		// Если значение лежит в BLOB, надо достать
+		if mod.Blob {
+			if mod.Data, err = tx.LoadBLOB(mod.Data, mod.Size); err != nil {
+				return nil, ErrValUnpack.WithReason(err)
+			}
+			mod.Blob = false
 		}
 
-		mod.GZip = false
-		mod.Data = buf.Bytes()
+		// Если значение было сжато, надо расжать
+		if mod.GZip {
+			var gzr *gzip.Reader
 
-		buf.Reset()
-		zipPool.Put(buf)
+			buf := zipPool.Get().(*bytes.Buffer)
+
+			if gzr, err = gzip.NewReader(bytes.NewReader(mod.Data)); err != nil {
+				return nil, ErrValUnpack.WithReason(err)
+			}
+
+			if _, err = io.Copy(buf, gzr); err != nil {
+				return nil, ErrValUnpack.WithReason(err)
+			}
+
+			mod.GZip = false
+			mod.Data = buf.Bytes()
+
+			buf.Reset()
+			zipPool.Put(buf)
+		}
+
+		// TODO: преобразователи gzip/blob
+		mod.Size = uint32(len(mod.Data))
+		return mod.Data, nil
 	}
-
-	// TODO: преобразователи gzip/blob
-	return mod.Data, nil
 }

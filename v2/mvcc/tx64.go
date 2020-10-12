@@ -6,10 +6,10 @@ import (
 	"time"
 
 	fbs "github.com/google/flatbuffers/go"
-	"github.com/google/uuid"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/models"
+	"github.com/shestakovda/typex"
 )
 
 /*
@@ -32,8 +32,7 @@ func newTx64(conn db.Connection) (t *tx64, err error) {
 		status: txStatusRunning,
 	}
 
-	uid := uuid.New()
-	key := fdbx.Key(uid[:]).LPart(nsTxTmp)
+	key := fdbx.Key(typex.NewUUID()).LPart(nsTxTmp)
 
 	if err = conn.Write(func(w db.Writer) error {
 		w.Versioned(key)
@@ -303,6 +302,114 @@ func (t *tx64) SeqScan(from, to fdbx.Key) (res []fdbx.Pair, err error) {
 	}
 
 	return res, nil
+}
+
+func (t *tx64) SaveBLOB(blob fdbx.Value) (_ fdbx.Key, err error) {
+	sum := 0
+	tmp := blob
+	num := uint16(0)
+	uid := typex.NewUUID()
+	key := fdbx.Key(uid).LPart(nsBLOB)
+	prs := make([]fdbx.Pair, 0, txLimit/loLimit+1)
+	wrp := func(key fdbx.Key) (fdbx.Key, error) {
+		return key.RPart(byte(num>>8), byte(num)), nil
+	}
+
+	set := func(w db.Writer) (exp error) {
+		for i := range prs {
+			if exp = w.Upsert(prs[i].WrapKey(wrp)); exp != nil {
+				return
+			}
+			num++
+		}
+		return nil
+	}
+
+	// Разбиваем на элементарные значения, пишем пачками по 10 мб
+	for {
+		if len(tmp) > loLimit {
+			prs = append(prs, fdbx.NewPair(key, tmp[:loLimit]))
+			tmp = tmp[loLimit:]
+			sum += loLimit
+		} else {
+			prs = append(prs, fdbx.NewPair(key, tmp))
+			sum += len(tmp)
+			break
+		}
+
+		if sum > txLimit-loLimit {
+			if err = t.conn.Write(set); err != nil {
+				return nil, ErrBLOBSave.WithReason(err)
+			}
+			sum = 0
+			prs = prs[:0]
+		}
+	}
+
+	if len(prs) > 0 {
+		if err = t.conn.Write(set); err != nil {
+			return nil, ErrBLOBSave.WithReason(err)
+		}
+	}
+
+	return fdbx.Key(uid), nil
+}
+
+func (t *tx64) LoadBLOB(uid fdbx.Key, size uint32) (_ fdbx.Value, err error) {
+	var val fdbx.Value
+	var rows []fdbx.Pair
+
+	key := uid.LPart(nsBLOB)
+	end := key.RPart(0xFF, 0xFF)
+	res := make(fdbx.Value, 0, size)
+
+	for {
+		if err = t.conn.Read(func(r db.Reader) (exp error) {
+			var lsg db.ListGetter
+
+			if lsg, exp = r.List(key, end, 10, false); exp != nil {
+				return
+			}
+
+			rows = lsg()
+			return nil
+		}); err != nil {
+			return nil, ErrBLOBLoad.WithReason(err)
+		}
+
+		if len(rows) == 0 {
+			break
+		}
+
+		for i := range rows {
+			if val, err = rows[i].Value(); err != nil {
+				return nil, ErrBLOBLoad.WithReason(err)
+			}
+
+			res = append(res, val...)
+		}
+
+		if key, err = rows[len(rows)-1].Key(); err != nil {
+			return nil, ErrBLOBLoad.WithReason(err)
+		}
+		key = key.RPart(0x01)
+	}
+
+	return res, nil
+}
+
+func (t *tx64) DropBLOB(uid fdbx.Key) (err error) {
+	key := uid.LPart(nsBLOB)
+	end := key.RPart(0xFF, 0xFF)
+
+	if err = t.conn.Write(func(w db.Writer) error {
+		w.Erase(key, end)
+		return nil
+	}); err != nil {
+		return ErrBLOBDrop.WithReason(err)
+	}
+
+	return nil
 }
 
 func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) (_ bool, err error) {
