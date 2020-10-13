@@ -23,7 +23,8 @@ type Tx interface {
 
 	SeqScan(from, to fdbx.Key) ([]fdbx.Pair, error)
 
-	SaveBLOB(fdbx.Value) (fdbx.Key, error)
+	DropBLOB(fdbx.Key) error
+	SaveBLOB(fdbx.Key, fdbx.Value) error
 	LoadBLOB(fdbx.Key, uint32) (fdbx.Value, error)
 }
 

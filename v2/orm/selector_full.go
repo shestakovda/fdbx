@@ -27,7 +27,7 @@ func (s fullSelector) Select(cl Collection) (list []fdbx.Pair, err error) {
 		return nil, ErrSelect.WithReason(err)
 	}
 
-	valWrapper := sysValWrapper(s.tx)
+	valWrapper := sysValWrapper(s.tx, cl.ID())
 
 	for i := range list {
 		list[i] = list[i].WrapKey(sysKeyWrapper).WrapValue(valWrapper)

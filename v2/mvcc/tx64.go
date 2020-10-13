@@ -304,20 +304,18 @@ func (t *tx64) SeqScan(from, to fdbx.Key) (res []fdbx.Pair, err error) {
 	return res, nil
 }
 
-func (t *tx64) SaveBLOB(blob fdbx.Value) (_ fdbx.Key, err error) {
+func (t *tx64) SaveBLOB(key fdbx.Key, blob fdbx.Value) (err error) {
 	sum := 0
 	tmp := blob
 	num := uint16(0)
-	uid := typex.NewUUID()
-	key := fdbx.Key(uid).LPart(nsBLOB)
 	prs := make([]fdbx.Pair, 0, txLimit/loLimit+1)
-	wrp := func(key fdbx.Key) (fdbx.Key, error) {
-		return key.RPart(byte(num>>8), byte(num)), nil
+	wrp := func(k fdbx.Key) (fdbx.Key, error) {
+		return k.RPart(byte(num>>8), byte(num)), nil
 	}
 
 	set := func(w db.Writer) (exp error) {
 		for i := range prs {
-			if exp = w.Upsert(prs[i].WrapKey(wrp)); exp != nil {
+			if exp = w.Upsert(prs[i].WrapKey(usrWrapper).WrapKey(wrp)); exp != nil {
 				return
 			}
 			num++
@@ -339,7 +337,7 @@ func (t *tx64) SaveBLOB(blob fdbx.Value) (_ fdbx.Key, err error) {
 
 		if sum > txLimit-loLimit {
 			if err = t.conn.Write(set); err != nil {
-				return nil, ErrBLOBSave.WithReason(err)
+				return ErrBLOBSave.WithReason(err)
 			}
 			sum = 0
 			prs = prs[:0]
@@ -348,18 +346,21 @@ func (t *tx64) SaveBLOB(blob fdbx.Value) (_ fdbx.Key, err error) {
 
 	if len(prs) > 0 {
 		if err = t.conn.Write(set); err != nil {
-			return nil, ErrBLOBSave.WithReason(err)
+			return ErrBLOBSave.WithReason(err)
 		}
 	}
 
-	return fdbx.Key(uid), nil
+	return nil
 }
 
-func (t *tx64) LoadBLOB(uid fdbx.Key, size uint32) (_ fdbx.Value, err error) {
+func (t *tx64) LoadBLOB(key fdbx.Key, size uint32) (_ fdbx.Value, err error) {
 	var val fdbx.Value
 	var rows []fdbx.Pair
 
-	key := uid.LPart(nsBLOB)
+	if key, err = usrWrapper(key); err != nil {
+		return
+	}
+
 	end := key.RPart(0xFF, 0xFF)
 	res := make(fdbx.Value, 0, size)
 
@@ -398,8 +399,7 @@ func (t *tx64) LoadBLOB(uid fdbx.Key, size uint32) (_ fdbx.Value, err error) {
 	return res, nil
 }
 
-func (t *tx64) DropBLOB(uid fdbx.Key) (err error) {
-	key := uid.LPart(nsBLOB)
+func (t *tx64) DropBLOB(key fdbx.Key) (err error) {
 	end := key.RPart(0xFF, 0xFF)
 
 	if err = t.conn.Write(func(w db.Writer) error {

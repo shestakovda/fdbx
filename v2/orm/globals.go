@@ -11,7 +11,11 @@ import (
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/models"
 	"github.com/shestakovda/fdbx/v2/mvcc"
+	"github.com/shestakovda/typex"
 )
+
+const nsData byte = 0
+const nsBLOB byte = 0xFF
 
 var gzLimit uint32 = 840
 var loLimit uint32 = 100000
@@ -19,27 +23,27 @@ var loLimit uint32 = 100000
 var zipPool = sync.Pool{New: func() interface{} { return new(bytes.Buffer) }}
 var fbsPool = sync.Pool{New: func() interface{} { return fbs.NewBuilder(128) }}
 
+// sysKeyWrapper - преобразователь системного ключа в пользовательский, для выборки
+func sysKeyWrapper(key fdbx.Key) (fdbx.Key, error) {
+	return key.LSkip(3).RSkip(8), nil
+}
+
 // usrKeyWrapper - преобразователь пользовательского ключа в системный, для вставки
 func usrKeyWrapper(clid uint16) fdbx.KeyWrapper {
 	return func(key fdbx.Key) (fdbx.Key, error) {
-		return key.LPart(byte(clid>>8), byte(clid)), nil
+		return key.LPart(byte(clid>>8), byte(clid), nsData), nil
 	}
 }
 
-// sysKeyWrapper - преобразователь системного ключа в пользовательский, для выборки
-func sysKeyWrapper(key fdbx.Key) (fdbx.Key, error) {
-	return key.LSkip(2).RSkip(8), nil
-}
-
 // idxKeyWrapper - преобразователь пользовательского ключа в ключ индекса
-func idxKeyWrapper(idxid byte) fdbx.KeyWrapper {
+func idxKeyWrapper(clid uint16, idxid byte) fdbx.KeyWrapper {
 	return func(key fdbx.Key) (fdbx.Key, error) {
-		return key.LPart(idxid), nil
+		return key.LPart(byte(clid>>8), byte(clid), idxid), nil
 	}
 }
 
 // usrValWrapper - преобразователь пользовательского значения в системное, для вставки
-func usrValWrapper(tx mvcc.Tx) fdbx.ValueWrapper {
+func usrValWrapper(tx mvcc.Tx, clid uint16) fdbx.ValueWrapper {
 	return func(v fdbx.Value) (_ fdbx.Value, err error) {
 		// TODO: преобразователи gzip/blob
 		mod := models.ValueT{
@@ -73,9 +77,10 @@ func usrValWrapper(tx mvcc.Tx) fdbx.ValueWrapper {
 
 		// Слишком длинное значение, даже после сжатия не влезает в ячейку
 		if mod.Size > loLimit {
-			var uid fdbx.Key
+			uid := typex.NewUUID()
+			key := fdbx.Key(uid).LPart(byte(clid>>8), byte(clid), nsBLOB)
 
-			if uid, err = tx.SaveBLOB(mod.Data); err != nil {
+			if err = tx.SaveBLOB(key, mod.Data); err != nil {
 				return nil, ErrValPack.WithReason(err)
 			}
 
@@ -93,9 +98,9 @@ func usrValWrapper(tx mvcc.Tx) fdbx.ValueWrapper {
 }
 
 // sysValWrapper - преобразователь системного значения в пользовательское, для выборки
-func sysValWrapper(tx mvcc.Tx) fdbx.ValueWrapper {
+func sysValWrapper(tx mvcc.Tx, clid uint16) fdbx.ValueWrapper {
 	return func(v fdbx.Value) (_ fdbx.Value, err error) {
-		if v == nil {
+		if len(v) == 0 {
 			return nil, nil
 		}
 
@@ -104,7 +109,8 @@ func sysValWrapper(tx mvcc.Tx) fdbx.ValueWrapper {
 
 		// Если значение лежит в BLOB, надо достать
 		if mod.Blob {
-			if mod.Data, err = tx.LoadBLOB(mod.Data, mod.Size); err != nil {
+			key := fdbx.Key(mod.Data).LPart(byte(clid>>8), byte(clid), nsBLOB)
+			if mod.Data, err = tx.LoadBLOB(key, mod.Size); err != nil {
 				return nil, ErrValUnpack.WithReason(err)
 			}
 			mod.Blob = false

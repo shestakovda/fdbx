@@ -15,6 +15,7 @@ import (
 
 const TestDB byte = 0x10
 const TestTable uint16 = 1
+const TestIndex byte = 1
 
 func TestORM(t *testing.T) {
 	suite.Run(t, new(ORMSuite))
@@ -38,7 +39,15 @@ func (s *ORMSuite) SetupTest() {
 	s.tx, err = mvcc.Begin(s.cn)
 	s.Require().NoError(err)
 
-	s.tbl = orm.Table(TestTable)
+	s.tbl = orm.Table(
+		TestTable,
+		orm.Index(TestIndex, func(v fdbx.Value) fdbx.Key {
+			if len(v) > 3 {
+				return fdbx.Key(v[:3])
+			}
+			return nil
+		}),
+	)
 }
 
 func (s *ORMSuite) TearDownTest() {

@@ -33,7 +33,7 @@ func (t v1Table) Upsert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
 		return nil
 	}
 
-	valWrapper := usrValWrapper(tx)
+	valWrapper := usrValWrapper(tx, t.id)
 	keyWrapper := usrKeyWrapper(t.id)
 
 	cp := make([]fdbx.Pair, len(pairs))
@@ -82,7 +82,11 @@ func (t v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 	}
 
 	for idxid, fnc := range t.options.indexes {
-		if ups[0], err = idxKeyWrapper(idxid)(fnc(val)); err != nil {
+		if ups[0] = fnc(val); ups[0] == nil {
+			continue
+		}
+
+		if ups[0], err = idxKeyWrapper(t.id, idxid)(ups[0]); err != nil {
 			return ErrIdxDelete.WithReason(err)
 		}
 
@@ -99,20 +103,24 @@ func (t v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 		return nil
 	}
 
-	var key fdbx.Key
 	var val fdbx.Value
 	var ups [1]fdbx.Pair
+	var key, tmp fdbx.Key
 
 	if val, err = pair.Value(); err != nil {
 		return ErrIdxUpsert.WithReason(err)
 	}
 
 	for idxid, fnc := range t.options.indexes {
+		if tmp = fnc(val); tmp == nil {
+			continue
+		}
+
 		if key, err = pair.Key(); err != nil {
 			return ErrIdxUpsert.WithReason(err)
 		}
 
-		ups[0] = fdbx.NewPair(fnc(val), fdbx.Value(key.Bytes())).WrapKey(idxKeyWrapper(idxid))
+		ups[0] = fdbx.NewPair(tmp, fdbx.Value(key.Bytes())).WrapKey(idxKeyWrapper(t.id, idxid))
 		if err = tx.Upsert(ups[:]); err != nil {
 			return ErrIdxUpsert.WithReason(err).WithDebug(errx.Debug{"idx": idxid})
 		}
