@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/mvcc"
@@ -130,6 +131,57 @@ func (s *ORMSuite) TestCount() {
 	if err := s.tbl.Select(s.tx).Agg(orm.Count(&cnt), orm.Count(&cnt2)); s.NoError(err) {
 		s.Equal(uint64(3), cnt)
 		s.Equal(uint64(6), cnt2)
+	}
+}
+
+func (s *ORMSuite) TestByID() {
+	var key fdbx.Key
+	var val fdbx.Value
+
+	id1 := fdbx.Key("id1")
+	id2 := fdbx.Key("id2")
+	id3 := fdbx.Key("id3")
+	id4 := fdbx.Key("id4")
+
+	s.Require().NoError(s.tbl.Upsert(s.tx,
+		fdbx.NewPair(id1, fdbx.Value("msg1")),
+		fdbx.NewPair(id2, fdbx.Value("msg2")),
+		fdbx.NewPair(id3, fdbx.Value("msg3")),
+	))
+
+	if list, err := s.tbl.Select(s.tx).ByID(id1, id3).All(); s.NoError(err) {
+		s.Len(list, 2)
+
+		if key, err = list[0].Key(); s.NoError(err) {
+			s.Equal(id1.String(), key.String())
+		}
+		if val, err = list[0].Value(); s.NoError(err) {
+			s.Equal("msg1", val.String())
+		}
+
+		if key, err = list[1].Key(); s.NoError(err) {
+			s.Equal(id3.String(), key.String())
+		}
+		if val, err = list[1].Value(); s.NoError(err) {
+			s.Equal("msg3", val.String())
+		}
+	}
+
+	if list, err := s.tbl.Select(s.tx).ByID(id2, id4).All(); s.Error(err) {
+		s.Nil(list)
+		s.True(errx.Is(err, orm.ErrSelect))
+		s.True(errx.Is(err, orm.ErrNotFound))
+	}
+
+	if list, err := s.tbl.Select(s.tx).PossibleByID(id2, id4).All(); s.NoError(err) {
+		s.Len(list, 1)
+
+		if key, err = list[0].Key(); s.NoError(err) {
+			s.Equal(id2.String(), key.String())
+		}
+		if val, err = list[0].Value(); s.NoError(err) {
+			s.Equal("msg2", val.String())
+		}
 	}
 }
 

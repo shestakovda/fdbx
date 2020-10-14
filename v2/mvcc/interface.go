@@ -14,6 +14,8 @@ var ScanRangeSize uint64 = 10000
 
 // Tx - объект "логической" транзакции MVCC поверх "физической" транзакции FDB
 type Tx interface {
+	Conn() db.Connection
+
 	Commit() error
 	Cancel() error
 
@@ -21,7 +23,7 @@ type Tx interface {
 	Delete([]fdbx.Key, ...Option) error
 	Upsert([]fdbx.Pair, ...Option) error
 
-	SeqScan(from, to fdbx.Key) ([]fdbx.Pair, error)
+	SeqScan(from, to fdbx.Key, args ...Option) ([]fdbx.Pair, error)
 
 	DropBLOB(fdbx.Key) error
 	SaveBLOB(fdbx.Key, fdbx.Value) error
@@ -45,6 +47,7 @@ var (
 	ErrUpsert   = errx.New("Ошибка обновления данных")
 	ErrDelete   = errx.New("Ошибка удаления данных")
 	ErrSeqScan  = errx.New("Ошибка полной выборки данных")
+	ErrNotFound = errx.New("Отсутствует значение")
 	ErrBLOBLoad = errx.New("Ошибка загрузки BLOB")
 	ErrBLOBDrop = errx.New("Ошибка удаления BLOB")
 	ErrBLOBSave = errx.New("Ошибка сохранения BLOB")

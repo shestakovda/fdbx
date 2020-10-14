@@ -12,22 +12,15 @@ type v610Writer struct {
 	tx fdb.Transaction
 }
 
-func (w v610Writer) Delete(key fdbx.Key) (err error) {
-	var wrk fdbx.Key
-
-	if wrk, err = w.usrWrapper(key); err != nil {
-		return
-	}
-
-	w.tx.Clear(wrk.Bytes())
-	return nil
+func (w v610Writer) Delete(key fdbx.Key) {
+	w.tx.Clear(w.usrWrap(key).Bytes())
 }
 
 func (w v610Writer) Upsert(pair fdbx.Pair) (err error) {
 	var key fdbx.Key
 	var val fdbx.Value
 
-	if key, err = pair.WrapKey(w.usrWrapper).Key(); err != nil {
+	if key, err = pair.Key(); err != nil {
 		return
 	}
 
@@ -35,49 +28,37 @@ func (w v610Writer) Upsert(pair fdbx.Pair) (err error) {
 		return
 	}
 
-	w.tx.Set(key.Bytes(), val)
+	w.tx.Set(w.usrWrap(key).Bytes(), val)
 	return nil
 }
 
-func (w v610Writer) Versioned(key fdbx.Key) (err error) {
-	var wrk fdbx.Key
+func (w v610Writer) Versioned(key fdbx.Key) {
 	var data [14]byte
-
-	if wrk, err = w.usrWrapper(key); err != nil {
-		return
-	}
-
-	w.tx.SetVersionstampedValue(wrk.Bytes(), data[:])
-	return nil
+	w.tx.SetVersionstampedValue(w.usrWrap(key).Bytes(), data[:])
 }
 
-func (w v610Writer) Increment(key fdbx.Key, delta uint64) (err error) {
-	var wrk fdbx.Key
+func (w v610Writer) Increment(key fdbx.Key, delta uint64) {
 	var data [8]byte
-
-	if wrk, err = w.usrWrapper(key); err != nil {
-		return
-	}
-
 	binary.LittleEndian.PutUint64(data[:], delta)
-	w.tx.Add(wrk.Bytes(), data[:])
-	return nil
+	w.tx.Add(w.usrWrap(key).Bytes(), data[:])
 }
 
-func (w v610Writer) Erase(from fdbx.Key, to fdbx.Key) (err error) {
-	var uwk, ewk fdbx.Key
-
-	if uwk, err = w.usrWrapper(from); err != nil {
-		return
-	}
-
-	if ewk, err = w.endWrapper(to); err != nil {
-		return
-	}
-
+func (w v610Writer) Erase(from, to fdbx.Key) {
 	w.tx.ClearRange(fdb.KeyRange{
-		Begin: uwk.Bytes(),
-		End:   ewk.Bytes(),
+		Begin: w.usrWrap(from).Bytes(),
+		End:   w.endWrap(to).Bytes(),
 	})
-	return nil
+}
+
+func (w v610Writer) Watch(key fdbx.Key) Waiter {
+	return &v610Waiter{
+		FutureNil: w.tx.Watch(w.usrWrap(key).Bytes()),
+	}
+}
+
+func (w v610Writer) Lock(from, to fdbx.Key) {
+	w.tx.AddWriteConflictRange(fdb.KeyRange{
+		Begin: w.usrWrap(from).Bytes(),
+		End:   w.endWrap(to).Bytes(),
+	})
 }

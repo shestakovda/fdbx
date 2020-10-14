@@ -36,8 +36,6 @@ func (s *InterfaceSuite) TestConnection() {
 
 	var buf [8]byte
 	var val fdbx.Value
-	var pair fdbx.Pair
-	var lgt db.ListGetter
 	const num uint64 = 123
 	const add uint64 = 321
 	binary.LittleEndian.PutUint64(buf[:], num)
@@ -54,21 +52,19 @@ func (s *InterfaceSuite) TestConnection() {
 	}))
 
 	s.Require().NoError(cn.Read(func(r db.Reader) error {
-		if pair, err = r.Data(key1); s.NoError(err) {
-			if val, err = pair.Value(); s.NoError(err) {
-				s.Equal("val1", val.String())
-			}
+
+		if val, err = r.Data(key1).Value(); s.NoError(err) {
+			s.Equal("val1", val.String())
 		}
-		if pair, err = r.Data(key2); s.NoError(err) {
-			if val, err = pair.Value(); s.NoError(err) {
-				s.Equal(num, binary.LittleEndian.Uint64(val))
-			}
+
+		if val, err = r.Data(key2).Value(); s.NoError(err) {
+			s.Equal(num, binary.LittleEndian.Uint64(val))
 		}
-		if pair, err = r.Data(key3); s.NoError(err) {
-			if val, err = pair.Value(); s.NoError(err) {
-				s.Len(val, 10)
-			}
+
+		if val, err = r.Data(key3).Value(); s.NoError(err) {
+			s.Len(val, 10)
 		}
+
 		return nil
 	}))
 
@@ -80,24 +76,20 @@ func (s *InterfaceSuite) TestConnection() {
 	}))
 
 	s.Require().NoError(cn.Read(func(r db.Reader) error {
-		if pair, err = r.Data(key1); s.NoError(err) {
-			if val, err = pair.Value(); s.NoError(err) {
-				s.Equal("val2", val.String())
-			}
+
+		if val, err = r.Data(key1).Value(); s.NoError(err) {
+			s.Equal("val2", val.String())
 		}
-		if pair, err = r.Data(key2); s.NoError(err) {
-			if val, err = pair.Value(); s.NoError(err) {
-				s.Equal(num+add, binary.LittleEndian.Uint64(val))
-			}
+
+		if val, err = r.Data(key2).Value(); s.NoError(err) {
+			s.Equal(num+add, binary.LittleEndian.Uint64(val))
 		}
-		if pair, err = r.Data(key3); s.NoError(err) {
-			if val, err = pair.Value(); s.NoError(err) {
-				s.Empty(val)
-			}
+
+		if val, err = r.Data(key3).Value(); s.NoError(err) {
+			s.Empty(val)
 		}
-		if lgt, err = r.List(nil, nil, 0, false); s.NoError(err) {
-			s.Len(lgt(), 2)
-		}
+
+		s.Len(r.List(nil, nil, 0, false)(), 2)
 		return nil
 	}))
 }

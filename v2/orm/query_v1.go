@@ -71,6 +71,16 @@ func (q *v1Query) Delete() (err error) {
 	return nil
 }
 
+func (q *v1Query) ByID(ids ...fdbx.Key) Query {
+	q.search = NewIDsSelector(q.tx, ids, true)
+	return q
+}
+
+func (q *v1Query) PossibleByID(ids ...fdbx.Key) Query {
+	q.search = NewIDsSelector(q.tx, ids, false)
+	return q
+}
+
 func (q *v1Query) filtered() (res []fdbx.Pair, err error) {
 	var skip bool
 	var list []fdbx.Pair

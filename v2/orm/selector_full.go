@@ -17,11 +17,7 @@ type fullSelector struct {
 }
 
 func (s fullSelector) Select(cl Collection) (list []fdbx.Pair, err error) {
-	var key fdbx.Key
-
-	if key, err = usrKeyWrapper(cl.ID())(nil); err != nil {
-		return nil, ErrSelect.WithReason(err)
-	}
+	key := usrKey(cl.ID(), nil)
 
 	if list, err = s.tx.SeqScan(key, key); err != nil {
 		return nil, ErrSelect.WithReason(err)

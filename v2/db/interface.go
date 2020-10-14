@@ -1,6 +1,8 @@
 package db
 
 import (
+	"context"
+
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 )
@@ -10,8 +12,8 @@ type ListGetter func() []fdbx.Pair
 
 // Reader - обработчик чтения значений из БД
 type Reader interface {
-	Data(fdbx.Key) (fdbx.Pair, error)
-	List(from, to fdbx.Key, limit uint64, reverse bool) (ListGetter, error)
+	Data(fdbx.Key) fdbx.Pair
+	List(from, to fdbx.Key, limit uint64, reverse bool) ListGetter
 }
 
 // Reader - обработчик модификации значений в БД
@@ -19,12 +21,19 @@ type Writer interface {
 	Reader
 
 	Upsert(fdbx.Pair) error
-	Delete(fdbx.Key) error
+	Delete(fdbx.Key)
 
-	Versioned(fdbx.Key) error
-	Increment(fdbx.Key, uint64) error
+	Versioned(fdbx.Key)
+	Increment(fdbx.Key, uint64)
 
-	Erase(fdbx.Key, fdbx.Key) error
+	Lock(fdbx.Key, fdbx.Key)
+	Erase(fdbx.Key, fdbx.Key)
+	Watch(fdbx.Key) Waiter
+}
+
+// Waiter - объект ожидания изменения ключа
+type Waiter interface {
+	Resolve(context.Context) error
 }
 
 // Connection - объект подключения к БД, а также фабрика элементов
@@ -55,6 +64,7 @@ func ConnectV610(databaseID byte, opts ...Option) (Connection, error) {
 
 // Ошибки модуля
 var (
+	ErrWait    = errx.New("Ошибка ожидания значения")
 	ErrRead    = errx.New("Ошибка транзакции чтения")
 	ErrWrite   = errx.New("Ошибка транзакции записи")
 	ErrClear   = errx.New("Ошибка транзакции очистки")

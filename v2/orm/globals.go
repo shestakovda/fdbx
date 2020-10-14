@@ -30,9 +30,11 @@ func sysKeyWrapper(key fdbx.Key) (fdbx.Key, error) {
 
 // usrKeyWrapper - преобразователь пользовательского ключа в системный, для вставки
 func usrKeyWrapper(clid uint16) fdbx.KeyWrapper {
-	return func(key fdbx.Key) (fdbx.Key, error) {
-		return key.LPart(byte(clid>>8), byte(clid), nsData), nil
-	}
+	return func(key fdbx.Key) (fdbx.Key, error) { return usrKey(clid, key), nil }
+}
+
+func usrKey(clid uint16, key fdbx.Key) fdbx.Key {
+	return key.LPart(byte(clid>>8), byte(clid), nsData)
 }
 
 // idxKeyWrapper - преобразователь пользовательского ключа в ключ индекса
@@ -45,7 +47,6 @@ func idxKeyWrapper(clid uint16, idxid byte) fdbx.KeyWrapper {
 // usrValWrapper - преобразователь пользовательского значения в системное, для вставки
 func usrValWrapper(tx mvcc.Tx, clid uint16) fdbx.ValueWrapper {
 	return func(v fdbx.Value) (_ fdbx.Value, err error) {
-		// TODO: преобразователи gzip/blob
 		mod := models.ValueT{
 			Blob: false,
 			GZip: false,
@@ -137,7 +138,6 @@ func sysValWrapper(tx mvcc.Tx, clid uint16) fdbx.ValueWrapper {
 			zipPool.Put(buf)
 		}
 
-		// TODO: преобразователи gzip/blob
 		mod.Size = uint32(len(mod.Data))
 		return mod.Data, nil
 	}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	fbs "github.com/google/flatbuffers/go"
+	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/models"
@@ -43,13 +44,8 @@ func newTx64(conn db.Connection) (t *tx64, err error) {
 
 	if err = conn.Write(func(w db.Writer) (exp error) {
 		var val fdbx.Value
-		var pair fdbx.Pair
 
-		if pair, exp = w.Data(key); exp != nil {
-			return
-		}
-
-		if val, exp = pair.Value(); exp != nil {
+		if val, exp = w.Data(key).Value(); exp != nil {
 			return
 		}
 
@@ -71,6 +67,8 @@ type tx64 struct {
 	start  uint64
 	status byte
 }
+
+func (t tx64) Conn() db.Connection { return t.conn }
 
 func (t *tx64) Commit() (err error) {
 	if err = t.close(txStatusCommitted); err != nil {
@@ -111,9 +109,7 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 			if cp[i], exp = usrWrapper(keys[i]); exp != nil {
 				return
 			}
-			if lg[i], exp = w.List(cp[i], cp[i], 0, true); exp != nil {
-				return
-			}
+			lg[i] = w.List(cp[i], cp[i], 0, true)
 		}
 
 		var row fdbx.Pair
@@ -164,9 +160,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 				return
 			}
 
-			if lg[i], exp = w.List(ukey, ukey, 0, true); exp != nil {
-				return
-			}
+			lg[i] = w.List(ukey, ukey, 0, true)
 		}
 
 		for i := range cp {
@@ -212,23 +206,19 @@ func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
 
 	if err = t.conn.Read(func(r db.Reader) (exp error) {
 		var row fdbx.Pair
-		var lgt db.ListGetter
 
-		if lgt, exp = r.List(ukey, ukey, 0, true); exp != nil {
-			return
-		}
-
-		if row, exp = t.fetchRow(r, nil, opid, lgt); exp != nil {
+		if row, exp = t.fetchRow(r, nil, opid, r.List(ukey, ukey, 0, true)); exp != nil {
 			return
 		}
 
 		if row != nil {
 			res = row.WrapValue(valWrapper)
-		} else {
-			res = fdbx.NewPair(key, nil)
+			return nil
 		}
 
-		return nil
+		return ErrNotFound.WithDebug(errx.Debug{
+			"key": key.String(),
+		})
 	}); err != nil {
 		return nil, ErrSelect.WithReason(err)
 	}
@@ -236,9 +226,10 @@ func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
 	return res, nil
 }
 
-func (t *tx64) SeqScan(from, to fdbx.Key) (res []fdbx.Pair, err error) {
+func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (res []fdbx.Pair, err error) {
 	size := 0
 	next := true
+	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
 	list := make([][]fdbx.Pair, 0, 64)
 
@@ -250,47 +241,60 @@ func (t *tx64) SeqScan(from, to fdbx.Key) (res []fdbx.Pair, err error) {
 		return
 	}
 
+	fnc := func(r db.Reader) (exp error) {
+		var key fdbx.Key
+		var rows []fdbx.Pair
+
+		if rows, exp = t.fetchAll(r, nil, opid, r.List(from, to, ScanRangeSize, false)); exp != nil {
+			return
+		}
+
+		if opts.lock {
+			if w, ok := r.(db.Writer); ok {
+				w.Lock(from, to)
+			}
+		}
+
+		switch len(rows) {
+		case 0:
+			next = false
+		case 1:
+			list = append(list, []fdbx.Pair{rows[0].WrapValue(valWrapper)})
+			next = false
+			size++
+		default:
+			cnt := len(rows) - 1
+
+			if opts.limit > 0 && (size+cnt) > opts.limit {
+				cnt = opts.limit - size
+				next = false
+			}
+
+			if key, exp = rows[cnt].Key(); exp != nil {
+				return
+			}
+
+			if from, exp = usrWrapper(key); exp != nil {
+				return
+			}
+
+			for i := 0; i < cnt; i++ {
+				rows[i] = rows[i].WrapValue(valWrapper)
+			}
+
+			list = append(list, rows[:cnt])
+			size += cnt
+		}
+		return nil
+	}
+
 	for next {
-		if err = t.conn.Read(func(r db.Reader) (exp error) {
-			var key fdbx.Key
-			var lgt db.ListGetter
-			var rows []fdbx.Pair
-
-			if lgt, exp = r.List(from, to, ScanRangeSize, false); exp != nil {
-				return
-			}
-
-			if rows, exp = t.fetchAll(r, nil, opid, lgt); exp != nil {
-				return
-			}
-
-			switch len(rows) {
-			case 0:
-				next = false
-			case 1:
-				list = append(list, []fdbx.Pair{rows[0].WrapValue(valWrapper)})
-				next = false
-				size++
-			default:
-				cnt := len(rows) - 1
-
-				if key, exp = rows[cnt].Key(); exp != nil {
-					return
-				}
-
-				if from, exp = usrWrapper(key); exp != nil {
-					return
-				}
-
-				for i := 0; i < cnt; i++ {
-					rows[i] = rows[i].WrapValue(valWrapper)
-				}
-
-				list = append(list, rows[:cnt])
-				size += cnt
-			}
-			return nil
-		}); err != nil {
+		if opts.lock {
+			err = t.conn.Write(func(w db.Writer) error { return fnc(w) })
+		} else {
+			err = t.conn.Read(fnc)
+		}
+		if err != nil {
 			return nil, ErrSeqScan.WithReason(err)
 		}
 	}
@@ -366,13 +370,7 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size uint32) (_ fdbx.Value, err error) {
 
 	for {
 		if err = t.conn.Read(func(r db.Reader) (exp error) {
-			var lsg db.ListGetter
-
-			if lsg, exp = r.List(key, end, 10, false); exp != nil {
-				return
-			}
-
-			rows = lsg()
+			rows = r.List(key, end, 10, false)()
 			return nil
 		}); err != nil {
 			return nil, ErrBLOBLoad.WithReason(err)
@@ -427,13 +425,8 @@ func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) (_ bool, err e
 
 	// Придется слазать в БД за статусом и положить в кеш
 	var val fdbx.Value
-	var pair fdbx.Pair
 
-	if pair, err = r.Data(txKey(x)); err != nil {
-		return
-	}
-
-	if val, err = pair.Value(); err != nil {
+	if val, err = r.Data(txKey(x)).Value(); err != nil {
 		return
 	}
 
