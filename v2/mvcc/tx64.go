@@ -31,6 +31,7 @@ func newTx64(conn db.Connection) (t *tx64, err error) {
 		conn:   conn,
 		start:  uint64(time.Now().UTC().UnixNano()),
 		status: txStatusRunning,
+		oncomm: hdlPool.Get().([]CommitHandler),
 	}
 
 	key := fdbx.Key(typex.NewUUID()).LPart(nsTxTmp)
@@ -66,12 +67,40 @@ type tx64 struct {
 	txid   uint64
 	start  uint64
 	status byte
+	oncomm []CommitHandler
 }
 
 func (t tx64) Conn() db.Connection { return t.conn }
 
-func (t *tx64) Commit() (err error) {
-	if err = t.close(txStatusCommitted); err != nil {
+func (t *tx64) OnCommit(hdl CommitHandler) {
+	t.oncomm = append(t.oncomm, hdl)
+}
+
+func (t *tx64) Commit(args ...Option) (err error) {
+	opts := getOpts(args)
+
+	if len(t.oncomm) > 0 {
+		hdlr := func(w db.Writer) (exp error) {
+			for i := range t.oncomm {
+				if exp = t.oncomm[i](w); exp != nil {
+					return
+				}
+			}
+			return nil
+		}
+
+		if opts.writer == nil {
+			err = t.conn.Write(hdlr)
+		} else {
+			err = hdlr(opts.writer)
+		}
+
+		if err != nil {
+			return ErrClose.WithReason(err)
+		}
+	}
+
+	if err = t.close(txStatusCommitted, opts.writer); err != nil {
 		return
 	}
 
@@ -79,8 +108,10 @@ func (t *tx64) Commit() (err error) {
 	return nil
 }
 
-func (t *tx64) Cancel() (err error) {
-	if err = t.close(txStatusAborted); err != nil {
+func (t *tx64) Cancel(args ...Option) (err error) {
+	opts := getOpts(args)
+
+	if err = t.close(txStatusAborted, opts.writer); err != nil {
 		return
 	}
 
@@ -99,8 +130,7 @@ func (t *tx64) Cancel() (err error) {
 func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
-
-	if err = t.conn.Write(func(w db.Writer) (exp error) {
+	hdlr := func(w db.Writer) (exp error) {
 		lc := makeCache()
 		cp := make([]fdbx.Key, len(keys))
 		lg := make([]db.ListGetter, len(keys))
@@ -125,7 +155,15 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 		}
 
 		return nil
-	}); err != nil {
+	}
+
+	if opts.writer != nil {
+		err = hdlr(opts.writer)
+	} else {
+		err = t.conn.Write(hdlr)
+	}
+
+	if err != nil {
 		return ErrDelete.WithReason(err)
 	}
 
@@ -144,8 +182,7 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
-
-	if err = t.conn.Write(func(w db.Writer) (exp error) {
+	hdlr := func(w db.Writer) (exp error) {
 		var ukey fdbx.Key
 		var row fdbx.Pair
 
@@ -186,7 +223,15 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 		}
 
 		return nil
-	}); err != nil {
+	}
+
+	if opts.writer != nil {
+		err = hdlr(opts.writer)
+	} else {
+		err = t.conn.Write(hdlr)
+	}
+
+	if err != nil {
 		return ErrUpsert.WithReason(err)
 	}
 
@@ -226,22 +271,16 @@ func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
 	return res, nil
 }
 
-func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (res []fdbx.Pair, err error) {
+func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (_ []fdbx.Pair, err error) {
 	size := 0
 	next := true
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
-	list := make([][]fdbx.Pair, 0, 64)
-
-	if from, err = usrWrapper(from); err != nil {
-		return
-	}
-
-	if to, err = usrWrapper(to); err != nil {
-		return
-	}
-
-	fnc := func(r db.Reader) (exp error) {
+	list := make([]fdbx.Pair, 0, 64)
+	part := make([]fdbx.Pair, 0, 64)
+	hdlr := func(r db.Reader) (exp error) {
+		var ok bool
+		var w db.Writer
 		var key fdbx.Key
 		var rows []fdbx.Pair
 
@@ -250,7 +289,7 @@ func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (res []fdbx.Pair, err 
 		}
 
 		if opts.lock {
-			if w, ok := r.(db.Writer); ok {
+			if w, ok = r.(db.Writer); ok {
 				w.Lock(from, to)
 			}
 		}
@@ -259,7 +298,7 @@ func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (res []fdbx.Pair, err 
 		case 0:
 			next = false
 		case 1:
-			list = append(list, []fdbx.Pair{rows[0].WrapValue(valWrapper)})
+			part = []fdbx.Pair{rows[0]}
 			next = false
 			size++
 		default:
@@ -278,34 +317,50 @@ func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (res []fdbx.Pair, err 
 				return
 			}
 
-			for i := 0; i < cnt; i++ {
-				rows[i] = rows[i].WrapValue(valWrapper)
-			}
-
-			list = append(list, rows[:cnt])
+			part = rows[:cnt]
 			size += cnt
 		}
+
+		for i := range part {
+			part[i] = part[i].WrapValue(valWrapper)
+
+			if opts.onLock != nil {
+				if exp = opts.onLock(t, part[i], w); exp != nil {
+					return
+				}
+			}
+		}
+
 		return nil
+	}
+
+	if from, err = usrWrapper(from); err != nil {
+		return
+	}
+
+	if to, err = usrWrapper(to); err != nil {
+		return
 	}
 
 	for next {
 		if opts.lock {
-			err = t.conn.Write(func(w db.Writer) error { return fnc(w) })
+			if opts.writer == nil {
+				err = t.conn.Write(func(w db.Writer) error { return hdlr(w) })
+			} else {
+				err = hdlr(opts.writer)
+			}
 		} else {
-			err = t.conn.Read(fnc)
+			err = t.conn.Read(hdlr)
 		}
+
 		if err != nil {
 			return nil, ErrSeqScan.WithReason(err)
 		}
+
+		list = append(list, part...)
 	}
 
-	res = make([]fdbx.Pair, 0, size)
-
-	for i := range list {
-		res = append(res, list[i]...)
-	}
-
-	return res, nil
+	return list, nil
 }
 
 func (t *tx64) SaveBLOB(key fdbx.Key, blob fdbx.Value) (err error) {
@@ -481,19 +536,24 @@ func (t *tx64) packWrapper(opid uint32) fdbx.ValueWrapper {
 	}
 }
 
-func (t *tx64) close(status byte) (err error) {
+func (t *tx64) close(status byte, w db.Writer) (err error) {
 	if t.status == txStatusCommitted || t.status == txStatusAborted {
 		return nil
 	}
+	defer hdlPool.Put(t.oncomm[:0])
 
 	t.status = status
 	dump := t.pack()
 	txid := txKey(t.txid)
+	hdlr := func(w db.Writer) (exp error) { return w.Upsert(fdbx.NewPair(txid, dump)) }
 
-	if err = t.conn.Write(func(w db.Writer) (exp error) {
-		w.Upsert(fdbx.NewPair(txid, dump))
-		return nil
-	}); err != nil {
+	if w == nil {
+		err = t.conn.Write(hdlr)
+	} else {
+		err = hdlr(w)
+	}
+
+	if err != nil {
 		return ErrClose.WithReason(err)
 	}
 

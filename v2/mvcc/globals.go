@@ -16,6 +16,7 @@ var txLimit = 10000000
 var globCache = makeCache()
 
 var fbsPool = sync.Pool{New: func() interface{} { return fbs.NewBuilder(128) }}
+var hdlPool = sync.Pool{New: func() interface{} { return make([]CommitHandler, 0, 16) }}
 
 const (
 	nsUser  byte = 0

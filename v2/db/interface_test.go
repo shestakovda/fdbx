@@ -36,9 +36,9 @@ func (s *InterfaceSuite) TestConnection() {
 
 	var buf [8]byte
 	var val fdbx.Value
-	const num uint64 = 123
-	const add uint64 = 321
-	binary.LittleEndian.PutUint64(buf[:], num)
+	const num int64 = 123
+	const add int64 = -100
+	binary.LittleEndian.PutUint64(buf[:], uint64(num))
 
 	key1 := fdbx.Key("key1")
 	key2 := fdbx.Key("key2")
@@ -58,7 +58,7 @@ func (s *InterfaceSuite) TestConnection() {
 		}
 
 		if val, err = r.Data(key2).Value(); s.NoError(err) {
-			s.Equal(num, binary.LittleEndian.Uint64(val))
+			s.Equal(num, int64(binary.LittleEndian.Uint64(val)))
 		}
 
 		if val, err = r.Data(key3).Value(); s.NoError(err) {
@@ -82,7 +82,7 @@ func (s *InterfaceSuite) TestConnection() {
 		}
 
 		if val, err = r.Data(key2).Value(); s.NoError(err) {
-			s.Equal(num+add, binary.LittleEndian.Uint64(val))
+			s.Equal(num+add, int64(binary.LittleEndian.Uint64(val)))
 		}
 
 		if val, err = r.Data(key3).Value(); s.NoError(err) {

@@ -1,11 +1,20 @@
 package orm
 
 import (
+	"context"
 	"time"
 
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
+	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/mvcc"
+)
+
+// Task status
+const (
+	StatusPublished   byte = 1
+	StatusUnconfirmed byte = 2
+	StatusConfirmed   byte = 3
 )
 
 // Collection - универсальный интерфейс коллекции, чтобы работать с запросами
@@ -21,7 +30,15 @@ type Collection interface {
 type TaskCollection interface {
 	ID() byte
 
+	Ack(mvcc.Tx, ...fdbx.Key) (err error)
 	Pub(mvcc.Tx, time.Time, ...fdbx.Key) error
+
+	Sub(context.Context, db.Connection, int) (<-chan fdbx.Pair, <-chan error)
+	SubList(context.Context, db.Connection, int) ([]fdbx.Pair, error)
+
+	Stat(mvcc.Tx) (int64, int64, error)
+	Lost(mvcc.Tx, int) ([]fdbx.Pair, error)
+	Status(mvcc.Tx, ...fdbx.Key) (map[string]byte, error)
 }
 
 // AggFunc - описание функции-агрегатора для запросов
@@ -59,6 +76,10 @@ type Option func(*options)
 var (
 	ErrSub       = errx.New("Ошибка получения задач из очереди")
 	ErrPub       = errx.New("Ошибка публикации задачи в очередь")
+	ErrAck       = errx.New("Ошибка подтверждения задач в очереди")
+	ErrLost      = errx.New("Ошибка получения неподтвержденных задач")
+	ErrStat      = errx.New("Ошибка получения статистики задач")
+	ErrStatus    = errx.New("Ошибка получения статуса задач")
 	ErrAgg       = errx.New("Ошибка агрегации объектов коллекции")
 	ErrSelect    = errx.New("Ошибка загрузки объектов коллекции")
 	ErrDelete    = errx.New("Ошибка удаления объектов коллекции")

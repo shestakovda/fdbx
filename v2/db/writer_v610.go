@@ -37,9 +37,9 @@ func (w v610Writer) Versioned(key fdbx.Key) {
 	w.tx.SetVersionstampedValue(w.usrWrap(key).Bytes(), data[:])
 }
 
-func (w v610Writer) Increment(key fdbx.Key, delta uint64) {
+func (w v610Writer) Increment(key fdbx.Key, delta int64) {
 	var data [8]byte
-	binary.LittleEndian.PutUint64(data[:], delta)
+	binary.LittleEndian.PutUint64(data[:], uint64(delta))
 	w.tx.Add(w.usrWrap(key).Bytes(), data[:])
 }
 

@@ -23,6 +23,8 @@ test-mvcc: fmt
 test-orm: fmt
 	@go test -timeout 10s -coverprofile=./bin/orm.cover ./orm
 
+bench: bench-fdbx bench-mvcc bench-orm
+
 bench-fdbx:
 	@go test -bench . -benchtime=3s -benchmem -memprofile=./bin/fdbx.mem .
 

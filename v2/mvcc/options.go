@@ -1,5 +1,7 @@
 package mvcc
 
+import "github.com/shestakovda/fdbx/v2/db"
+
 func getOpts(args []Option) (o options) {
 	for i := range args {
 		args[i](&o)
@@ -12,9 +14,12 @@ type options struct {
 	limit    int
 	onDelete Handler
 	onInsert Handler
+	onLock   RowHandler
+	writer   db.Writer
 }
 
-func Exclusive() Option           { return func(o *options) { o.lock = true } }
-func Limit(l int) Option          { return func(o *options) { o.limit = l } }
-func OnDelete(hdl Handler) Option { return func(o *options) { o.onDelete = hdl } }
-func OnInsert(hdl Handler) Option { return func(o *options) { o.onInsert = hdl } }
+func Limit(l int) Option              { return func(o *options) { o.limit = l } }
+func Writer(w db.Writer) Option       { return func(o *options) { o.writer = w } }
+func OnDelete(hdl Handler) Option     { return func(o *options) { o.onDelete = hdl } }
+func OnInsert(hdl Handler) Option     { return func(o *options) { o.onInsert = hdl } }
+func Exclusive(hdl RowHandler) Option { return func(o *options) { o.lock = true; o.onLock = hdl } }

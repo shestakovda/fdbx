@@ -24,7 +24,7 @@ type Writer interface {
 	Delete(fdbx.Key)
 
 	Versioned(fdbx.Key)
-	Increment(fdbx.Key, uint64)
+	Increment(fdbx.Key, int64)
 
 	Lock(fdbx.Key, fdbx.Key)
 	Erase(fdbx.Key, fdbx.Key)

@@ -14,14 +14,28 @@ import (
 	"github.com/shestakovda/typex"
 )
 
-const nsData byte = 0
-const nsBLOB byte = 0xFF
+const (
+	nsData byte = 0
+	nsBLOB byte = 0xFF
+)
+
+const (
+	qFlag byte = 0
+	qList byte = 1
+	qWork byte = 2
+	qStat byte = 3
+	iStat byte = 4
+)
 
 var gzLimit uint32 = 840
 var loLimit uint32 = 100000
 
 var zipPool = sync.Pool{New: func() interface{} { return new(bytes.Buffer) }}
 var fbsPool = sync.Pool{New: func() interface{} { return fbs.NewBuilder(128) }}
+
+var qTriggerKey = fdbx.Key("trigger").LPart(qFlag)
+var qTotalWaitKey = fdbx.Key("wait").LPart(qStat)
+var qTotalWorkKey = fdbx.Key("work").LPart(qStat)
 
 // sysKeyWrapper - преобразователь системного ключа в пользовательский, для выборки
 func sysKeyWrapper(key fdbx.Key) (fdbx.Key, error) {

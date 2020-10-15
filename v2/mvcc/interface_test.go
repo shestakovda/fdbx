@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/mvcc"
@@ -127,13 +128,15 @@ func (s *MVCCSuite) TestUpsertIsolationDiffKeys() {
 	}
 
 	// check no key1 inside tx2
-	if sel, err = tx2.Select(key1); s.NoError(err) {
-		s.Nil(sel.Value())
+	if _, err = tx2.Select(key1); s.Error(err) {
+		s.True(errx.Is(err, mvcc.ErrSelect))
+		s.True(errx.Is(err, mvcc.ErrNotFound))
 	}
 
 	// check no key2 inside tx1
-	if sel, err = tx1.Select(key2); s.NoError(err) {
-		s.Nil(sel.Value())
+	if _, err = tx1.Select(key2); s.Error(err) {
+		s.True(errx.Is(err, mvcc.ErrSelect))
+		s.True(errx.Is(err, mvcc.ErrNotFound))
 	}
 
 	// commit tx2
@@ -167,8 +170,9 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 	}
 
 	// check there are no key2
-	if sel, err = s.tx.Select(key2); s.NoError(err) {
-		s.Nil(sel.Value())
+	if _, err = s.tx.Select(key2); s.Error(err) {
+		s.True(errx.Is(err, mvcc.ErrSelect))
+		s.True(errx.Is(err, mvcc.ErrNotFound))
 	}
 
 	// insert and check val2
@@ -182,8 +186,9 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 
 	// delete and check there are no val1
 	if err = s.tx.Delete([]fdbx.Key{key1}); s.NoError(err) {
-		if sel, err = s.tx.Select(key1); s.NoError(err) {
-			s.Nil(sel.Value())
+		if _, err = s.tx.Select(key1); s.Error(err) {
+			s.True(errx.Is(err, mvcc.ErrSelect))
+			s.True(errx.Is(err, mvcc.ErrNotFound))
 		}
 	}
 }
@@ -279,10 +284,8 @@ func BenchmarkSequenceWorkflowFourTx(b *testing.B) {
 		tx, err = mvcc.Begin(cn)
 		require.NoError(b, err)
 		sl, err = tx.Select(key)
-		require.NoError(b, err)
-		vv, err = sl.Value()
-		require.NoError(b, err)
-		require.Nil(b, vv)
+		require.Error(b, err)
+		require.True(b, errx.Is(err, mvcc.ErrNotFound))
 		require.NoError(b, tx.Cancel())
 	}
 }
@@ -317,10 +320,8 @@ func BenchmarkSequenceWorkflowSameTx(b *testing.B) {
 
 		// SELECT EMPTY
 		sl, err = tx.Select(key)
-		require.NoError(b, err)
-		vv, err = sl.Value()
-		require.NoError(b, err)
-		require.Nil(b, vv)
+		require.Error(b, err)
+		require.True(b, errx.Is(err, mvcc.ErrNotFound))
 		require.NoError(b, tx.Commit())
 	}
 }

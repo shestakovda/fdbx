@@ -16,8 +16,8 @@ var ScanRangeSize uint64 = 10000
 type Tx interface {
 	Conn() db.Connection
 
-	Commit() error
-	Cancel() error
+	Commit(args ...Option) error
+	Cancel(args ...Option) error
 
 	Select(fdbx.Key) (fdbx.Pair, error)
 	Delete([]fdbx.Key, ...Option) error
@@ -28,13 +28,17 @@ type Tx interface {
 	DropBLOB(fdbx.Key) error
 	SaveBLOB(fdbx.Key, fdbx.Value) error
 	LoadBLOB(fdbx.Key, uint32) (fdbx.Value, error)
+
+	OnCommit(CommitHandler)
 }
 
 // Option - дополнительный аргумент при выполнении команды
 type Option func(*options)
 
-// DeleteHandler - обработчик события удаления записи
+// Handler - обработчик события удаления записи
 type Handler func(Tx, fdbx.Pair) error
+type RowHandler func(Tx, fdbx.Pair, db.Writer) error
+type CommitHandler func(db.Writer) error
 
 // Begin - создание и старт новой транзакции
 func Begin(conn db.Connection) (Tx, error) { return newTx64(conn) }
