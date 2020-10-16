@@ -74,13 +74,13 @@ func (q v1Queue) Pub(tx mvcc.Tx, when time.Time, ids ...fdbx.Key) (err error) {
 			// Случайная айдишка таски, чтобы не было конфликтов при одинаковом времени
 			q.usrKey(ids[i].LPart(delay...).LPart(qList)),
 			// Айдишку элемента очереди записываем в значение, именно она и является таской
-			fdbx.Value(ids[i]),
+			[]byte(ids[i]),
 		)
 
 		// Служебная запись в индекс состояний
 		pairs[2*i+1] = fdbx.NewPair(
 			q.usrKey(ids[i].LPart(iStat)),
-			fdbx.Value{StatusPublished},
+			[]byte{StatusPublished},
 		)
 	}
 
@@ -122,7 +122,6 @@ func (q v1Queue) Sub(ctx context.Context, cn db.Connection, pack int) (<-chan fd
 			var list []fdbx.Pair
 
 			if list, err = q.SubList(ctx, cn, pack); err != nil {
-				errc <- err
 				return
 			}
 
@@ -157,8 +156,8 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 		return nil, nil
 	}
 
-	var waiter db.Waiter
 	var pairs []fdbx.Pair
+	var waiter fdbx.Waiter
 
 	from := q.usrKey(fdbx.Key{qList})
 	hdlr := func() (exp error) {
@@ -235,7 +234,7 @@ func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []fdbx.Pair, err error) {
 		return nil, nil
 	}
 
-	var id fdbx.Value
+	var id []byte
 	var pairs []fdbx.Pair
 
 	key := q.usrKey(fdbx.Key{qWork})
@@ -266,7 +265,7 @@ func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []fdbx.Pair, err error) {
 }
 
 func (q v1Queue) Status(tx mvcc.Tx, ids ...fdbx.Key) (res map[string]byte, err error) {
-	var val fdbx.Value
+	var val []byte
 	var pair fdbx.Pair
 
 	res = make(map[string]byte, len(ids))
@@ -291,7 +290,7 @@ func (q v1Queue) Status(tx mvcc.Tx, ids ...fdbx.Key) (res map[string]byte, err e
 
 func (q v1Queue) Stat(tx mvcc.Tx) (wait, work int64, err error) {
 	if err = tx.Conn().Read(func(r db.Reader) (exp error) {
-		var val fdbx.Value
+		var val []byte
 
 		if val, exp = r.Data(q.usrKey(qTotalWaitKey)).Value(); exp != nil {
 			return
@@ -311,7 +310,7 @@ func (q v1Queue) Stat(tx mvcc.Tx) (wait, work int64, err error) {
 	return wait, work, nil
 }
 
-func (q v1Queue) waitTask(ctx context.Context, waiter db.Waiter) (err error) {
+func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter) (err error) {
 	if waiter == nil {
 		return nil
 	}
@@ -322,7 +321,7 @@ func (q v1Queue) waitTask(ctx context.Context, waiter db.Waiter) (err error) {
 
 	// Даже если waiter установлен, то при отсутствии других публикаций мы тут зависнем навечно.
 	// А задачи, время которых настало, будут просрочены. Для этого нужен особый механизм обработки по таймауту.
-	wctx, cancel := context.WithTimeout(ctx, time.Second)
+	wctx, cancel := context.WithTimeout(ctx, q.options.punch)
 	defer cancel()
 
 	if err = waiter.Resolve(wctx); err != nil {
@@ -367,7 +366,7 @@ func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (exp error) {
 		// Вставка в коллекцию задач "в работе"
 		p.WrapKey(q.wrkKeyWrapper),
 		// Вставка в индекс статусов задач
-		fdbx.NewPair(q.usrKey(key.LSkip(12).RPart(iStat)), fdbx.Value{StatusUnconfirmed}),
+		fdbx.NewPair(q.usrKey(key.LSkip(12).RPart(iStat)), []byte{StatusUnconfirmed}),
 	}
 
 	if exp = tx.Upsert(pairs, mvcc.Writer(w)); exp != nil {

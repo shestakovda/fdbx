@@ -9,39 +9,62 @@ import (
 // TxCacheSize - размер глобального кеша статусов завершенных транзакций
 var TxCacheSize = 8000000
 
-// ScanRangeSize - кол-во строк в одной "физической" транзакции выборки
-var ScanRangeSize uint64 = 10000
+// Begin - создание и старт новой транзакции
+func Begin(conn db.Connection) (Tx, error) { return newTx64(conn) }
 
 // Tx - объект "логической" транзакции MVCC поверх "физической" транзакции FDB
 type Tx interface {
+	// Ссылка на подключение к БД, на всякий случай
 	Conn() db.Connection
 
+	// Успешное завершение (принятие) транзакции
+	// Перед завершением выполняет хуки OnCommit
+	// Поддерживает опции Writer
 	Commit(args ...Option) error
+
+	// Неудачное завершение (отклонение) транзакции
+	// Поддерживает опции Writer
 	Cancel(args ...Option) error
 
+	// Выборка актуального значения для ключа
 	Select(fdbx.Key) (fdbx.Pair, error)
+
+	// Удаление значения для ключа
+	// Поддерживает опции Writer
 	Delete([]fdbx.Key, ...Option) error
+
+	// Вставка или обновление значения для ключа
+	// Поддерживает опции Writer
 	Upsert([]fdbx.Pair, ...Option) error
 
+	// Последовательная выборка всех активных ключей в диапазоне
+	// Поддерживает опции Writer, Limit, PackSize, Exclusive
 	SeqScan(from, to fdbx.Key, args ...Option) ([]fdbx.Pair, error)
 
+	// Удаление бинарных данных по ключу
 	DropBLOB(fdbx.Key) error
-	SaveBLOB(fdbx.Key, fdbx.Value) error
-	LoadBLOB(fdbx.Key, uint32) (fdbx.Value, error)
 
+	// Сохранение бинарных данных по ключу
+	SaveBLOB(fdbx.Key, []byte) error
+
+	// Загрузка бинарных данных по ключу, указывается ожидаемый размер
+	LoadBLOB(fdbx.Key, int) ([]byte, error)
+
+	// Регистрация хука для выполнения при завершении транзакции
 	OnCommit(CommitHandler)
 }
 
 // Option - дополнительный аргумент при выполнении команды
 type Option func(*options)
 
-// Handler - обработчик события удаления записи
+// Handler - обработчик события операции с записью
 type Handler func(Tx, fdbx.Pair) error
-type RowHandler func(Tx, fdbx.Pair, db.Writer) error
-type CommitHandler func(db.Writer) error
 
-// Begin - создание и старт новой транзакции
-func Begin(conn db.Connection) (Tx, error) { return newTx64(conn) }
+// RowHandler - обработчик события операции с записью в рамках физической транзакции
+type RowHandler func(Tx, fdbx.Pair, db.Writer) error
+
+// CommitHandler - обработчик события завершения логической транзакции
+type CommitHandler func(db.Writer) error
 
 // Ошибки модуля
 var (

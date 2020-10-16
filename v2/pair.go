@@ -1,6 +1,6 @@
 package fdbx
 
-func NewPair(k Key, v Value) Pair {
+func NewPair(k Key, v []byte) Pair {
 	p := pair{
 		k:  k,
 		v:  v,
@@ -12,7 +12,7 @@ func NewPair(k Key, v Value) Pair {
 
 type pair struct {
 	k  Key
-	v  Value
+	v  []byte
 	kc []KeyWrapper
 	vc []ValueWrapper
 }
@@ -35,7 +35,7 @@ func (p pair) Key() (k Key, err error) {
 	return k, nil
 }
 
-func (p pair) Value() (v Value, err error) {
+func (p pair) Value() (v []byte, err error) {
 	var vcl int
 
 	if vcl = len(p.vc); vcl == 0 {

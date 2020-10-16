@@ -10,8 +10,8 @@ import (
 	fbs "github.com/google/flatbuffers/go"
 )
 
-var loLimit = 100000
-var txLimit = 10000000
+var loLimit = 90000
+var txLimit = 9000000
 
 var globCache = makeCache()
 
@@ -38,11 +38,13 @@ func txKey(x uint64) fdbx.Key {
 	return txid[:]
 }
 
-func sysWrapper(key fdbx.Key) (fdbx.Key, error) { return key.LSkip(1), nil }
+func sysWrapper(key fdbx.Key) (fdbx.Key, error) { return key.LSkip(1).RSkip(8), nil }
 
-func usrWrapper(key fdbx.Key) (fdbx.Key, error) { return key.LPart(nsUser), nil }
+func usrKey(key fdbx.Key) fdbx.Key { return key.LPart(nsUser) }
 
-func valWrapper(v fdbx.Value) (fdbx.Value, error) {
+func usrWrapper(key fdbx.Key) (fdbx.Key, error) { return usrKey(key), nil }
+
+func valWrapper(v []byte) ([]byte, error) {
 	if len(v) == 0 {
 		return nil, nil
 	}

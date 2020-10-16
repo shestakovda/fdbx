@@ -44,7 +44,7 @@ func newTx64(conn db.Connection) (t *tx64, err error) {
 	}
 
 	if err = conn.Write(func(w db.Writer) (exp error) {
-		var val fdbx.Value
+		var val []byte
 
 		if val, exp = w.Data(key).Value(); exp != nil {
 			return
@@ -133,12 +133,10 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 	hdlr := func(w db.Writer) (exp error) {
 		lc := makeCache()
 		cp := make([]fdbx.Key, len(keys))
-		lg := make([]db.ListGetter, len(keys))
+		lg := make([]fdbx.ListGetter, len(keys))
 
 		for i := range keys {
-			if cp[i], exp = usrWrapper(keys[i]); exp != nil {
-				return
-			}
+			cp[i] = usrKey(keys[i])
 			lg[i] = w.List(cp[i], cp[i], 0, true)
 		}
 
@@ -188,7 +186,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 
 		lc := makeCache()
 		cp := make([]fdbx.Pair, len(pairs))
-		lg := make([]db.ListGetter, len(pairs))
+		lg := make([]fdbx.ListGetter, len(pairs))
 
 		for i := range pairs {
 			cp[i] = pairs[i].WrapKey(usrWrapper)
@@ -217,7 +215,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 				continue
 			}
 
-			if exp = opts.onInsert(t, cp[i]); exp != nil {
+			if exp = opts.onInsert(t, cp[i].WrapKey(sysWrapper)); exp != nil {
 				return
 			}
 		}
@@ -242,12 +240,8 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 	Select - выборка актуального в данной транзакции значения ключа.
 */
 func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
-	var ukey fdbx.Key
+	ukey := usrKey(key)
 	opid := atomic.AddUint32(&t.opid, 1)
-
-	if ukey, err = usrWrapper(key); err != nil {
-		return
-	}
 
 	if err = t.conn.Read(func(r db.Reader) (exp error) {
 		var row fdbx.Pair
@@ -257,7 +251,7 @@ func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
 		}
 
 		if row != nil {
-			res = row.WrapValue(valWrapper)
+			res = row.WrapKey(sysWrapper).WrapValue(valWrapper)
 			return nil
 		}
 
@@ -273,7 +267,6 @@ func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
 
 func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (_ []fdbx.Pair, err error) {
 	size := 0
-	next := true
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
 	list := make([]fdbx.Pair, 0, 64)
@@ -284,7 +277,7 @@ func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (_ []fdbx.Pair, err er
 		var key fdbx.Key
 		var rows []fdbx.Pair
 
-		if rows, exp = t.fetchAll(r, nil, opid, r.List(from, to, ScanRangeSize, false)); exp != nil {
+		if rows, exp = t.fetchAll(r, nil, opid, r.List(from, to, uint64(opts.packSize), false)); exp != nil {
 			return
 		}
 
@@ -294,35 +287,21 @@ func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (_ []fdbx.Pair, err er
 			}
 		}
 
-		switch len(rows) {
-		case 0:
-			next = false
-		case 1:
-			part = []fdbx.Pair{rows[0]}
-			next = false
-			size++
-		default:
-			cnt := len(rows) - 1
-
-			if opts.limit > 0 && (size+cnt) > opts.limit {
-				cnt = opts.limit - size
-				next = false
-			}
-
-			if key, exp = rows[cnt].Key(); exp != nil {
-				return
-			}
-
-			if from, exp = usrWrapper(key); exp != nil {
-				return
-			}
-
-			part = rows[:cnt]
-			size += cnt
+		if len(rows) == 0 {
+			part = part[:0]
+			return nil
 		}
 
+		cnt := len(rows)
+
+		if opts.limit > 0 && (size+cnt) > opts.limit {
+			cnt = opts.limit - size
+		}
+
+		part = rows[:cnt]
+
 		for i := range part {
-			part[i] = part[i].WrapValue(valWrapper)
+			part[i] = part[i].WrapKey(sysWrapper).WrapValue(valWrapper)
 
 			if opts.onLock != nil {
 				if exp = opts.onLock(t, part[i], w); exp != nil {
@@ -331,18 +310,20 @@ func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (_ []fdbx.Pair, err er
 			}
 		}
 
+		size += len(part)
+
+		if key, exp = part[len(part)-1].Key(); exp != nil {
+			return
+		}
+
+		from = usrKey(key).RPart(0x01)
 		return nil
 	}
 
-	if from, err = usrWrapper(from); err != nil {
-		return
-	}
+	from = usrKey(from)
+	to = usrKey(to)
 
-	if to, err = usrWrapper(to); err != nil {
-		return
-	}
-
-	for next {
+	for {
 		if opts.lock {
 			if opts.writer == nil {
 				err = t.conn.Write(func(w db.Writer) error { return hdlr(w) })
@@ -357,13 +338,21 @@ func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (_ []fdbx.Pair, err er
 			return nil, ErrSeqScan.WithReason(err)
 		}
 
+		if len(part) == 0 {
+			break
+		}
+
 		list = append(list, part...)
+
+		if opts.limit > 0 && len(list) >= opts.limit {
+			break
+		}
 	}
 
 	return list, nil
 }
 
-func (t *tx64) SaveBLOB(key fdbx.Key, blob fdbx.Value) (err error) {
+func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte) (err error) {
 	sum := 0
 	tmp := blob
 	num := uint16(0)
@@ -394,7 +383,7 @@ func (t *tx64) SaveBLOB(key fdbx.Key, blob fdbx.Value) (err error) {
 			break
 		}
 
-		if sum > txLimit-loLimit {
+		if sum >= txLimit-loLimit {
 			if err = t.conn.Write(set); err != nil {
 				return ErrBLOBSave.WithReason(err)
 			}
@@ -412,20 +401,17 @@ func (t *tx64) SaveBLOB(key fdbx.Key, blob fdbx.Value) (err error) {
 	return nil
 }
 
-func (t *tx64) LoadBLOB(key fdbx.Key, size uint32) (_ fdbx.Value, err error) {
-	var val fdbx.Value
+func (t *tx64) LoadBLOB(key fdbx.Key, size int) (_ []byte, err error) {
+	var val []byte
 	var rows []fdbx.Pair
 
-	if key, err = usrWrapper(key); err != nil {
-		return
-	}
-
-	end := key.RPart(0xFF, 0xFF)
-	res := make(fdbx.Value, 0, size)
+	ukey := usrKey(key)
+	end := ukey.RPart(0xFF, 0xFF)
+	res := make([]byte, 0, size)
 
 	for {
 		if err = t.conn.Read(func(r db.Reader) (exp error) {
-			rows = r.List(key, end, 10, false)()
+			rows = r.List(ukey, end, 10, false)()
 			return nil
 		}); err != nil {
 			return nil, ErrBLOBLoad.WithReason(err)
@@ -443,20 +429,21 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size uint32) (_ fdbx.Value, err error) {
 			res = append(res, val...)
 		}
 
-		if key, err = rows[len(rows)-1].Key(); err != nil {
+		if ukey, err = rows[len(rows)-1].Key(); err != nil {
 			return nil, ErrBLOBLoad.WithReason(err)
 		}
-		key = key.RPart(0x01)
+		ukey = ukey.RPart(0x01)
 	}
 
 	return res, nil
 }
 
 func (t *tx64) DropBLOB(key fdbx.Key) (err error) {
-	end := key.RPart(0xFF, 0xFF)
+	ukey := usrKey(key)
+	end := ukey.RPart(0xFF, 0xFF)
 
 	if err = t.conn.Write(func(w db.Writer) error {
-		w.Erase(key, end)
+		w.Erase(ukey, end)
 		return nil
 	}); err != nil {
 		return ErrBLOBDrop.WithReason(err)
@@ -479,7 +466,7 @@ func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) (_ bool, err e
 	}
 
 	// Придется слазать в БД за статусом и положить в кеш
-	var val fdbx.Value
+	var val []byte
 
 	if val, err = r.Data(txKey(x)).Value(); err != nil {
 		return
@@ -518,7 +505,7 @@ func (t *tx64) pack() []byte {
 }
 
 func (t *tx64) packWrapper(opid uint32) fdbx.ValueWrapper {
-	return func(v fdbx.Value) (fdbx.Value, error) {
+	return func(v []byte) ([]byte, error) {
 		row := &models.RowT{
 			State: &models.RowStateT{
 				XMin: t.txid,
@@ -593,9 +580,9 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	сработает внутренний механизм конфликтов fdb, так что одновременно двух актуальных
 	версий не должно появиться. Один из обработчиков увидит изменения и изменит поведение.
 */
-func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter) (_ fdbx.Pair, err error) {
+func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGetter) (_ fdbx.Pair, err error) {
 	var comm bool
-	var val fdbx.Value
+	var val []byte
 	var buf models.RowState
 	var row models.RowStateT
 
@@ -634,7 +621,7 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 			}
 
 			// В этом случае объект создан в данной транзакции и еще не удален, можем прочитать
-			return list[i].WrapKey(sysWrapper), nil
+			return list[i], nil
 		}
 
 		if comm, err = t.isCommitted(lc, r, row.XMin); err != nil {
@@ -658,7 +645,7 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 			fallthrough
 		case 0:
 			// В этом случае объект создан в закоммиченной транзакции и еще не был удален
-			return list[i].WrapKey(sysWrapper), nil
+			return list[i], nil
 		default:
 			// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
 			if comm, err = t.isCommitted(lc, r, row.XMax); err != nil {
@@ -666,7 +653,7 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 			}
 
 			if !comm {
-				return list[i].WrapKey(sysWrapper), nil
+				return list[i], nil
 			}
 		}
 	}
@@ -675,9 +662,9 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 }
 
 // Аналогично fetchRow, но все актуальные версии всех ключей по диапазону
-func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter) (res []fdbx.Pair, err error) {
+func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGetter) (res []fdbx.Pair, err error) {
 	var comm bool
-	var val fdbx.Value
+	var val []byte
 	var buf models.RowState
 	var row models.RowStateT
 
@@ -716,7 +703,7 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 			}
 
 			// В этом случае объект создан в данной транзакции и еще не удален, можем прочитать
-			res = append(res, list[i].WrapKey(sysWrapper))
+			res = append(res, list[i])
 			continue
 		}
 
@@ -741,7 +728,7 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 			fallthrough
 		case 0:
 			// В этом случае объект создан в закоммиченной транзакции и еще не был удален
-			res = append(res, list[i].WrapKey(sysWrapper))
+			res = append(res, list[i])
 			continue
 		default:
 			// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
@@ -749,7 +736,7 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg db.ListGetter)
 				return
 			}
 			if !comm {
-				res = append(res, list[i].WrapKey(sysWrapper))
+				res = append(res, list[i])
 				continue
 			}
 		}
@@ -769,9 +756,9 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handle
 	}
 
 	var key fdbx.Key
-	var data fdbx.Value
+	var data []byte
 
-	w.Upsert(pair.WrapKey(usrWrapper).WrapValue(func(v fdbx.Value) (fdbx.Value, error) {
+	w.Upsert(pair.WrapValue(func(v []byte) ([]byte, error) {
 		if len(v) > 0 {
 			var state models.RowState
 
@@ -801,7 +788,7 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handle
 		return
 	}
 
-	if err = onDelete(t, fdbx.NewPair(key, data)); err != nil {
+	if err = onDelete(t, fdbx.NewPair(key, data).WrapKey(sysWrapper)); err != nil {
 		return ErrDelete.WithReason(err)
 	}
 

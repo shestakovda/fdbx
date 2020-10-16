@@ -3,10 +3,14 @@ package fdbx_test
 import (
 	"testing"
 
+	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
+
+const predict = "predict"
+const unpredictable = "unpredictable"
 
 // TestInterface - внешние тесты библиотеки
 func TestInterface(t *testing.T) {
@@ -18,8 +22,6 @@ type InterfaceSuite struct {
 }
 
 func (s *InterfaceSuite) TestKey() {
-	const predict = "predict"
-	const unpredictable = "unpredictable"
 
 	// read-only
 	s.Equal(predict, fdbx.Key(unpredictable).LSkip(2).RSkip(4).String())
@@ -79,10 +81,64 @@ func (s *InterfaceSuite) TestKey() {
 	s.Equal("word", string(word))
 }
 
-func BenchmarkKey(b *testing.B) {
-	const predict = "predict"
-	const unpredictable = "unpredictable"
+func (s *InterfaceSuite) TestPair() {
 
+	kw1 := func(k fdbx.Key) (fdbx.Key, error) {
+		return k.LSkip(2), nil
+	}
+
+	kw2 := func(k fdbx.Key) (fdbx.Key, error) {
+		return k.RSkip(4), nil
+	}
+
+	vw1 := func(v []byte) ([]byte, error) {
+		return append([]byte{'u', 'n'}, v...), nil
+	}
+
+	vw2 := func(v []byte) ([]byte, error) {
+		return append(v, 'a', 'b', 'l', 'e'), nil
+	}
+
+	pair := fdbx.NewPair(fdbx.Key(unpredictable), []byte(predict))
+
+	if key, err := pair.Key(); s.NoError(err) {
+		s.Equal(unpredictable, key.String())
+	}
+
+	if val, err := pair.Value(); s.NoError(err) {
+		s.Equal(predict, string(val))
+	}
+
+	pair = pair.WrapKey(kw1).WrapKey(kw2).WrapValue(vw1).WrapValue(vw2)
+
+	if key, err := pair.Key(); s.NoError(err) {
+		s.Equal(predict, key.String())
+	}
+
+	if val, err := pair.Value(); s.NoError(err) {
+		s.Equal(unpredictable, string(val))
+	}
+
+	ew1 := func(k fdbx.Key) (fdbx.Key, error) {
+		return k, errx.ErrForbidden
+	}
+
+	ew2 := func(v []byte) ([]byte, error) {
+		return v, errx.ErrNotFound
+	}
+
+	if key, err := pair.WrapKey(ew1).Key(); s.Error(err) {
+		s.True(errx.Is(err, errx.ErrForbidden))
+		s.Nil(key)
+	}
+
+	if val, err := pair.WrapValue(ew2).Value(); s.Error(err) {
+		s.True(errx.Is(err, errx.ErrNotFound))
+		s.Nil(val)
+	}
+}
+
+func BenchmarkKey(b *testing.B) {
 	b.Run("read-only", func(br *testing.B) {
 		buf := []byte(unpredictable)
 		for i := 0; i < br.N; i++ {

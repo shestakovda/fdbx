@@ -67,7 +67,7 @@ type Filter interface {
 }
 
 // IndexKey - для получения ключа при индексации коллекций
-type IndexKey func(fdbx.Value) fdbx.Key
+type IndexKey func([]byte) fdbx.Key
 
 // Option - доп.аргумент для инициализации коллекций
 type Option func(*options)

@@ -36,7 +36,7 @@ func (r v610Reader) Data(key fdbx.Key) fdbx.Pair {
 	return fdbx.NewPair(wrk, r.tx.Get(wrk.Bytes()).MustGet())
 }
 
-func (r v610Reader) List(from, to fdbx.Key, limit uint64, reverse bool) ListGetter {
+func (r v610Reader) List(from, to fdbx.Key, limit uint64, reverse bool) fdbx.ListGetter {
 	// В данном случае не передаем режим запроса, т.к. не оставляем это на выбор потребителя
 	// Если вызывать GetSlice*, то будет StreamingModeWantAll или StreamingModeExact, зависит от наличия Limit
 	// Если вызывать Iterator, то по-умолчанию будет последовательный режим StreamingModeIterator

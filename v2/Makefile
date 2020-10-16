@@ -35,7 +35,7 @@ bench-orm:
 	@go test -bench . -benchtime=3s -benchmem -memprofile=./bin/orm.mem ./orm
 
 cover: test
-	@go tool cover -html=./bin/fdbx.cover
-	@go tool cover -html=./bin/db.cover
+# 	@go tool cover -html=./bin/fdbx.cover
+# 	@go tool cover -html=./bin/db.cover
 	@go tool cover -html=./bin/mvcc.cover
 	@go tool cover -html=./bin/orm.cover

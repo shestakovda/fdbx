@@ -1,8 +1,11 @@
 package db_test
 
 import (
+	"context"
 	"encoding/binary"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
@@ -34,8 +37,11 @@ func (s *InterfaceSuite) TestConnection() {
 	s.Require().NoError(cn.Clear())
 	s.Equal(TestDB, cn.DB())
 
+	var val []byte
 	var buf [8]byte
-	var val fdbx.Value
+	var waiter fdbx.Waiter
+	var waiter2 fdbx.Waiter
+
 	const num int64 = 123
 	const add int64 = -100
 	binary.LittleEndian.PutUint64(buf[:], uint64(num))
@@ -45,16 +51,64 @@ func (s *InterfaceSuite) TestConnection() {
 	key3 := fdbx.Key("key3")
 
 	s.Require().NoError(cn.Write(func(w db.Writer) error {
-		w.Upsert(fdbx.NewPair(key1, fdbx.Value("val1")))
-		w.Upsert(fdbx.NewPair(key2, fdbx.Value(buf[:])))
+		w.Upsert(fdbx.NewPair(key1, []byte("val1")))
+		w.Upsert(fdbx.NewPair(key2, buf[:]))
 		w.Versioned(key3)
+		waiter = w.Watch(key2)
+		waiter2 = w.Watch(key3)
 		return nil
 	}))
+
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+
+		time.Sleep(time.Millisecond)
+
+		if err := waiter2.Resolve(ctx); s.Error(err) {
+			s.True(errx.Is(err, db.ErrWait))
+		}
+
+		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond)
+		defer cancel()
+
+		if err := waiter2.Resolve(ctx); s.Error(err) {
+			s.True(errx.Is(err, db.ErrWait))
+		}
+
+		ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		s.NoError(waiter.Resolve(ctx))
+
+		// Проверяем, что к этому моменту уже всё изменилось
+		s.Require().NoError(cn.Read(func(r db.Reader) error {
+
+			if val, err = r.Data(key1).Value(); s.NoError(err) {
+				s.Equal("val2", string(val))
+			}
+
+			if val, err = r.Data(key2).Value(); s.NoError(err) {
+				s.Equal(num+add, int64(binary.LittleEndian.Uint64(val)))
+			}
+
+			if val, err = r.Data(key3).Value(); s.NoError(err) {
+				s.Empty(val)
+			}
+
+			s.Len(r.List(nil, nil, 0, false)(), 2)
+			return nil
+		}))
+
+	}()
 
 	s.Require().NoError(cn.Read(func(r db.Reader) error {
 
 		if val, err = r.Data(key1).Value(); s.NoError(err) {
-			s.Equal("val1", val.String())
+			s.Equal("val1", string(val))
 		}
 
 		if val, err = r.Data(key2).Value(); s.NoError(err) {
@@ -69,27 +123,18 @@ func (s *InterfaceSuite) TestConnection() {
 	}))
 
 	s.Require().NoError(cn.Write(func(w db.Writer) error {
-		w.Upsert(fdbx.NewPair(key1, fdbx.Value("val2")))
+		w.Upsert(fdbx.NewPair(key1, []byte("val2")))
 		w.Increment(key2, add)
 		w.Delete(key3)
 		return nil
 	}))
 
-	s.Require().NoError(cn.Read(func(r db.Reader) error {
+	wg.Wait()
 
-		if val, err = r.Data(key1).Value(); s.NoError(err) {
-			s.Equal("val2", val.String())
-		}
-
-		if val, err = r.Data(key2).Value(); s.NoError(err) {
-			s.Equal(num+add, int64(binary.LittleEndian.Uint64(val)))
-		}
-
-		if val, err = r.Data(key3).Value(); s.NoError(err) {
-			s.Empty(val)
-		}
-
-		s.Len(r.List(nil, nil, 0, false)(), 2)
+	s.Require().NoError(cn.Write(func(w db.Writer) error {
+		w.Lock(key1, key3)
+		w.Erase(key1, key3)
+		s.Len(w.List(nil, nil, 0, false)(), 0)
 		return nil
 	}))
 }

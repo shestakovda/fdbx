@@ -1,39 +1,20 @@
 package db
 
 import (
-	"context"
-
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 )
 
-// ListGetter - метод для отложенного получения списка значений
-type ListGetter func() []fdbx.Pair
-
-// Reader - обработчик чтения значений из БД
-type Reader interface {
-	Data(fdbx.Key) fdbx.Pair
-	List(from, to fdbx.Key, limit uint64, reverse bool) ListGetter
-}
-
-// Reader - обработчик модификации значений в БД
-type Writer interface {
-	Reader
-
-	Upsert(fdbx.Pair) error
-	Delete(fdbx.Key)
-
-	Versioned(fdbx.Key)
-	Increment(fdbx.Key, int64)
-
-	Lock(fdbx.Key, fdbx.Key)
-	Erase(fdbx.Key, fdbx.Key)
-	Watch(fdbx.Key) Waiter
-}
-
-// Waiter - объект ожидания изменения ключа
-type Waiter interface {
-	Resolve(context.Context) error
+// ConnectV610 - создание нового подключения к серверу FDB и базе данных.
+//
+// Идентификатор базы всего 1 байт, потому что пока не рассчитываем на то, что разных БД будет так много.
+// Особое значение 0xFF (255) запрещено, т.к. с этого байта начинается служебная область видимости FDB.
+//
+// Если указан путь к файлу, то подключается к нему. Иначе идет по стандартному (зависит от ОС).
+//
+// Этот драйвер настроен на совместимость с конкретной версией клиента, с другими может не заработать.
+func ConnectV610(dbID byte, opts ...Option) (Connection, error) {
+	return newConnV610(dbID, opts...)
 }
 
 // Connection - объект подключения к БД, а также фабрика элементов
@@ -50,16 +31,40 @@ type Connection interface {
 	Write(func(Writer) error) error
 }
 
-// ConnectV610 - создание нового подключения к серверу FDB и базе данных.
-//
-// Идентификатор базы всего 1 байт, потому что пока не рассчитываем на то, что разных БД будет так много.
-// Особое значение 0xFF (255) запрещено, т.к. с этого байта начинается служебная область видимости FDB.
-//
-// Если указан путь к файлу, то подключается к нему. Иначе идет по стандартному (зависит от ОС).
-//
-// Этот драйвер настроен на совместимость с конкретной версией клиента, с другими может не заработать.
-func ConnectV610(databaseID byte, opts ...Option) (Connection, error) {
-	return newConnV610(databaseID, opts...)
+// Reader - обработчик чтения значений из БД (физическая транзакция)
+type Reader interface {
+	// Получение одного значения по конкретному ключу
+	Data(fdbx.Key) fdbx.Pair
+
+	// Получение списка значений в интервале [from, to)
+	// В случае реверса, интервал [to, from)
+	List(from, to fdbx.Key, limit uint64, reverse bool) fdbx.ListGetter
+}
+
+// Writer - обработчик модификации значений в БД (физическая транзакция)
+type Writer interface {
+	Reader
+
+	// Удаление конкретного значения. Не расстраивается, если его нет
+	Delete(fdbx.Key)
+
+	// Вставка или обновление значения по ключу
+	Upsert(fdbx.Pair) error
+
+	// Вставка или обновление кода версии транзакции в качестве значения для ключа
+	Versioned(fdbx.Key)
+
+	// Атомарный инкремент (или декремент) LittleEndian-значения по ключу
+	Increment(fdbx.Key, int64)
+
+	// Эксклюзивная блокировка интервала
+	Lock(fdbx.Key, fdbx.Key)
+
+	// Очистка всех данных интервала
+	Erase(fdbx.Key, fdbx.Key)
+
+	// Старт отслеживания изменения значения конкретного ключа
+	Watch(fdbx.Key) fdbx.Waiter
 }
 
 // Ошибки модуля

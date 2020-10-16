@@ -41,7 +41,7 @@ func (t v1Table) Upsert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
 		cp[i] = pairs[i].WrapKey(keyWrapper).WrapValue(valWrapper)
 	}
 
-	if err = tx.Upsert(cp, mvcc.OnDelete(t.onDelete)); err != nil {
+	if err = tx.Upsert(cp, mvcc.OnInsert(t.onInsert), mvcc.OnDelete(t.onDelete)); err != nil {
 		return ErrUpsert.WithReason(err)
 	}
 
@@ -74,7 +74,7 @@ func (t v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 		return nil
 	}
 
-	var val fdbx.Value
+	var val []byte
 	var ups [1]fdbx.Key
 
 	if val, err = pair.Value(); err != nil {
@@ -103,7 +103,7 @@ func (t v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 		return nil
 	}
 
-	var val fdbx.Value
+	var val []byte
 	var ups [1]fdbx.Pair
 	var key, tmp fdbx.Key
 
@@ -120,7 +120,7 @@ func (t v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 			return ErrIdxUpsert.WithReason(err)
 		}
 
-		ups[0] = fdbx.NewPair(tmp, fdbx.Value(key.Bytes())).WrapKey(idxKeyWrapper(t.id, idxid))
+		ups[0] = fdbx.NewPair(tmp, []byte(key.Bytes())).WrapKey(idxKeyWrapper(t.id, idxid))
 		if err = tx.Upsert(ups[:]); err != nil {
 			return ErrIdxUpsert.WithReason(err).WithDebug(errx.Debug{"idx": idxid})
 		}

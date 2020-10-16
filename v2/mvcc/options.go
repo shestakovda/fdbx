@@ -6,12 +6,14 @@ func getOpts(args []Option) (o options) {
 	for i := range args {
 		args[i](&o)
 	}
+	o.packSize = 10000
 	return
 }
 
 type options struct {
 	lock     bool
 	limit    int
+	packSize int
 	onDelete Handler
 	onInsert Handler
 	onLock   RowHandler
@@ -20,6 +22,7 @@ type options struct {
 
 func Limit(l int) Option              { return func(o *options) { o.limit = l } }
 func Writer(w db.Writer) Option       { return func(o *options) { o.writer = w } }
+func PackSize(s int) Option           { return func(o *options) { o.packSize = s } }
 func OnDelete(hdl Handler) Option     { return func(o *options) { o.onDelete = hdl } }
 func OnInsert(hdl Handler) Option     { return func(o *options) { o.onInsert = hdl } }
 func Exclusive(hdl RowHandler) Option { return func(o *options) { o.lock = true; o.onLock = hdl } }

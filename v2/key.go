@@ -2,8 +2,6 @@ package fdbx
 
 import "github.com/apple/foundationdb/bindings/go/src/fdb"
 
-func (k Key) Getter() Key { return k }
-
 func (k Key) Bytes() fdb.Key { return fdb.Key(k) }
 
 func (k Key) String() string { return fdb.Key(k).String() }

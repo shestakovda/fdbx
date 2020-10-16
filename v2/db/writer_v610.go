@@ -17,8 +17,8 @@ func (w v610Writer) Delete(key fdbx.Key) {
 }
 
 func (w v610Writer) Upsert(pair fdbx.Pair) (err error) {
+	var val []byte
 	var key fdbx.Key
-	var val fdbx.Value
 
 	if key, err = pair.Key(); err != nil {
 		return
@@ -50,7 +50,7 @@ func (w v610Writer) Erase(from, to fdbx.Key) {
 	})
 }
 
-func (w v610Writer) Watch(key fdbx.Key) Waiter {
+func (w v610Writer) Watch(key fdbx.Key) fdbx.Waiter {
 	return &v610Waiter{
 		FutureNil: w.tx.Watch(w.usrWrap(key).Bytes()),
 	}

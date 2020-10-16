@@ -39,7 +39,7 @@ var qTotalWorkKey = fdbx.Key("work").LPart(qStat)
 
 // sysKeyWrapper - преобразователь системного ключа в пользовательский, для выборки
 func sysKeyWrapper(key fdbx.Key) (fdbx.Key, error) {
-	return key.LSkip(3).RSkip(8), nil
+	return key.LSkip(3), nil
 }
 
 // usrKeyWrapper - преобразователь пользовательского ключа в системный, для вставки
@@ -60,7 +60,7 @@ func idxKeyWrapper(clid uint16, idxid byte) fdbx.KeyWrapper {
 
 // usrValWrapper - преобразователь пользовательского значения в системное, для вставки
 func usrValWrapper(tx mvcc.Tx, clid uint16) fdbx.ValueWrapper {
-	return func(v fdbx.Value) (_ fdbx.Value, err error) {
+	return func(v []byte) (_ []byte, err error) {
 		mod := models.ValueT{
 			Blob: false,
 			GZip: false,
@@ -100,7 +100,7 @@ func usrValWrapper(tx mvcc.Tx, clid uint16) fdbx.ValueWrapper {
 			}
 
 			mod.Blob = true
-			mod.Data = fdbx.Value(uid)
+			mod.Data = []byte(uid)
 		}
 
 		buf := fbsPool.Get().(*fbs.Builder)
@@ -114,7 +114,7 @@ func usrValWrapper(tx mvcc.Tx, clid uint16) fdbx.ValueWrapper {
 
 // sysValWrapper - преобразователь системного значения в пользовательское, для выборки
 func sysValWrapper(tx mvcc.Tx, clid uint16) fdbx.ValueWrapper {
-	return func(v fdbx.Value) (_ fdbx.Value, err error) {
+	return func(v []byte) (_ []byte, err error) {
 		if len(v) == 0 {
 			return nil, nil
 		}
@@ -125,7 +125,7 @@ func sysValWrapper(tx mvcc.Tx, clid uint16) fdbx.ValueWrapper {
 		// Если значение лежит в BLOB, надо достать
 		if mod.Blob {
 			key := fdbx.Key(mod.Data).LPart(byte(clid>>8), byte(clid), nsBLOB)
-			if mod.Data, err = tx.LoadBLOB(key, mod.Size); err != nil {
+			if mod.Data, err = tx.LoadBLOB(key, int(mod.Size)); err != nil {
 				return nil, ErrValUnpack.WithReason(err)
 			}
 			mod.Blob = false
