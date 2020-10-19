@@ -5,10 +5,10 @@ import (
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
-func NewQuery(cl Collection, tx mvcc.Tx) Query {
+func NewQuery(tb Table, tx mvcc.Tx) Query {
 	q := v1Query{
 		tx: tx,
-		cl: cl,
+		tb: tb,
 
 		filters: make([]Filter, 0, 8),
 	}
@@ -17,7 +17,7 @@ func NewQuery(cl Collection, tx mvcc.Tx) Query {
 
 type v1Query struct {
 	tx mvcc.Tx
-	cl Collection
+	tb Table
 
 	search  Selector
 	filters []Filter
@@ -64,7 +64,7 @@ func (q *v1Query) Delete() (err error) {
 		return
 	}
 
-	if err = q.cl.Delete(q.tx, list...); err != nil {
+	if err = q.tb.Delete(q.tx, list...); err != nil {
 		return ErrDelete.WithReason(err)
 	}
 
@@ -89,7 +89,7 @@ func (q *v1Query) filtered() (res []fdbx.Pair, err error) {
 		q.search = NewFullSelector(q.tx)
 	}
 
-	if list, err = q.search.Select(q.cl); err != nil {
+	if list, err = q.search.Select(q.tb); err != nil {
 		return
 	}
 

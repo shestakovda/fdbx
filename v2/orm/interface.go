@@ -17,8 +17,8 @@ const (
 	StatusConfirmed   byte = 3
 )
 
-// Collection - универсальный интерфейс коллекции, чтобы работать с запросами
-type Collection interface {
+// Table - универсальный интерфейс коллекции, чтобы работать с запросами
+type Table interface {
 	ID() uint16
 
 	Select(mvcc.Tx) Query
@@ -26,9 +26,9 @@ type Collection interface {
 	Delete(mvcc.Tx, ...fdbx.Pair) error
 }
 
-// TaskCollection - универсальный интерфейс очередей, для работы с задачами
-type TaskCollection interface {
-	ID() byte
+// Queue - универсальный интерфейс очередей, для работы с задачами
+type Queue interface {
+	ID() uint16
 
 	Ack(mvcc.Tx, ...fdbx.Key) (err error)
 	Pub(mvcc.Tx, time.Time, ...fdbx.Key) error
@@ -58,7 +58,7 @@ type Query interface {
 
 // Selector - поставщик сырых данных для запроса
 type Selector interface {
-	Select(Collection) ([]fdbx.Pair, error)
+	Select(Table) ([]fdbx.Pair, error)
 }
 
 // Filter - управляющий объект для фильтрации выборок

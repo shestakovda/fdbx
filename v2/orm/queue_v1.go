@@ -7,16 +7,15 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/golang/glog"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
-func Queue(id byte, cl Collection, opts ...Option) TaskCollection {
+func NewQueue(id uint16, tb Table, opts ...Option) Queue {
 	q := v1Queue{
 		id:      id,
-		cl:      cl,
+		tb:      tb,
 		options: newOptions(),
 	}
 
@@ -29,11 +28,12 @@ func Queue(id byte, cl Collection, opts ...Option) TaskCollection {
 
 type v1Queue struct {
 	options
-	id byte
-	cl Collection
+
+	id uint16
+	tb Table
 }
 
-func (q v1Queue) ID() byte { return q.id }
+func (q v1Queue) ID() uint16 { return q.id }
 
 func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 	keys := make([]fdbx.Key, 2*len(ids))
@@ -67,7 +67,7 @@ func (q v1Queue) Pub(tx mvcc.Tx, when time.Time, ids ...fdbx.Key) (err error) {
 	binary.BigEndian.PutUint64(delay, uint64(when.UTC().UnixNano()))
 
 	// Структура ключа:
-	// db nsUser cl.id q.id qList delay uid = taskID
+	// db nsUser tb.id q.id qList delay uid = taskID
 	pairs := make([]fdbx.Pair, 2*len(ids))
 	for i := range ids {
 		// Основная запись таски
@@ -198,7 +198,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 				}
 			}
 
-			if list, e = q.cl.Select(tx).PossibleByID(ids...).All(); e != nil {
+			if list, e = q.tb.Select(tx).PossibleByID(ids...).All(); e != nil {
 				return
 			}
 
@@ -240,8 +240,6 @@ func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []fdbx.Pair, err error) {
 
 	key := q.usrKey(fdbx.Key{qWork})
 
-	glog.Errorf(">>> %s", key)
-
 	// Значения в этих парах - айдишки элементов коллекции
 	if pairs, err = tx.SeqScan(key, key, mvcc.Limit(pack)); err != nil {
 		return nil, ErrLost.WithReason(err)
@@ -258,10 +256,9 @@ func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []fdbx.Pair, err error) {
 			return nil, ErrLost.WithReason(err)
 		}
 		ids[i] = fdbx.Key(id)
-		glog.Errorf("----- %s", id)
 	}
 
-	if list, err = q.cl.Select(tx).PossibleByID(ids...).All(); err != nil {
+	if list, err = q.tb.Select(tx).PossibleByID(ids...).All(); err != nil {
 		return nil, ErrLost.WithReason(err)
 	}
 
@@ -338,19 +335,23 @@ func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter) (err error) {
 	return nil
 }
 
-func (q v1Queue) usrKeyWrapper(key fdbx.Key) (fdbx.Key, error) { return q.usrKey(key), nil }
-
 func (q v1Queue) usrKey(key fdbx.Key) fdbx.Key {
-	clid := q.cl.ID()
-	return key.LPart(byte(clid>>8), byte(clid), q.id)
+	tbid := q.tb.ID()
+	return key.LPart(byte(tbid>>8), byte(tbid), byte(q.id>>8), byte(q.id))
 }
 
+func (q v1Queue) sysKey(key fdbx.Key) fdbx.Key {
+	return key.LSkip(13)
+}
+
+func (q v1Queue) usrKeyWrapper(key fdbx.Key) (fdbx.Key, error) { return q.usrKey(key), nil }
+
 func (q v1Queue) waitKeyWrapper(key fdbx.Key) (fdbx.Key, error) {
-	return key.LSkip(12), nil
+	return q.sysKey(key), nil
 }
 
 func (q v1Queue) wrkKeyWrapper(key fdbx.Key) (fdbx.Key, error) {
-	return q.usrKey(key.LSkip(12).LPart(qWork)), nil
+	return q.usrKey(q.sysKey(key).LPart(qWork)), nil
 }
 
 func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (exp error) {
@@ -369,7 +370,7 @@ func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (exp error) {
 		// Вставка в коллекцию задач "в работе"
 		p.WrapKey(q.wrkKeyWrapper),
 		// Вставка в индекс статусов задач
-		fdbx.NewPair(q.usrKey(key.LSkip(12).LPart(iStat)), []byte{StatusUnconfirmed}),
+		fdbx.NewPair(q.usrKey(q.sysKey(key).LPart(iStat)), []byte{StatusUnconfirmed}),
 	}
 
 	if key, exp = pairs[0].Key(); exp != nil {

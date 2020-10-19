@@ -21,14 +21,14 @@ type idsSelector struct {
 	strict bool
 }
 
-func (s idsSelector) Select(cl Collection) (list []fdbx.Pair, err error) {
+func (s idsSelector) Select(tb Table) (list []fdbx.Pair, err error) {
 	var pair fdbx.Pair
 
-	wrp := sysValWrapper(s.tx, cl.ID())
+	wrp := sysValWrapper(s.tx, tb.ID())
 	list = make([]fdbx.Pair, 0, len(s.ids))
 
 	for i := range s.ids {
-		if pair, err = s.tx.Select(usrKey(cl.ID(), s.ids[i])); err != nil {
+		if pair, err = s.tx.Select(usrKey(tb.ID(), s.ids[i])); err != nil {
 			if errx.Is(err, mvcc.ErrNotFound) {
 				if !s.strict {
 					continue

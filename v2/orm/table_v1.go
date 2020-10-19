@@ -6,7 +6,7 @@ import (
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
-func Table(id uint16, opts ...Option) Collection {
+func NewTable(id uint16, opts ...Option) Table {
 	t := v1Table{
 		id:      id,
 		options: newOptions(),

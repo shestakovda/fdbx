@@ -20,8 +20,8 @@ import (
 
 const TestDB byte = 0x10
 const TestTable uint16 = 1
+const TestQueue uint16 = 2
 const TestIndex byte = 1
-const TestQueue byte = 2
 
 func TestORM(t *testing.T) {
 	suite.Run(t, new(ORMSuite))
@@ -32,7 +32,7 @@ type ORMSuite struct {
 
 	tx  mvcc.Tx
 	cn  db.Connection
-	tbl orm.Collection
+	tbl orm.Table
 }
 
 func (s *ORMSuite) SetupTest() {
@@ -45,7 +45,7 @@ func (s *ORMSuite) SetupTest() {
 	s.tx, err = mvcc.Begin(s.cn)
 	s.Require().NoError(err)
 
-	s.tbl = orm.Table(
+	s.tbl = orm.NewTable(
 		TestTable,
 		orm.Index(TestIndex, func(v []byte) fdbx.Key {
 			if len(v) > 3 {
@@ -214,7 +214,7 @@ func (s *ORMSuite) TestQueue() {
 	))
 	s.Require().NoError(s.tx.Commit())
 
-	q := orm.Queue(TestQueue, s.tbl, orm.PunchTime(10*time.Millisecond))
+	q := orm.NewQueue(TestQueue, s.tbl, orm.PunchTime(10*time.Millisecond))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -320,7 +320,7 @@ func BenchmarkUpsert(b *testing.B) {
 	require.NoError(b, err)
 	defer tx.Cancel()
 
-	tbl := orm.Table(TestTable)
+	tbl := orm.NewTable(TestTable)
 
 	b.ResetTimer()
 
@@ -340,7 +340,7 @@ func BenchmarkUpsertBatch(b *testing.B) {
 	require.NoError(b, err)
 	defer tx.Cancel()
 
-	tbl := orm.Table(TestTable)
+	tbl := orm.NewTable(TestTable)
 
 	count := 1000
 	batch := make([]fdbx.Pair, count)
@@ -372,7 +372,7 @@ func BenchmarkCount(b *testing.B) {
 	tx, err := mvcc.Begin(cn)
 	require.NoError(b, err)
 
-	tbl := orm.Table(TestTable)
+	tbl := orm.NewTable(TestTable)
 
 	for k := 0; k < count/int(batchSize); k++ {
 		batch := make([]fdbx.Pair, batchSize)
