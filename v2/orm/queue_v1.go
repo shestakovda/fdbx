@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/mvcc"
@@ -39,9 +40,9 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 
 	for i := range ids {
 		// Удаляем из неподтвержденных
-		keys[2*i] = q.usrKey(ids[i].RPart(qWork))
+		keys[2*i] = q.usrKey(ids[i].LPart(qWork))
 		// Удаляем из индекса статусов задач
-		keys[2*i+1] = q.usrKey(ids[i].RPart(iStat))
+		keys[2*i+1] = q.usrKey(ids[i].LPart(iStat))
 	}
 
 	if err = tx.Delete(keys); err != nil {
@@ -192,7 +193,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 			ids := make([]fdbx.Key, len(pairs))
 
 			for i := range pairs {
-				if ids[i], e = pairs[i].WrapKey(q.waitKeyWrapper).Key(); e != nil {
+				if ids[i], e = pairs[i].Value(); e != nil {
 					return
 				}
 			}
@@ -205,7 +206,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 			w.Increment(q.usrKey(qTotalWaitKey), int64(-len(ids)))
 
 			// Увеличиваем счетчик задач в ожидании
-			w.Increment(q.usrKey(qTotalWorkKey), int64(len(ids)))
+			w.Increment(q.usrKey(qTotalWorkKey), int64(len(list)))
 
 			// Логический коммит в той же физической транзакции
 			// Это самый важный момент - именно благодаря этому перемещенные в процессе чтения
@@ -239,6 +240,8 @@ func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []fdbx.Pair, err error) {
 
 	key := q.usrKey(fdbx.Key{qWork})
 
+	glog.Errorf(">>> %s", key)
+
 	// Значения в этих парах - айдишки элементов коллекции
 	if pairs, err = tx.SeqScan(key, key, mvcc.Limit(pack)); err != nil {
 		return nil, ErrLost.WithReason(err)
@@ -255,6 +258,7 @@ func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []fdbx.Pair, err error) {
 			return nil, ErrLost.WithReason(err)
 		}
 		ids[i] = fdbx.Key(id)
+		glog.Errorf("----- %s", id)
 	}
 
 	if list, err = q.cl.Select(tx).PossibleByID(ids...).All(); err != nil {
@@ -273,7 +277,7 @@ func (q v1Queue) Status(tx mvcc.Tx, ids ...fdbx.Key) (res map[string]byte, err e
 	for i := range ids {
 		status := StatusConfirmed
 
-		if pair, err = tx.Select(q.usrKey(ids[i].RPart(iStat))); err == nil {
+		if pair, err = tx.Select(q.usrKey(ids[i].LPart(iStat))); err == nil {
 			if val, err = pair.Value(); err != nil {
 				return nil, ErrStatus.WithReason(err)
 			}
@@ -325,13 +329,12 @@ func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter) (err error) {
 	defer cancel()
 
 	if err = waiter.Resolve(wctx); err != nil {
-		return ErrSub.WithReason(err)
+		// Если запущено много обработчиков, все они рванут забирать события одновременно.
+		// Чтобы избежать массовых конфликтов транзакций и улучшить распределение задач делаем небольшую
+		// случайную задержку, в пределах 20 мс. Немного для человека, значительно для уменьшения конфликтов
+		time.Sleep(time.Duration(rand.Intn(20)) * time.Millisecond)
 	}
 
-	// Если запущено много обработчиков, все они рванут забирать события одновременно.
-	// Чтобы избежать массовых конфликтов транзакций и улучшить распределение задач делаем небольшую
-	// случайную задержку, в пределах 20 мс. Немного для человека, значительно для уменьшения конфликтов
-	time.Sleep(time.Duration(rand.Intn(20)) * time.Millisecond)
 	return nil
 }
 
@@ -347,7 +350,7 @@ func (q v1Queue) waitKeyWrapper(key fdbx.Key) (fdbx.Key, error) {
 }
 
 func (q v1Queue) wrkKeyWrapper(key fdbx.Key) (fdbx.Key, error) {
-	return q.usrKey(key.LSkip(12).RPart(qWork)), nil
+	return q.usrKey(key.LSkip(12).LPart(qWork)), nil
 }
 
 func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (exp error) {
@@ -366,7 +369,11 @@ func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (exp error) {
 		// Вставка в коллекцию задач "в работе"
 		p.WrapKey(q.wrkKeyWrapper),
 		// Вставка в индекс статусов задач
-		fdbx.NewPair(q.usrKey(key.LSkip(12).RPart(iStat)), []byte{StatusUnconfirmed}),
+		fdbx.NewPair(q.usrKey(key.LSkip(12).LPart(iStat)), []byte{StatusUnconfirmed}),
+	}
+
+	if key, exp = pairs[0].Key(); exp != nil {
+		return ErrSub.WithReason(exp)
 	}
 
 	if exp = tx.Upsert(pairs, mvcc.Writer(w)); exp != nil {

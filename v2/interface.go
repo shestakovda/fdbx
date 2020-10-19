@@ -21,6 +21,8 @@ type Pair interface {
 	Key() (Key, error)
 	Value() ([]byte, error)
 
+	Clone() Pair
+
 	WrapKey(KeyWrapper) Pair
 	WrapValue(ValueWrapper) Pair
 }

@@ -62,3 +62,12 @@ func (p *pair) WrapValue(w ValueWrapper) Pair {
 	p.vc = append(p.vc, w)
 	return p
 }
+
+func (p pair) Clone() Pair {
+	return &pair{
+		k:  p.k,
+		v:  p.v,
+		kc: p.kc,
+		vc: p.vc,
+	}
+}

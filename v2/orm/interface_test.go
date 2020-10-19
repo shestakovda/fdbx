@@ -1,8 +1,12 @@
 package orm_test
 
 import (
+	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
@@ -195,115 +199,116 @@ func (s *ORMSuite) TestByID() {
 	}
 }
 
-// func (s *ORMSuite) TestQueue() {
-// 	const recCount = 3
+func (s *ORMSuite) TestQueue() {
+	const recCount = 3
 
-// 	id1 := fdbx.Key("id1")
-// 	id2 := fdbx.Key("id2")
-// 	id3 := fdbx.Key("id3")
-// 	id4 := fdbx.Key("id4")
+	id1 := fdbx.Key("id1")
+	id2 := fdbx.Key("id2")
+	id3 := fdbx.Key("id3")
+	id4 := fdbx.Key("id4")
 
-// 	s.Require().NoError(s.tbl.Upsert(s.tx,
-// 		fdbx.NewPair(id1, []byte("msg1")),
-// 		fdbx.NewPair(id2, []byte("msg2")),
-// 		fdbx.NewPair(id3, []byte("msg3")),
-// 	))
+	s.Require().NoError(s.tbl.Upsert(s.tx,
+		fdbx.NewPair(id1, []byte("msg1")),
+		fdbx.NewPair(id2, []byte("msg2")),
+		fdbx.NewPair(id3, []byte("msg3")),
+	))
+	s.Require().NoError(s.tx.Commit())
 
-// 	q := orm.Queue(TestQueue, s.tbl, orm.PunchTime(10*time.Millisecond))
+	q := orm.Queue(TestQueue, s.tbl, orm.PunchTime(10*time.Millisecond))
 
-// 	var wg sync.WaitGroup
-// 	wg.Add(1)
+	var wg sync.WaitGroup
+	wg.Add(1)
 
-// 	// subscribe
-// 	go func() {
-// 		defer wg.Done()
+	// subscribe
+	go func() {
+		defer wg.Done()
 
-// 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-// 		defer cancel()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
 
-// 		recc, errc := q.Sub(ctx, s.cn, 1)
+		recc, errc := q.Sub(ctx, s.cn, 1)
 
-// 		recs := make([]fdbx.Pair, 0, recCount)
-// 		for rec := range recc {
-// 			recs = append(recs, rec)
-// 		}
+		recs := make([]fdbx.Pair, 0, recCount)
+		for rec := range recc {
+			recs = append(recs, rec)
+		}
 
-// 		errs := make([]error, 0, 1)
-// 		for err := range errc {
-// 			errs = append(errs, err)
-// 		}
+		errs := make([]error, 0, 1)
+		for err := range errc {
+			errs = append(errs, err)
+		}
 
-// 		// s.Len(recs, recCount)
-// 		s.Len(errs, 1)
-// 		s.True(errors.Is(errs[0], context.DeadlineExceeded))
-// 	}()
+		s.Len(recs, recCount)
+		s.Len(errs, 1)
+		s.True(errors.Is(errs[0], context.DeadlineExceeded))
+	}()
 
-// 	// Публикация задачи, которой нет
-// 	tx, err := mvcc.Begin(s.cn)
-// 	s.Require().NoError(err)
-// 	s.Require().NoError(q.Pub(tx, time.Now().Add(5*time.Millisecond), id4))
-// 	s.Require().NoError(tx.Commit())
+	// Публикация задачи, которой нет
+	tx, err := mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+	s.Require().NoError(q.Pub(tx, time.Now().Add(5*time.Millisecond), id4))
+	s.Require().NoError(tx.Commit())
 
-// 	// Публикация задач по очереди
-// 	tx, err = mvcc.Begin(s.cn)
-// 	s.Require().NoError(err)
-// 	s.Require().NoError(q.Pub(tx, time.Now().Add(time.Millisecond), id1))
-// 	s.Require().NoError(tx.Commit())
+	// Публикация задач по очереди
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+	s.Require().NoError(q.Pub(tx, time.Now().Add(time.Millisecond), id1))
+	s.Require().NoError(tx.Commit())
 
-// 	tx, err = mvcc.Begin(s.cn)
-// 	s.Require().NoError(err)
-// 	s.Require().NoError(q.Pub(tx, time.Now().Add(50*time.Millisecond), id2))
-// 	s.Require().NoError(tx.Commit())
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+	s.Require().NoError(q.Pub(tx, time.Now().Add(50*time.Millisecond), id2))
+	s.Require().NoError(tx.Commit())
 
-// 	tx, err = mvcc.Begin(s.cn)
-// 	s.Require().NoError(err)
-// 	s.Require().NoError(q.Pub(tx, time.Now().Add(200*time.Millisecond), id3))
-// 	s.Require().NoError(tx.Commit())
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+	s.Require().NoError(q.Pub(tx, time.Now().Add(200*time.Millisecond), id3))
+	s.Require().NoError(tx.Commit())
 
-// 	// Ждем завершения подписки
-// 	wg.Wait()
+	// Ждем завершения подписки
+	wg.Wait()
 
-// 	// Проверяем стату
-// 	tx, err = mvcc.Begin(s.cn)
-// 	s.Require().NoError(err)
+	// Проверяем стату
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
 
-// 	if lost, err := q.Lost(tx, 100); s.NoError(err) {
-// 		s.Len(lost, 3)
-// 	}
+	if lost, err := q.Lost(tx, 100); s.NoError(err) {
+		s.Len(lost, 3)
+	}
 
-// 	if wait, work, err := q.Stat(tx); s.NoError(err) {
-// 		s.Equal(int64(0), wait)
-// 		s.Equal(int64(3), work)
-// 	}
+	if wait, work, err := q.Stat(tx); s.NoError(err) {
+		s.Equal(int64(0), wait)
+		s.Equal(int64(3), work)
+	}
 
-// 	if err := q.Ack(tx, id2); s.NoError(err) {
-// 		if stat, err := q.Status(tx, id1, id2, id3); s.NoError(err) {
-// 			s.Equal(map[string]byte{
-// 				"id1": orm.StatusUnconfirmed,
-// 				"id2": orm.StatusConfirmed,
-// 				"id3": orm.StatusUnconfirmed,
-// 			}, stat)
-// 		}
+	if err := q.Ack(tx, id2); s.NoError(err) {
+		if stat, err := q.Status(tx, id1, id2, id3); s.NoError(err) {
+			s.Equal(map[string]byte{
+				"id1": orm.StatusUnconfirmed,
+				"id2": orm.StatusConfirmed,
+				"id3": orm.StatusUnconfirmed,
+			}, stat)
+		}
 
-// 		if lost, err := q.Lost(tx, 100); s.NoError(err) {
-// 			s.Len(lost, 2)
-// 		}
-// 	}
+		if lost, err := q.Lost(tx, 100); s.NoError(err) {
+			s.Len(lost, 2)
+		}
+	}
 
-// 	if err := q.Ack(tx, id1, id3); s.NoError(err) {
-// 		if stat, err := q.Status(tx, id1, id2, id3); s.NoError(err) {
-// 			s.Equal(map[string]byte{
-// 				"id1": orm.StatusConfirmed,
-// 				"id2": orm.StatusConfirmed,
-// 				"id3": orm.StatusConfirmed,
-// 			}, stat)
-// 		}
+	if err := q.Ack(tx, id1, id3); s.NoError(err) {
+		if stat, err := q.Status(tx, id1, id2, id3); s.NoError(err) {
+			s.Equal(map[string]byte{
+				"id1": orm.StatusConfirmed,
+				"id2": orm.StatusConfirmed,
+				"id3": orm.StatusConfirmed,
+			}, stat)
+		}
 
-// 		if lost, err := q.Lost(tx, 100); s.NoError(err) {
-// 			s.Len(lost, 0)
-// 		}
-// 	}
-// }
+		if lost, err := q.Lost(tx, 100); s.NoError(err) {
+			s.Len(lost, 0)
+		}
+	}
+}
 
 func BenchmarkUpsert(b *testing.B) {
 	cn, err := db.ConnectV610(TestDB)

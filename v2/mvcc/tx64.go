@@ -100,23 +100,13 @@ func (t *tx64) Commit(args ...Option) (err error) {
 		}
 	}
 
-	if err = t.close(txStatusCommitted, opts.writer); err != nil {
-		return
-	}
-
-	globCache.set(t.txid, txStatusCommitted)
-	return nil
+	return t.close(txStatusCommitted, opts.writer)
 }
 
 func (t *tx64) Cancel(args ...Option) (err error) {
 	opts := getOpts(args)
 
-	if err = t.close(txStatusAborted, opts.writer); err != nil {
-		return
-	}
-
-	globCache.set(t.txid, txStatusAborted)
-	return nil
+	return t.close(txStatusAborted, opts.writer)
 }
 
 /*
@@ -266,18 +256,17 @@ func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
 }
 
 func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (_ []fdbx.Pair, err error) {
+	var part, list []fdbx.Pair
+
 	size := 0
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
-	list := make([]fdbx.Pair, 0, 64)
-	part := make([]fdbx.Pair, 0, 64)
 	hdlr := func(r db.Reader) (exp error) {
 		var ok bool
 		var w db.Writer
 		var key fdbx.Key
-		var rows []fdbx.Pair
 
-		if rows, exp = t.fetchAll(r, nil, opid, r.List(from, to, uint64(opts.packSize), false)); exp != nil {
+		if part, exp = t.fetchAll(r, nil, opid, r.List(from, to, uint64(opts.packSize), false)); exp != nil {
 			return
 		}
 
@@ -287,24 +276,23 @@ func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (_ []fdbx.Pair, err er
 			}
 		}
 
-		if len(rows) == 0 {
-			part = part[:0]
+		if len(part) == 0 {
 			return nil
 		}
 
-		cnt := len(rows)
+		cnt := len(part)
 
 		if opts.limit > 0 && (size+cnt) > opts.limit {
 			cnt = opts.limit - size
 		}
 
-		part = rows[:cnt]
+		part = part[:cnt]
 
 		for i := range part {
 			part[i] = part[i].WrapKey(sysWrapper).WrapValue(valWrapper)
 
 			if opts.onLock != nil {
-				if exp = opts.onLock(t, part[i], w); exp != nil {
+				if exp = opts.onLock(t, part[i].Clone(), w); exp != nil {
 					return
 				}
 			}
@@ -532,7 +520,9 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	t.status = status
 	dump := t.pack()
 	txid := txKey(t.txid)
-	hdlr := func(w db.Writer) (exp error) { return w.Upsert(fdbx.NewPair(txid, dump)) }
+	hdlr := func(w db.Writer) (exp error) {
+		return w.Upsert(fdbx.NewPair(txid, dump))
+	}
 
 	if w == nil {
 		err = t.conn.Write(hdlr)
@@ -544,6 +534,7 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 		return ErrClose.WithReason(err)
 	}
 
+	globCache.set(t.txid, t.status)
 	return nil
 }
 
