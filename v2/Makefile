@@ -9,7 +9,7 @@ fmt: fbs
 	@goimports -w .
 	@go mod tidy
 
-test: test-fdbx test-db test-mvcc test-orm
+test: test-fdbx test-db test-mvcc test-orm test-rpc
 
 test-fdbx: fmt
 	@go test -timeout 10s -coverprofile=./bin/fdbx.cover .
@@ -22,6 +22,9 @@ test-mvcc: fmt
 
 test-orm: fmt
 	@go test -timeout 10s -coverprofile=./bin/orm.cover ./orm
+
+test-rpc: fmt
+	@go test -timeout 10s -coverprofile=./bin/rpc.cover ./rpc
 
 bench: bench-fdbx bench-mvcc bench-orm
 
