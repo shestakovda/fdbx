@@ -78,4 +78,5 @@ var (
 	ErrBLOBLoad = errx.New("Ошибка загрузки BLOB")
 	ErrBLOBDrop = errx.New("Ошибка удаления BLOB")
 	ErrBLOBSave = errx.New("Ошибка сохранения BLOB")
+	ErrWatch    = errx.New("Ошибка отслеживания значения")
 )

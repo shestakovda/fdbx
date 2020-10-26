@@ -21,14 +21,15 @@ type idsSelector struct {
 	strict bool
 }
 
-func (s idsSelector) Select(tb Table) (list []fdbx.Pair, err error) {
+func (s idsSelector) Select(tbl Table) (list []fdbx.Pair, err error) {
 	var pair fdbx.Pair
 
-	wrp := sysValWrapper(s.tx, tb.ID())
+	mgr := tbl.Mgr()
+	wrp := sysValWrapper(s.tx, tbl.ID())
 	list = make([]fdbx.Pair, 0, len(s.ids))
 
 	for i := range s.ids {
-		if pair, err = s.tx.Select(usrKey(tb.ID(), s.ids[i])); err != nil {
+		if pair, err = s.tx.Select(mgr.Wrap(s.ids[i])); err != nil {
 			if errx.Is(err, mvcc.ErrNotFound) {
 				if !s.strict {
 					continue
@@ -42,7 +43,7 @@ func (s idsSelector) Select(tb Table) (list []fdbx.Pair, err error) {
 			return nil, ErrSelect.WithReason(err)
 		}
 
-		list = append(list, pair.WrapKey(sysKeyWrapper).WrapValue(wrp))
+		list = append(list, pair.WrapKey(mgr.Unwrapper).WrapValue(wrp))
 	}
 
 	return list, nil

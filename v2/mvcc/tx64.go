@@ -50,7 +50,7 @@ func newTx64(conn db.Connection) (t *tx64, err error) {
 			return
 		}
 
-		t.txid = binary.BigEndian.Uint64(val[:8])
+		t.txid = binary.BigEndian.Uint64(val[:8]) + uint64(binary.BigEndian.Uint16(val[8:10]))
 		w.Upsert(fdbx.NewPair(fdbx.Key(val[:8]).LPart(nsTx), t.pack()))
 		w.Delete(key)
 		return nil
@@ -126,7 +126,7 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 		lg := make([]fdbx.ListGetter, len(keys))
 
 		for i := range keys {
-			cp[i] = usrKey(keys[i])
+			cp[i] = keyMgr.Wrap(keys[i])
 			lg[i] = w.List(cp[i], cp[i], 0, true)
 		}
 
@@ -179,7 +179,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 		lg := make([]fdbx.ListGetter, len(pairs))
 
 		for i := range pairs {
-			cp[i] = pairs[i].WrapKey(usrWrapper)
+			cp[i] = pairs[i].WrapKey(keyMgr.Wrapper)
 
 			if ukey, exp = cp[i].Key(); exp != nil {
 				return
@@ -205,7 +205,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 				continue
 			}
 
-			if exp = opts.onInsert(t, cp[i].WrapKey(sysWrapper)); exp != nil {
+			if exp = opts.onInsert(t, cp[i].WrapKey(keyMgr.Unwrapper)); exp != nil {
 				return
 			}
 		}
@@ -230,7 +230,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 	Select - выборка актуального в данной транзакции значения ключа.
 */
 func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
-	ukey := usrKey(key)
+	ukey := keyMgr.Wrap(key)
 	opid := atomic.AddUint32(&t.opid, 1)
 
 	if err = t.conn.Read(func(r db.Reader) (exp error) {
@@ -241,7 +241,7 @@ func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
 		}
 
 		if row != nil {
-			res = row.WrapKey(sysWrapper).WrapValue(valWrapper)
+			res = row.WrapKey(keyMgr.Unwrapper).WrapValue(valWrapper)
 			return nil
 		}
 
@@ -289,7 +289,7 @@ func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (_ []fdbx.Pair, err er
 		part = part[:cnt]
 
 		for i := range part {
-			part[i] = part[i].WrapKey(sysWrapper).WrapValue(valWrapper)
+			part[i] = part[i].WrapKey(keyMgr.Unwrapper).WrapValue(valWrapper)
 
 			if opts.onLock != nil {
 				if exp = opts.onLock(t, part[i].Clone(), w); exp != nil {
@@ -304,12 +304,12 @@ func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (_ []fdbx.Pair, err er
 			return
 		}
 
-		from = usrKey(key).RPart(0x01)
+		from = keyMgr.Wrap(key).RPart(0x01)
 		return nil
 	}
 
-	from = usrKey(from)
-	to = usrKey(to)
+	from = keyMgr.Wrap(from)
+	to = keyMgr.Wrap(to)
 
 	for {
 		if opts.lock {
@@ -351,7 +351,7 @@ func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte) (err error) {
 
 	set := func(w db.Writer) (exp error) {
 		for i := range prs {
-			if exp = w.Upsert(prs[i].WrapKey(usrWrapper).WrapKey(wrp)); exp != nil {
+			if exp = w.Upsert(prs[i].WrapKey(keyMgr.Wrapper).WrapKey(wrp)); exp != nil {
 				return
 			}
 			num++
@@ -393,7 +393,7 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size int) (_ []byte, err error) {
 	var val []byte
 	var rows []fdbx.Pair
 
-	ukey := usrKey(key)
+	ukey := keyMgr.Wrap(key)
 	end := ukey.RPart(0xFF, 0xFF)
 	res := make([]byte, 0, size)
 
@@ -427,7 +427,7 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size int) (_ []byte, err error) {
 }
 
 func (t *tx64) DropBLOB(key fdbx.Key) (err error) {
-	ukey := usrKey(key)
+	ukey := keyMgr.Wrap(key)
 	end := ukey.RPart(0xFF, 0xFF)
 
 	if err = t.conn.Write(func(w db.Writer) error {
@@ -779,7 +779,7 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handle
 		return
 	}
 
-	if err = onDelete(t, fdbx.NewPair(key, data).WrapKey(sysWrapper)); err != nil {
+	if err = onDelete(t, fdbx.NewPair(key, data).WrapKey(keyMgr.Unwrapper)); err != nil {
 		return ErrDelete.WithReason(err)
 	}
 

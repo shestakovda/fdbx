@@ -21,7 +21,7 @@ import (
 const TestDB byte = 0x10
 const TestTable uint16 = 1
 const TestQueue uint16 = 2
-const TestIndex byte = 1
+const TestIndex uint16 = 1
 
 func TestORM(t *testing.T) {
 	suite.Run(t, new(ORMSuite))

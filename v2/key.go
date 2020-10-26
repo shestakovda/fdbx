@@ -33,3 +33,9 @@ func (k Key) RPart(part ...byte) Key {
 	k = append(k, part...)
 	return k
 }
+
+func (k Key) Clone() Key {
+	k2 := make(Key, len(k))
+	copy(k2, k)
+	return k2
+}

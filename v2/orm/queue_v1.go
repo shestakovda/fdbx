@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/mvcc"
@@ -16,6 +17,7 @@ func NewQueue(id uint16, tb Table, opts ...Option) Queue {
 	q := v1Queue{
 		id:      id,
 		tb:      tb,
+		mgr:     newQueueKeyManager(tb.ID(), id),
 		options: newOptions(),
 	}
 
@@ -29,8 +31,9 @@ func NewQueue(id uint16, tb Table, opts ...Option) Queue {
 type v1Queue struct {
 	options
 
-	id uint16
-	tb Table
+	id  uint16
+	tb  Table
+	mgr fdbx.KeyManager
 }
 
 func (q v1Queue) ID() uint16 { return q.id }
@@ -40,10 +43,12 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 
 	for i := range ids {
 		// Удаляем из неподтвержденных
-		keys[2*i] = q.usrKey(ids[i].LPart(qWork))
+		keys[2*i] = q.mgr.Wrap(ids[i].LPart(qWork))
 		// Удаляем из индекса статусов задач
-		keys[2*i+1] = q.usrKey(ids[i].LPart(iStat))
+		keys[2*i+1] = q.mgr.Wrap(ids[i].LPart(iStat))
 	}
+
+	glog.Errorf("ack %s", keys[0])
 
 	if err = tx.Delete(keys); err != nil {
 		return ErrAck.WithReason(err)
@@ -51,7 +56,7 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 
 	tx.OnCommit(func(w db.Writer) error {
 		// Уменьшаем счетчик задач в работе
-		w.Increment(q.usrKey(qTotalWorkKey), int64(-len(ids)))
+		w.Increment(q.mgr.Wrap(qTotalWorkKey), int64(-len(ids)))
 		return nil
 	})
 	return nil
@@ -73,14 +78,14 @@ func (q v1Queue) Pub(tx mvcc.Tx, when time.Time, ids ...fdbx.Key) (err error) {
 		// Основная запись таски
 		pairs[2*i] = fdbx.NewPair(
 			// Случайная айдишка таски, чтобы не было конфликтов при одинаковом времени
-			q.usrKey(ids[i].LPart(delay...).LPart(qList)),
+			q.mgr.Wrap(ids[i].LPart(delay...).LPart(qList)),
 			// Айдишку элемента очереди записываем в значение, именно она и является таской
 			[]byte(ids[i]),
 		)
 
 		// Служебная запись в индекс состояний
 		pairs[2*i+1] = fdbx.NewPair(
-			q.usrKey(ids[i].LPart(iStat)),
+			q.mgr.Wrap(ids[i].LPart(iStat)),
 			[]byte{StatusPublished},
 		)
 	}
@@ -93,9 +98,9 @@ func (q v1Queue) Pub(tx mvcc.Tx, when time.Time, ids ...fdbx.Key) (err error) {
 	// А также инкремент счетчиков статистики очереди
 	tx.OnCommit(func(w db.Writer) error {
 		// Увеличиваем счетчик задач в ожидании
-		w.Increment(q.usrKey(qTotalWaitKey), int64(len(ids)))
+		w.Increment(q.mgr.Wrap(qTotalWaitKey), int64(len(ids)))
 		// Триггерим обработчики забрать новые задачи
-		w.Increment(q.usrKey(qTriggerKey), 1)
+		w.Increment(q.mgr.Wrap(qTriggerKey), 1)
 		return nil
 	})
 
@@ -107,6 +112,7 @@ func (q v1Queue) Sub(ctx context.Context, cn db.Connection, pack int) (<-chan fd
 	errc := make(chan error, 1)
 
 	go func() {
+
 		defer close(errc)
 		defer close(res)
 		defer func() {
@@ -160,13 +166,13 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 	var pairs []fdbx.Pair
 	var waiter fdbx.Waiter
 
-	from := q.usrKey(fdbx.Key{qList})
+	from := q.mgr.Wrap(fdbx.Key{qList})
 	hdlr := func() (exp error) {
 		var tx mvcc.Tx
 
 		now := make([]byte, 8)
 		binary.BigEndian.PutUint64(now, uint64(time.Now().UTC().UnixNano()))
-		to := q.usrKey(fdbx.Key(now).LPart(qList))
+		to := q.mgr.Wrap(fdbx.Key(now).LPart(qList))
 
 		if tx, err = mvcc.Begin(cn); err != nil {
 			return ErrSub.WithReason(err)
@@ -186,7 +192,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 
 			if len(pairs) == 0 {
 				// В этом случае не коммитим, т.к. по сути ничего не изменилось
-				waiter = w.Watch(q.usrKey(qTriggerKey))
+				waiter = w.Watch(q.mgr.Wrap(qTriggerKey))
 				return nil
 			}
 
@@ -196,6 +202,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 				if ids[i], e = pairs[i].Value(); e != nil {
 					return
 				}
+
 			}
 
 			if list, e = q.tb.Select(tx).PossibleByID(ids...).All(); e != nil {
@@ -203,10 +210,10 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 			}
 
 			// Уменьшаем счетчик задач в ожидании
-			w.Increment(q.usrKey(qTotalWaitKey), int64(-len(ids)))
+			w.Increment(q.mgr.Wrap(qTotalWaitKey), int64(-len(ids)))
 
 			// Увеличиваем счетчик задач в ожидании
-			w.Increment(q.usrKey(qTotalWorkKey), int64(len(list)))
+			w.Increment(q.mgr.Wrap(qTotalWorkKey), int64(len(list)))
 
 			// Логический коммит в той же физической транзакции
 			// Это самый важный момент - именно благодаря этому перемещенные в процессе чтения
@@ -238,7 +245,7 @@ func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []fdbx.Pair, err error) {
 	var id []byte
 	var pairs []fdbx.Pair
 
-	key := q.usrKey(fdbx.Key{qWork})
+	key := q.mgr.Wrap(fdbx.Key{qWork})
 
 	// Значения в этих парах - айдишки элементов коллекции
 	if pairs, err = tx.SeqScan(key, key, mvcc.Limit(pack)); err != nil {
@@ -274,7 +281,7 @@ func (q v1Queue) Status(tx mvcc.Tx, ids ...fdbx.Key) (res map[string]byte, err e
 	for i := range ids {
 		status := StatusConfirmed
 
-		if pair, err = tx.Select(q.usrKey(ids[i].LPart(iStat))); err == nil {
+		if pair, err = tx.Select(q.mgr.Wrap(ids[i].LPart(iStat))); err == nil {
 			if val, err = pair.Value(); err != nil {
 				return nil, ErrStatus.WithReason(err)
 			}
@@ -293,12 +300,12 @@ func (q v1Queue) Stat(tx mvcc.Tx) (wait, work int64, err error) {
 	if err = tx.Conn().Read(func(r db.Reader) (exp error) {
 		var val []byte
 
-		if val, exp = r.Data(q.usrKey(qTotalWaitKey)).Value(); exp != nil {
+		if val, exp = r.Data(q.mgr.Wrap(qTotalWaitKey)).Value(); exp != nil {
 			return
 		}
 		wait = int64(binary.LittleEndian.Uint64(val))
 
-		if val, exp = r.Data(q.usrKey(qTotalWorkKey)).Value(); exp != nil {
+		if val, exp = r.Data(q.mgr.Wrap(qTotalWorkKey)).Value(); exp != nil {
 			return
 		}
 		work = int64(binary.LittleEndian.Uint64(val))
@@ -335,23 +342,8 @@ func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter) (err error) {
 	return nil
 }
 
-func (q v1Queue) usrKey(key fdbx.Key) fdbx.Key {
-	tbid := q.tb.ID()
-	return key.LPart(byte(tbid>>8), byte(tbid), byte(q.id>>8), byte(q.id))
-}
-
-func (q v1Queue) sysKey(key fdbx.Key) fdbx.Key {
-	return key.LSkip(13)
-}
-
-func (q v1Queue) usrKeyWrapper(key fdbx.Key) (fdbx.Key, error) { return q.usrKey(key), nil }
-
-func (q v1Queue) waitKeyWrapper(key fdbx.Key) (fdbx.Key, error) {
-	return q.sysKey(key), nil
-}
-
 func (q v1Queue) wrkKeyWrapper(key fdbx.Key) (fdbx.Key, error) {
-	return q.usrKey(q.sysKey(key).LPart(qWork)), nil
+	return q.mgr.Wrap(q.mgr.Unwrap(key).LPart(qWork)), nil
 }
 
 func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (exp error) {
@@ -370,7 +362,7 @@ func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (exp error) {
 		// Вставка в коллекцию задач "в работе"
 		p.WrapKey(q.wrkKeyWrapper),
 		// Вставка в индекс статусов задач
-		fdbx.NewPair(q.usrKey(q.sysKey(key).LPart(iStat)), []byte{StatusUnconfirmed}),
+		fdbx.NewPair(q.mgr.Wrap(q.mgr.Unwrap(key).LPart(iStat)), []byte{StatusUnconfirmed}),
 	}
 
 	if key, exp = pairs[0].Key(); exp != nil {

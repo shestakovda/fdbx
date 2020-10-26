@@ -35,6 +35,15 @@ type Waiter interface {
 	Resolve(context.Context) error
 }
 
+// KeyManager - интерфейс управления ключами
+type KeyManager interface {
+	Wrap(Key) Key
+	Unwrap(Key) Key
+
+	Wrapper(Key) (Key, error)
+	Unwrapper(Key) (Key, error)
+}
+
 var (
 	ErrKey   = errx.New("Ошибка загрузки ключа")
 	ErrValue = errx.New("Ошибка загрузки значения")

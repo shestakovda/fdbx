@@ -20,6 +20,7 @@ const (
 // Table - универсальный интерфейс коллекции, чтобы работать с запросами
 type Table interface {
 	ID() uint16
+	Mgr() fdbx.KeyManager
 
 	Select(mvcc.Tx) Query
 	Upsert(mvcc.Tx, ...fdbx.Pair) error
@@ -80,6 +81,7 @@ var (
 	ErrLost      = errx.New("Ошибка получения неподтвержденных задач")
 	ErrStat      = errx.New("Ошибка получения статистики задач")
 	ErrStatus    = errx.New("Ошибка получения статуса задач")
+	ErrWatch     = errx.New("Ошибка отслеживания результата задачи")
 	ErrAgg       = errx.New("Ошибка агрегации объектов коллекции")
 	ErrSelect    = errx.New("Ошибка загрузки объектов коллекции")
 	ErrDelete    = errx.New("Ошибка удаления объектов коллекции")

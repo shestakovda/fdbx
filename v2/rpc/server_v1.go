@@ -5,45 +5,48 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2/db"
+	"github.com/shestakovda/fdbx/v2/orm"
 )
 
-func newServerV1(list []*Listener) Server {
+func newServerV1(id uint16) Server {
 	s := v1Server{
-		list: list,
+		data: orm.NewTable(id),
+		list: make([]*endpoint, 0, 16),
 	}
 
 	return &s
 }
 
 type v1Server struct {
-	list []*Listener
+	data orm.Table
+	list []*endpoint
 	wait *sync.WaitGroup
 	exit context.CancelFunc
 }
 
-func (s *v1Server) Run(ctx context.Context, cn db.Connection) (err error) {
+func (s *v1Server) Endpoint(id uint16, hdl TaskHandler, args ...Option) (err error) {
+	end := newEndpoint(id, s.data, hdl, args)
+
+	if err = end.check(); err != nil {
+		return
+	}
+
+	s.list = append(s.list, end)
+	return nil
+}
+
+func (s *v1Server) Run(ctx context.Context, cn db.Connection) {
 	var wctx context.Context
 
 	wctx, s.exit = context.WithCancel(ctx)
 	s.wait = new(sync.WaitGroup)
-
-	// Сначала все проверяем
-	for i := range s.list {
-		if err = s.list[i].check(); err != nil {
-			return
-		}
-	}
-
-	// Затем все запускаем
 	s.wait.Add(len(s.list))
+
 	for i := range s.list {
 		go s.listen(wctx, cn, s.list[i])
 	}
-
-	return nil
 }
 
 func (s *v1Server) Stop() {
@@ -54,14 +57,14 @@ func (s *v1Server) Stop() {
 	s.wait.Wait()
 }
 
-func (s *v1Server) listen(ctx context.Context, cn db.Connection, l *Listener) {
+func (s *v1Server) listen(ctx context.Context, cn db.Connection, end *endpoint) {
 	var err error
 
 	defer func() {
 		// Перезапуск только в случае ошибки
 		if err != nil {
 			// Которая обработана и требует перезапуска
-			if repeat, wait := l.OnListen(err); repeat {
+			if repeat, wait := end.OnListen(err); repeat {
 				// Возможно, не сразу готовы обрабатывать снова
 				if wait > 0 {
 					time.Sleep(wait)
@@ -69,9 +72,8 @@ func (s *v1Server) listen(ctx context.Context, cn db.Connection, l *Listener) {
 
 				// И только если мы вообще можем еще запускать
 				if ctx.Err() == nil {
-					glog.Errorf("=-=-=222 %p", l)
 					// Тогда стартуем заново и в s.wait ничего не ставим
-					go s.listen(ctx, cn, l)
+					go s.listen(ctx, cn, end)
 					return
 				}
 			}
@@ -96,23 +98,21 @@ func (s *v1Server) listen(ctx context.Context, cn db.Connection, l *Listener) {
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	pairs, errs := l.Queue.Sub(wctx, cn, 1)
+	pairs, errs := end.Queue.Sub(wctx, cn, 1)
 
 	for pair := range pairs {
-		glog.Errorf("=-=-= %p", l)
-		glog.Errorf("=-=-= %p", pair)
 		// В случае ошибки при обработке задачи
-		if exp := l.OnTask(pair); exp != nil {
+		if res, exp := end.OnTask(pair); exp != nil {
 			// Обрабатываем ошибку и если нужно, повторяем задачу
-			if repeat, wait := l.OnError(exp); repeat {
+			if repeat, wait := end.OnError(exp); repeat {
 				// Если не смогли повторить - это фиаско
-				if err = l.repeat(cn, pair, wait); err != nil {
+				if err = end.repeat(cn, pair, wait); err != nil {
 					err = ErrListen.WithReason(err)
 					return
 				}
 			}
 		} else {
-			if err = l.ack(cn, pair); err != nil {
+			if err = end.ack(cn, s.data, pair, res); err != nil {
 				err = ErrListen.WithReason(err)
 				return
 			}

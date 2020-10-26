@@ -5,20 +5,18 @@ import "time"
 func newOptions() options {
 	return options{
 		punch:   time.Second,
-		indexes: make(map[byte]IndexKey, 8),
+		indexes: make(map[uint16]IndexKey, 8),
 	}
 }
 
 type options struct {
 	punch   time.Duration
-	indexes map[byte]IndexKey
+	indexes map[uint16]IndexKey
 }
 
-func Index(id byte, f IndexKey) Option {
+func Index(id uint16, f IndexKey) Option {
 	return func(o *options) {
-		if id != nsData && id != nsBLOB {
-			o.indexes[id] = f
-		}
+		o.indexes[id] = f
 	}
 }
 
