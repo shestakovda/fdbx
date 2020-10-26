@@ -5,8 +5,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
+	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
+	"github.com/shestakovda/fdbx/v2/mvcc"
 	"github.com/shestakovda/fdbx/v2/orm"
 )
 
@@ -37,16 +40,18 @@ func (s *v1Server) Endpoint(id uint16, hdl TaskHandler, args ...Option) (err err
 	return nil
 }
 
-func (s *v1Server) Run(ctx context.Context, cn db.Connection) {
+func (s *v1Server) Run(ctx context.Context, cn db.Connection, args ...Option) {
 	var wctx context.Context
 
 	wctx, s.exit = context.WithCancel(ctx)
 	s.wait = new(sync.WaitGroup)
-	s.wait.Add(len(s.list))
+	s.wait.Add(len(s.list) + 1)
 
 	for i := range s.list {
 		go s.listen(wctx, cn, s.list[i])
 	}
+
+	go s.autovacuum(wctx, cn, args)
 }
 
 func (s *v1Server) Stop() {
@@ -112,7 +117,7 @@ func (s *v1Server) listen(ctx context.Context, cn db.Connection, end *endpoint) 
 				}
 			}
 		} else {
-			if err = end.ack(cn, s.data, pair, res); err != nil {
+			if err = end.confirm(cn, s.data, pair, res); err != nil {
 				err = ErrListen.WithReason(err)
 				return
 			}
@@ -126,4 +131,85 @@ func (s *v1Server) listen(ctx context.Context, cn db.Connection, end *endpoint) 
 		}
 	}
 
+}
+
+func (s *v1Server) autovacuum(ctx context.Context, cn db.Connection, args []Option) {
+	var err error
+
+	defer func() {
+		// Перезапуск только в случае ошибки
+		if err != nil {
+			glog.Errorf("%+v", err)
+			time.Sleep(time.Second)
+
+			// И только если мы вообще можем еще запускать
+			if ctx.Err() == nil {
+				// Тогда стартуем заново и в s.wait ничего не ставим
+				go s.autovacuum(ctx, cn, args)
+				return
+			}
+		}
+
+		// В остальных случаях, нечего ловить, закрываем ожидание
+		s.wait.Done()
+	}()
+
+	// Отлавливаем панику и превращаем в ошибку
+	defer func() {
+		if rec := recover(); rec != nil {
+			if e, ok := rec.(error); ok {
+				err = ErrVacuum.WithReason(e)
+			} else {
+				err = ErrVacuum.WithDebug(errx.Debug{"panic": rec})
+			}
+		}
+	}()
+
+	opts := getOpts(args)
+	wkey := mvcc.NewTxKeyManager().Wrap(orm.NewWatchKeyManager(s.data.ID()).Wrap(nil))
+	tick := time.NewTicker(opts.vwait)
+	defer tick.Stop()
+
+	for ctx.Err() == nil {
+
+		if err = cn.Write(func(w db.Writer) (exp error) {
+			var val []byte
+			var key fdbx.Key
+			var when time.Time
+
+			pairs := w.List(wkey, wkey, opts.vpack, false)()
+
+			for i := range pairs {
+				if val, exp = pairs[i].Value(); exp != nil {
+					return
+				}
+
+				if when, exp = fdbx.Byte2Time(val); exp != nil {
+					return
+				}
+				glog.Errorf("%s", when)
+
+				if time.Since(when) < 24*time.Hour {
+					continue
+				}
+
+				if key, exp = pairs[i].Key(); exp != nil {
+					return
+				}
+
+				glog.Errorf("%s - %s", key, when)
+				w.Delete(key)
+			}
+
+			return nil
+		}); err != nil {
+			err = ErrVacuum.WithReason(err)
+		}
+
+		select {
+		case <-tick.C:
+		case <-ctx.Done():
+			return
+		}
+	}
 }

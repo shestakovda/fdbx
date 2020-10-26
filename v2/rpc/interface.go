@@ -30,7 +30,7 @@ func NewServer(id uint16) Server { return newServerV1(id) }
 // Server - глобальная служба, которая слушает задачи по всем очередям и запускает их обработку
 type Server interface {
 	Endpoint(id uint16, hdl TaskHandler, args ...Option) error
-	Run(context.Context, db.Connection)
+	Run(context.Context, db.Connection, ...Option)
 	Stop()
 }
 
@@ -45,6 +45,9 @@ type Client interface {
 // Ошибки модуля
 var (
 	ErrListen      = errx.New("Ошибка обработки очереди")
+	ErrVacuum      = errx.New("Ошибка автоочистки синхронизатора")
 	ErrBadListener = errx.New("Ошибка регистрации обработчика")
 	ErrSyncExec    = errx.New("Ошибка синхронной обработки")
+	ErrConfirm     = errx.New("Ошибка подтверждения обработки")
+	ErrRepeat      = errx.New("Ошибка регистрации повтора обработки")
 )

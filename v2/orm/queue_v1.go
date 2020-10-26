@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/golang/glog"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/mvcc"
@@ -48,8 +47,6 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 		keys[2*i+1] = q.mgr.Wrap(ids[i].LPart(iStat))
 	}
 
-	glog.Errorf("ack %s", keys[0])
-
 	if err = tx.Delete(keys); err != nil {
 		return ErrAck.WithReason(err)
 	}
@@ -68,8 +65,7 @@ func (q v1Queue) Pub(tx mvcc.Tx, when time.Time, ids ...fdbx.Key) (err error) {
 		when = time.Now()
 	}
 
-	delay := make([]byte, 8)
-	binary.BigEndian.PutUint64(delay, uint64(when.UTC().UnixNano()))
+	delay := fdbx.Time2Byte(when)
 
 	// Структура ключа:
 	// db nsUser tb.id q.id qList delay uid = taskID
@@ -170,9 +166,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 	hdlr := func() (exp error) {
 		var tx mvcc.Tx
 
-		now := make([]byte, 8)
-		binary.BigEndian.PutUint64(now, uint64(time.Now().UTC().UnixNano()))
-		to := q.mgr.Wrap(fdbx.Key(now).LPart(qList))
+		to := q.mgr.Wrap(fdbx.Key(fdbx.Time2Byte(time.Now())).LPart(qList))
 
 		if tx, err = mvcc.Begin(cn); err != nil {
 			return ErrSub.WithReason(err)

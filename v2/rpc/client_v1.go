@@ -50,10 +50,13 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte) (val 
 	}
 
 	wkey := mvcc.NewTxKeyManager().Wrap(orm.NewWatchKeyManager(c.data.ID()).Wrap(req))
+	wnow := fdbx.NewPair(wkey, fdbx.Time2Byte(time.Now()))
 	defer func() { c.conn.Write(func(w db.Writer) error { w.Delete(wkey); return nil }) }()
 
-	if err = c.conn.Write(func(w db.Writer) error {
-		w.Increment(wkey, 1)
+	if err = c.conn.Write(func(w db.Writer) (exp error) {
+		if exp = w.Upsert(wnow); exp != nil {
+			return
+		}
 		waiter = w.Watch(wkey)
 		return nil
 	}); err != nil {

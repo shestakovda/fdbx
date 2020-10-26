@@ -7,6 +7,8 @@ import (
 )
 
 func getOpts(args []Option) (o options) {
+	o.vpack = 1000
+	o.vwait = time.Hour
 	o.refresh = time.Second
 	o.onError = defOnError
 	o.onListen = defOnError
@@ -18,15 +20,36 @@ func getOpts(args []Option) (o options) {
 }
 
 type options struct {
-	asRPC    bool
+	asRPC bool
+
 	onError  ErrorHandler
 	onListen ErrorHandler
-	refresh  time.Duration
+
+	refresh time.Duration
+
+	vpack uint64
+	vwait time.Duration
 }
 
 func Sync() Option {
 	return func(o *options) {
 		o.asRPC = true
+	}
+}
+
+func VacuumPack(d int) Option {
+	return func(o *options) {
+		if d > 0 {
+			o.vpack = uint64(d)
+		}
+	}
+}
+
+func VacuumWait(d time.Duration) Option {
+	return func(o *options) {
+		if d > 0 {
+			o.vwait = d
+		}
 	}
 }
 

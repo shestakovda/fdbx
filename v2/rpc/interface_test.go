@@ -11,6 +11,7 @@ import (
 	"github.com/shestakovda/fdbx/v2/mvcc"
 	"github.com/shestakovda/fdbx/v2/orm"
 	"github.com/shestakovda/fdbx/v2/rpc"
+	"github.com/shestakovda/typex"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -60,13 +61,50 @@ func (s *RPCSuite) TestSyncRPC() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	srv.Run(ctx, s.cn)
+	srv.Run(ctx, s.cn, rpc.VacuumWait(20*time.Millisecond))
 
 	if res, err := cli.SyncExec(ctx, TestQueue1, []byte(msg1)); s.NoError(err) {
 		s.Equal(msg2, string(res))
 	}
 
+	// Добавляем левые ключи для теста автовакуума
+
+	wuid := fdbx.Key(typex.NewUUID())
+	wkey := mvcc.NewTxKeyManager().Wrap(orm.NewWatchKeyManager(TestTable).Wrap(wuid))
+	wnow := fdbx.NewPair(wkey, fdbx.Time2Byte(time.Now()))
+
+	wuid2 := fdbx.Key(typex.NewUUID())
+	wkey2 := mvcc.NewTxKeyManager().Wrap(orm.NewWatchKeyManager(TestTable).Wrap(wuid2))
+	wnow2 := fdbx.NewPair(wkey2, fdbx.Time2Byte(time.Now().Add(-36*time.Hour)))
+
+	s.Require().NoError(s.cn.Write(func(w db.Writer) (exp error) {
+		if exp = w.Upsert(wnow); exp != nil {
+			return
+		}
+		if exp = w.Upsert(wnow2); exp != nil {
+			return
+		}
+		return nil
+	}))
+
+	// Ждем, когда вакуум почистит
+	time.Sleep(50 * time.Millisecond)
+
+	// Останавливаем все службы
 	srv.Stop()
+
+	// Проверяем, что старого ключа нет, а новый еще на месте
+	s.Require().NoError(s.cn.Read(func(r db.Reader) (e error) {
+		wnil := mvcc.NewTxKeyManager().Wrap(orm.NewWatchKeyManager(TestTable).Wrap(nil))
+		list := r.List(wnil, wnil, 1000, false)()
+
+		if s.Len(list, 1) {
+			if key, exp := list[0].Key(); s.NoError(exp) {
+				s.Equal(wkey, key)
+			}
+		}
+		return nil
+	}))
 }
 
 func (s *RPCSuite) TestServer() {

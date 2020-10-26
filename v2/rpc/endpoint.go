@@ -56,56 +56,58 @@ func (e endpoint) repeat(cn db.Connection, pair fdbx.Pair, wait time.Duration) (
 	var key fdbx.Key
 
 	if key, err = pair.Key(); err != nil {
-		return
+		return ErrRepeat.WithReason(err)
 	}
 
 	if tx, err = mvcc.Begin(cn); err != nil {
-		return
+		return ErrRepeat.WithReason(err)
 	}
 	defer tx.Cancel()
 
 	if err = e.Queue.Pub(tx, time.Now().Add(wait), key); err != nil {
-		return
+		return ErrRepeat.WithReason(err)
 	}
 
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return ErrRepeat.WithReason(err)
+	}
+
+	return nil
 }
 
-func (e endpoint) ack(cn db.Connection, tbl orm.Table, pair fdbx.Pair, res []byte) (err error) {
+func (e endpoint) confirm(cn db.Connection, tbl orm.Table, pair fdbx.Pair, res []byte) (err error) {
 	var tx mvcc.Tx
 	var key fdbx.Key
 
 	if key, err = pair.Key(); err != nil {
-		return
+		return ErrConfirm.WithReason(err)
 	}
 
 	if tx, err = mvcc.Begin(cn); err != nil {
-		return
+		return ErrConfirm.WithReason(err)
 	}
 	defer tx.Cancel()
 
 	if e.AsRPC {
 		if err = tbl.Upsert(tx, fdbx.NewPair(key.Clone().RSkip(1).RPart(NSResponse), res)); err != nil {
-			return
+			return ErrConfirm.WithReason(err)
 		}
 	}
 
 	if err = e.Queue.Ack(tx, key); err != nil {
-		return
+		return ErrConfirm.WithReason(err)
 	}
 
 	if err = tx.Commit(); err != nil {
-		return
+		return ErrConfirm.WithReason(err)
 	}
 
 	if e.AsRPC {
 		wkey := mvcc.NewTxKeyManager().Wrap(orm.NewWatchKeyManager(tbl.ID()).Wrap(key))
+		wnow := fdbx.NewPair(wkey, fdbx.Time2Byte(time.Now()))
 
-		if err = cn.Write(func(w db.Writer) error {
-			w.Increment(wkey, 1)
-			return nil
-		}); err != nil {
-			return
+		if err = cn.Write(func(w db.Writer) error { return w.Upsert(wnow) }); err != nil {
+			return ErrConfirm.WithReason(err)
 		}
 	}
 

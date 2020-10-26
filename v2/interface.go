@@ -45,6 +45,7 @@ type KeyManager interface {
 }
 
 var (
-	ErrKey   = errx.New("Ошибка загрузки ключа")
-	ErrValue = errx.New("Ошибка загрузки значения")
+	ErrKey       = errx.New("Ошибка загрузки ключа")
+	ErrValue     = errx.New("Ошибка загрузки значения")
+	ErrByte2Time = errx.New("Ошибка преобразования значения во время")
 )
