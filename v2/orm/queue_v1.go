@@ -13,11 +13,12 @@ import (
 )
 
 func NewQueue(id uint16, tb Table, args ...Option) Queue {
+	opts := getOpts(args)
 	q := v1Queue{
 		id:      id,
 		tb:      tb,
-		mgr:     newQueueKeyManager(tb.ID(), id),
-		options: getOpts(args),
+		options: opts,
+		mgr:     newQueueKeyManager(tb.ID(), id, opts.prefix),
 	}
 
 	return &q

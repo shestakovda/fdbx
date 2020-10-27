@@ -88,26 +88,32 @@ func (m indexKeyManager) Unwrapper(k fdbx.Key) (fdbx.Key, error) {
 	return m.Unwrap(k), nil
 }
 
-func newQueueKeyManager(tbl, queue uint16) fdbx.KeyManager {
+func newQueueKeyManager(tbl, queue uint16, prefix []byte) fdbx.KeyManager {
 	m := queueKeyManager{
-		tbl:   tbl,
-		queue: queue,
+		tbl:    tbl,
+		queue:  queue,
+		prefix: prefix,
 	}
 
 	return &m
 }
 
 type queueKeyManager struct {
-	tbl   uint16
-	queue uint16
+	tbl    uint16
+	queue  uint16
+	prefix []byte
 }
 
 func (m queueKeyManager) Wrap(k fdbx.Key) fdbx.Key {
+	if len(m.prefix) > 0 {
+		k = k.LPart(m.prefix...)
+	}
+
 	return k.LPart(byte(m.tbl>>8), byte(m.tbl), nsQueue, byte(m.queue>>8), byte(m.queue))
 }
 
 func (m queueKeyManager) Unwrap(k fdbx.Key) fdbx.Key {
-	return k.LSkip(5 + 1 + 8)
+	return k.LSkip(5 + 1 + 8 + uint16(len(m.prefix)))
 }
 
 func (m queueKeyManager) Wrapper(k fdbx.Key) (fdbx.Key, error) {

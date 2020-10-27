@@ -14,6 +14,7 @@ func getOpts(args []Option) (o options) {
 }
 
 type options struct {
+	prefix  []byte
 	vpack   uint64
 	vwait   time.Duration
 	refresh time.Duration
@@ -50,5 +51,11 @@ func VacuumWait(d time.Duration) Option {
 		if d > 0 {
 			o.vwait = d
 		}
+	}
+}
+
+func Prefix(p []byte) Option {
+	return func(o *options) {
+		o.prefix = p
 	}
 }

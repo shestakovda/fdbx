@@ -244,7 +244,7 @@ func (t v1Table) vacuumStep(cn db.Connection) (err error) {
 	}
 
 	// Отдельно очистка всех очередей
-	if err = tx.Vacuum(newQueueKeyManager(t.id, 0).Wrap(nil).RSkip(2)); err != nil {
+	if err = tx.Vacuum(newQueueKeyManager(t.id, 0, nil).Wrap(nil).RSkip(2)); err != nil {
 		return ErrVacuum.WithReason(err)
 	}
 

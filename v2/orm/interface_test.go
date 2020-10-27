@@ -262,7 +262,7 @@ func (s *ORMSuite) TestQueue() {
 	))
 	s.Require().NoError(s.tx.Commit())
 
-	q := orm.NewQueue(TestQueue, s.tbl, orm.Refresh(10*time.Millisecond))
+	q := orm.NewQueue(TestQueue, s.tbl, orm.Refresh(10*time.Millisecond), orm.Prefix([]byte("lox")))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -384,12 +384,12 @@ func (s *ORMSuite) TestQueue() {
 			}
 
 			s.Equal([]string{
-				"\\x00\\xaa\\xaa\\x03\\xcc\\xcc\\x00trigger",
-				"\\x00\\xaa\\xaa\\x03\\xcc\\xcc\\x00wait",
-				"\\x00\\xaa\\xaa\\x03\\xcc\\xcc\\x00work",
+				"\\x00\\xaa\\xaa\\x03\\xcc\\xcclox\\x00trigger",
+				"\\x00\\xaa\\xaa\\x03\\xcc\\xcclox\\x00wait",
+				"\\x00\\xaa\\xaa\\x03\\xcc\\xcclox\\x00work",
 			}, keys[:3])
-			s.True(strings.HasPrefix(keys[3], "\\x00\\xaa\\xaa\\x03\\xcc\\xcc\\x02id4"))
-			s.True(strings.HasPrefix(keys[4], "\\x00\\xaa\\xaa\\x03\\xcc\\xcc\\x03id4"))
+			s.True(strings.HasPrefix(keys[3], "\\x00\\xaa\\xaa\\x03\\xcc\\xcclox\\x02id4"))
+			s.True(strings.HasPrefix(keys[4], "\\x00\\xaa\\xaa\\x03\\xcc\\xcclox\\x03id4"))
 		} else {
 			for i := range list {
 				if key, err := list[i].Key(); s.NoError(err) {
