@@ -27,7 +27,6 @@ const (
 	qList byte = 1
 	qWork byte = 2
 	qStat byte = 3
-	iStat byte = 4
 )
 
 var gzLimit uint32 = 840
@@ -37,8 +36,8 @@ var zipPool = sync.Pool{New: func() interface{} { return new(bytes.Buffer) }}
 var fbsPool = sync.Pool{New: func() interface{} { return fbs.NewBuilder(128) }}
 
 var qTriggerKey = fdbx.Key("trigger").LPart(qFlag)
-var qTotalWaitKey = fdbx.Key("wait").LPart(qStat)
-var qTotalWorkKey = fdbx.Key("work").LPart(qStat)
+var qTotalWaitKey = fdbx.Key("wait").LPart(qFlag)
+var qTotalWorkKey = fdbx.Key("work").LPart(qFlag)
 
 // usrValWrapper - преобразователь пользовательского значения в системное, для вставки
 func usrValWrapper(tx mvcc.Tx, tbid uint16) fdbx.ValueWrapper {

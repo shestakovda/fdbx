@@ -1,7 +1,7 @@
 package mvcc_test
 
 import (
-	"bytes"
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"runtime"
@@ -299,14 +299,9 @@ func (s *MVCCSuite) TestOnCommit() {
 func (s *MVCCSuite) TestBLOB() {
 	key := fdbx.Key("test blob")
 
-	parts := make([][]byte, 0, 5000000)
-	for {
-		parts = append(parts, typex.NewUUID())
-		if len(parts) > 5000000 { // около 18 Мб
-			break
-		}
-	}
-	msg := bytes.Join(parts, nil)
+	msg := make([]byte, 20<<20)
+	_, err := rand.Read(msg)
+	s.Require().NoError(err)
 
 	// insert and check long msg
 	if err := s.tx.SaveBLOB(key, msg); s.NoError(err) {

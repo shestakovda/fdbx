@@ -2,6 +2,7 @@ package orm_test
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"strings"
 	"sync"
@@ -20,9 +21,9 @@ import (
 )
 
 const TestDB byte = 0x10
-const TestTable uint16 = 1
-const TestIndex uint16 = 2
-const TestQueue uint16 = 3
+const TestTable uint16 = 0xAAAA
+const TestIndex uint16 = 0xBBBB
+const TestQueue uint16 = 0xCCCC
 
 func TestORM(t *testing.T) {
 	suite.Run(t, new(ORMSuite))
@@ -68,31 +69,23 @@ func (s *ORMSuite) TestWorkflow() {
 	var key fdbx.Key
 	var val []byte
 
+	// Обычное значение
+	baseMsg := []byte("message")
+
 	// Чтобы потестить сжатие в gzip
-	baseMsg := "message"
+	longMsg := make([]byte, 20<<10)
+	_, err := rand.Read(longMsg)
+	s.Require().NoError(err)
 
-	parts := make([]string, 0, 200)
-	for {
-		parts = append(parts, typex.NewUUID().String())
-		if len(parts) > 200 { // около 7 кб
-			break
-		}
-	}
-	longMsg := strings.Join(parts, "")
-
-	parts = make([]string, 0, 200000)
-	for {
-		parts = append(parts, typex.NewUUID().String())
-		if len(parts) > 200000 { // около 7 кб
-			break
-		}
-	}
-	hugeMsg := strings.Join(parts, "") // около 7 мб
+	// Чтобы потестить BLOB
+	hugeMsg := make([]byte, 20<<20)
+	_, err = rand.Read(hugeMsg)
+	s.Require().NoError(err)
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdbx.NewPair(fdbx.Key("id1"), []byte(baseMsg)),
-		fdbx.NewPair(fdbx.Key("id2"), []byte(longMsg)),
-		fdbx.NewPair(fdbx.Key("id3"), []byte(hugeMsg)),
+		fdbx.NewPair(fdbx.Key("id1"), baseMsg),
+		fdbx.NewPair(fdbx.Key("id2"), longMsg),
+		fdbx.NewPair(fdbx.Key("id3"), hugeMsg),
 	))
 
 	if list, err := s.tbl.Select(s.tx).All(); s.NoError(err) {
@@ -102,21 +95,21 @@ func (s *ORMSuite) TestWorkflow() {
 			s.Equal("id1", key.String())
 		}
 		if val, err = list[0].Value(); s.NoError(err) {
-			s.Equal(baseMsg, string(val))
+			s.Equal(baseMsg, val)
 		}
 
 		if key, err = list[1].Key(); s.NoError(err) {
 			s.Equal("id2", key.String())
 		}
 		if val, err = list[1].Value(); s.NoError(err) {
-			s.Equal(longMsg, string(val))
+			s.Equal(longMsg, val)
 		}
 
 		if key, err = list[2].Key(); s.NoError(err) {
 			s.Equal("id3", key.String())
 		}
 		if val, err = list[2].Value(); s.NoError(err) {
-			s.Equal(hugeMsg, string(val))
+			s.Equal(hugeMsg, val)
 		}
 	}
 
@@ -130,7 +123,7 @@ func (s *ORMSuite) TestWorkflow() {
 	s.Require().NoError(s.tx.Commit())
 
 	// Запускаем вакуум
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	s.tbl.Autovacuum(ctx, s.cn)
 
@@ -235,9 +228,23 @@ func (s *ORMSuite) TestByID() {
 	s.Require().NoError(s.tx.Commit())
 
 	// Запускаем вакуум
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	s.tbl.Autovacuum(ctx, s.cn)
+
+	// В базе ничего не должно оставаться
+	s.Require().NoError(s.cn.Read(func(r db.Reader) error {
+		list := r.List(fdbx.Key{0x00}, fdbx.Key{0x00}, 1000, false)()
+
+		if !s.Len(list, 0) {
+			for i := range list {
+				if key, err := list[i].Key(); s.NoError(err) {
+					glog.Errorf(">> %s", key)
+				}
+			}
+		}
+		return nil
+	}))
 }
 
 func (s *ORMSuite) TestQueue() {
@@ -264,7 +271,7 @@ func (s *ORMSuite) TestQueue() {
 	go func() {
 		defer wg.Done()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 
 		recc, errc := q.Sub(ctx, s.cn, 1)
@@ -358,9 +365,40 @@ func (s *ORMSuite) TestQueue() {
 	s.Require().NoError(tx.Commit())
 
 	// Запускаем вакуум
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	s.tbl.Autovacuum(ctx, s.cn)
+
+	// Проверим, что осталось в БД
+	s.Require().NoError(s.cn.Read(func(r db.Reader) error {
+		list := r.List(fdbx.Key{0x00}, fdbx.Key{0x00}, 1000, false)()
+
+		// Должно быть 5 значений
+		if s.Len(list, 5) {
+			keys := make([]string, 5)
+
+			for i := range list {
+				if key, err := list[i].Key(); s.NoError(err) {
+					keys[i] = key.String()
+				}
+			}
+
+			s.Equal([]string{
+				"\\x00\\xaa\\xaa\\x03\\xcc\\xcc\\x00trigger",
+				"\\x00\\xaa\\xaa\\x03\\xcc\\xcc\\x00wait",
+				"\\x00\\xaa\\xaa\\x03\\xcc\\xcc\\x00work",
+			}, keys[:3])
+			s.True(strings.HasPrefix(keys[3], "\\x00\\xaa\\xaa\\x03\\xcc\\xcc\\x02id4"))
+			s.True(strings.HasPrefix(keys[4], "\\x00\\xaa\\xaa\\x03\\xcc\\xcc\\x03id4"))
+		} else {
+			for i := range list {
+				if key, err := list[i].Key(); s.NoError(err) {
+					glog.Errorf(">> %s", key)
+				}
+			}
+		}
+		return nil
+	}))
 }
 
 func BenchmarkUpsert(b *testing.B) {
