@@ -71,3 +71,19 @@ func (p pair) Clone() Pair {
 		vc: p.vc,
 	}
 }
+
+func (p pair) Raw() []byte { return p.v }
+
+func (p *pair) Apply() (err error) {
+	if p.k, err = p.Key(); err != nil {
+		return
+	}
+
+	if p.v, err = p.Value(); err != nil {
+		return
+	}
+
+	p.kc = p.kc[:0]
+	p.vc = p.vc[:0]
+	return nil
+}

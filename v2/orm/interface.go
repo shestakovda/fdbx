@@ -25,6 +25,8 @@ type Table interface {
 	Select(mvcc.Tx) Query
 	Upsert(mvcc.Tx, ...fdbx.Pair) error
 	Delete(mvcc.Tx, ...fdbx.Pair) error
+
+	Autovacuum(context.Context, db.Connection, ...Option)
 }
 
 // Queue - универсальный интерфейс очередей, для работы с задачами
@@ -91,4 +93,5 @@ var (
 	ErrIdxUpsert = errx.New("Ошибка обновления индекса")
 	ErrValPack   = errx.New("Ошибка упаковки значения")
 	ErrValUnpack = errx.New("Ошибка распаковки значения")
+	ErrVacuum    = errx.New("Ошибка автоочистки значений")
 )

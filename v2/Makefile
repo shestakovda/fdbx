@@ -21,7 +21,7 @@ test-mvcc: fmt
 	@go test -timeout 30s -coverprofile=./bin/mvcc.cover ./mvcc
 
 test-orm: fmt
-	@go test -timeout 10s -coverprofile=./bin/orm.cover ./orm
+	@go test -timeout 30s -coverprofile=./bin/orm.cover ./orm
 
 test-rpc: fmt
 	@go test -timeout 10s -coverprofile=./bin/rpc.cover ./rpc
@@ -37,8 +37,8 @@ bench-mvcc:
 bench-orm:
 	@go test -bench . -benchtime=3s -benchmem -memprofile=./bin/orm.mem ./orm
 
-cover: test
+cover: test-orm
 # 	@go tool cover -html=./bin/fdbx.cover
 # 	@go tool cover -html=./bin/db.cover
-	@go tool cover -html=./bin/mvcc.cover
+# 	@go tool cover -html=./bin/mvcc.cover
 	@go tool cover -html=./bin/orm.cover

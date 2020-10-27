@@ -12,16 +12,12 @@ import (
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
-func NewQueue(id uint16, tb Table, opts ...Option) Queue {
+func NewQueue(id uint16, tb Table, args ...Option) Queue {
 	q := v1Queue{
 		id:      id,
 		tb:      tb,
 		mgr:     newQueueKeyManager(tb.ID(), id),
-		options: newOptions(),
-	}
-
-	for i := range opts {
-		opts[i](&q.options)
+		options: getOpts(args),
 	}
 
 	return &q
@@ -323,7 +319,7 @@ func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter) (err error) {
 
 	// Даже если waiter установлен, то при отсутствии других публикаций мы тут зависнем навечно.
 	// А задачи, время которых настало, будут просрочены. Для этого нужен особый механизм обработки по таймауту.
-	wctx, cancel := context.WithTimeout(ctx, q.options.punch)
+	wctx, cancel := context.WithTimeout(ctx, q.options.refresh)
 	defer cancel()
 
 	if err = waiter.Resolve(wctx); err != nil {

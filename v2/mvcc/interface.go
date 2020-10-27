@@ -42,16 +42,20 @@ type Tx interface {
 	SeqScan(from, to fdbx.Key, args ...Option) ([]fdbx.Pair, error)
 
 	// Удаление бинарных данных по ключу
-	DropBLOB(fdbx.Key) error
+	// Поддерживает опции Writer
+	DropBLOB(fdbx.Key, ...Option) error
 
 	// Сохранение бинарных данных по ключу
-	SaveBLOB(fdbx.Key, []byte) error
+	SaveBLOB(fdbx.Key, []byte, ...Option) error
 
 	// Загрузка бинарных данных по ключу, указывается ожидаемый размер
-	LoadBLOB(fdbx.Key, int) ([]byte, error)
+	LoadBLOB(fdbx.Key, int, ...Option) ([]byte, error)
 
 	// Регистрация хука для выполнения при завершении транзакции
 	OnCommit(CommitHandler)
+
+	// Запуск очистки устаревших записей ключей по указанному префиксу
+	Vacuum(fdbx.Key, ...Option) (err error)
 }
 
 // Option - дополнительный аргумент при выполнении команды
@@ -79,4 +83,5 @@ var (
 	ErrBLOBDrop = errx.New("Ошибка удаления BLOB")
 	ErrBLOBSave = errx.New("Ошибка сохранения BLOB")
 	ErrWatch    = errx.New("Ошибка отслеживания значения")
+	ErrVacuum   = errx.New("Ошибка автоочистки значений")
 )

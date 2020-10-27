@@ -13,7 +13,7 @@ func newEndpoint(id uint16, tbl orm.Table, hdl TaskHandler, args []Option) *endp
 	opts := getOpts(args)
 
 	e := endpoint{
-		Queue:    orm.NewQueue(id, tbl, orm.PunchTime(opts.refresh)),
+		Queue:    orm.NewQueue(id, tbl, orm.Refresh(opts.refresh)),
 		AsRPC:    opts.asRPC,
 		OnTask:   hdl,
 		OnError:  opts.onError,

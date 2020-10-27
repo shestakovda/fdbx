@@ -204,6 +204,7 @@ func (s *v1Server) autovacuum(ctx context.Context, cn db.Connection, args []Opti
 			return nil
 		}); err != nil {
 			err = ErrVacuum.WithReason(err)
+			return
 		}
 
 		select {

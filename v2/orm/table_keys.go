@@ -30,6 +30,34 @@ func (m tableKeyManager) Unwrapper(k fdbx.Key) (fdbx.Key, error) {
 	return m.Unwrap(k), nil
 }
 
+func newBLOBKeyManager(id uint16) fdbx.KeyManager {
+	m := blobKeyManager{
+		id: id,
+	}
+
+	return &m
+}
+
+type blobKeyManager struct {
+	id uint16
+}
+
+func (m blobKeyManager) Wrap(k fdbx.Key) fdbx.Key {
+	return k.LPart(byte(m.id>>8), byte(m.id), nsBLOB)
+}
+
+func (m blobKeyManager) Unwrap(k fdbx.Key) fdbx.Key {
+	return k.LSkip(3)
+}
+
+func (m blobKeyManager) Wrapper(k fdbx.Key) (fdbx.Key, error) {
+	return m.Wrap(k), nil
+}
+
+func (m blobKeyManager) Unwrapper(k fdbx.Key) (fdbx.Key, error) {
+	return m.Unwrap(k), nil
+}
+
 func newIndexKeyManager(tbl, idx uint16) fdbx.KeyManager {
 	m := indexKeyManager{
 		tbl: tbl,

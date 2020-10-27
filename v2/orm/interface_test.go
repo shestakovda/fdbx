@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -20,8 +21,8 @@ import (
 
 const TestDB byte = 0x10
 const TestTable uint16 = 1
-const TestQueue uint16 = 2
-const TestIndex uint16 = 1
+const TestIndex uint16 = 2
+const TestQueue uint16 = 3
 
 func TestORM(t *testing.T) {
 	suite.Run(t, new(ORMSuite))
@@ -33,6 +34,7 @@ type ORMSuite struct {
 	tx  mvcc.Tx
 	cn  db.Connection
 	tbl orm.Table
+	idx []string
 }
 
 func (s *ORMSuite) SetupTest() {
@@ -45,13 +47,15 @@ func (s *ORMSuite) SetupTest() {
 	s.tx, err = mvcc.Begin(s.cn)
 	s.Require().NoError(err)
 
+	s.idx = make([]string, 0, 8)
 	s.tbl = orm.NewTable(
 		TestTable,
-		orm.Index(TestIndex, func(v []byte) fdbx.Key {
-			if len(v) > 3 {
-				return fdbx.Key(v[:3])
+		orm.Index(TestIndex, func(v []byte) (k fdbx.Key) {
+			if len(v) > 8 {
+				k = fdbx.Key(v[:8])
 			}
-			return nil
+			s.idx = append(s.idx, string(k))
+			return k
 		}),
 	)
 }
@@ -121,6 +125,34 @@ func (s *ORMSuite) TestWorkflow() {
 	if list, err := s.tbl.Select(s.tx).All(); s.NoError(err) {
 		s.Empty(list)
 	}
+
+	// Удаляем строки, чтобы автовакуум их собрал
+	s.Require().NoError(s.tx.Commit())
+
+	// Запускаем вакуум
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s.tbl.Autovacuum(ctx, s.cn)
+
+	// Проверим результаты очистки
+	if s.Len(s.idx, 6) {
+		// Индексы до удаления и после должны быть равны
+		s.Equal(s.idx[:3], s.idx[3:6])
+	}
+
+	// В базе ничего не должно оставаться
+	s.Require().NoError(s.cn.Read(func(r db.Reader) error {
+		list := r.List(fdbx.Key{0x00}, fdbx.Key{0x00}, 1000, false)()
+
+		if !s.Len(list, 0) {
+			for i := range list {
+				if key, err := list[i].Key(); s.NoError(err) {
+					glog.Errorf(">> %s", key)
+				}
+			}
+		}
+		return nil
+	}))
 }
 
 func (s *ORMSuite) TestCount() {
@@ -197,6 +229,15 @@ func (s *ORMSuite) TestByID() {
 			s.Equal("msg2", string(val))
 		}
 	}
+
+	// Удаляем строки, чтобы автовакуум их собрал
+	s.Require().NoError(s.tbl.Select(s.tx).Delete())
+	s.Require().NoError(s.tx.Commit())
+
+	// Запускаем вакуум
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s.tbl.Autovacuum(ctx, s.cn)
 }
 
 func (s *ORMSuite) TestQueue() {
@@ -214,7 +255,7 @@ func (s *ORMSuite) TestQueue() {
 	))
 	s.Require().NoError(s.tx.Commit())
 
-	q := orm.NewQueue(TestQueue, s.tbl, orm.PunchTime(10*time.Millisecond))
+	q := orm.NewQueue(TestQueue, s.tbl, orm.Refresh(10*time.Millisecond))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -308,6 +349,18 @@ func (s *ORMSuite) TestQueue() {
 			s.Len(lost, 0)
 		}
 	}
+	s.Require().NoError(tx.Commit())
+
+	// Удаляем строки, чтобы автовакуум их собрал
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+	s.Require().NoError(s.tbl.Select(tx).Delete())
+	s.Require().NoError(tx.Commit())
+
+	// Запускаем вакуум
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s.tbl.Autovacuum(ctx, s.cn)
 }
 
 func BenchmarkUpsert(b *testing.B) {

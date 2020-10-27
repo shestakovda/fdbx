@@ -2,28 +2,53 @@ package orm
 
 import "time"
 
-func newOptions() options {
-	return options{
-		punch:   time.Second,
-		indexes: make(map[uint16]IndexKey, 8),
+func getOpts(args []Option) (o options) {
+	o.vpack = 1000
+	o.vwait = time.Hour
+	o.refresh = time.Second
+
+	for i := range args {
+		args[i](&o)
 	}
+	return
 }
 
 type options struct {
-	punch   time.Duration
+	vpack   uint64
+	vwait   time.Duration
+	refresh time.Duration
 	indexes map[uint16]IndexKey
 }
 
 func Index(id uint16, f IndexKey) Option {
 	return func(o *options) {
+		if o.indexes == nil {
+			o.indexes = make(map[uint16]IndexKey, 8)
+		}
 		o.indexes[id] = f
 	}
 }
 
-func PunchTime(d time.Duration) Option {
+func Refresh(d time.Duration) Option {
 	return func(o *options) {
 		if d > 0 {
-			o.punch = d
+			o.refresh = d
+		}
+	}
+}
+
+func VacuumPack(d int) Option {
+	return func(o *options) {
+		if d > 0 {
+			o.vpack = uint64(d)
+		}
+	}
+}
+
+func VacuumWait(d time.Duration) Option {
+	return func(o *options) {
+		if d > 0 {
+			o.vwait = d
 		}
 	}
 }

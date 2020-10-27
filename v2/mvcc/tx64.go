@@ -179,7 +179,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 		lg := make([]fdbx.ListGetter, len(pairs))
 
 		for i := range pairs {
-			cp[i] = pairs[i].WrapKey(keyMgr.Wrapper)
+			cp[i] = pairs[i].Clone().WrapKey(keyMgr.Wrapper)
 
 			if ukey, exp = cp[i].Key(); exp != nil {
 				return
@@ -205,7 +205,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 				continue
 			}
 
-			if exp = opts.onInsert(t, cp[i].WrapKey(keyMgr.Unwrapper)); exp != nil {
+			if exp = opts.onInsert(t, pairs[i]); exp != nil {
 				return
 			}
 		}
@@ -340,7 +340,7 @@ func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (_ []fdbx.Pair, err er
 	return list, nil
 }
 
-func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte) (err error) {
+func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte, args ...Option) (err error) {
 	sum := 0
 	tmp := blob
 	num := uint16(0)
@@ -389,7 +389,7 @@ func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte) (err error) {
 	return nil
 }
 
-func (t *tx64) LoadBLOB(key fdbx.Key, size int) (_ []byte, err error) {
+func (t *tx64) LoadBLOB(key fdbx.Key, size int, args ...Option) (_ []byte, err error) {
 	var val []byte
 	var rows []fdbx.Pair
 
@@ -426,14 +426,21 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size int) (_ []byte, err error) {
 	return res, nil
 }
 
-func (t *tx64) DropBLOB(key fdbx.Key) (err error) {
+func (t *tx64) DropBLOB(key fdbx.Key, args ...Option) (err error) {
+	opts := getOpts(args)
 	ukey := keyMgr.Wrap(key)
-	end := ukey.RPart(0xFF, 0xFF)
-
-	if err = t.conn.Write(func(w db.Writer) error {
-		w.Erase(ukey, end)
+	hdlr := func(w db.Writer) error {
+		w.Erase(ukey, ukey)
 		return nil
-	}); err != nil {
+	}
+
+	if opts.writer == nil {
+		err = t.conn.Write(hdlr)
+	} else {
+		err = hdlr(opts.writer)
+	}
+
+	if err != nil {
 		return ErrBLOBDrop.WithReason(err)
 	}
 
@@ -443,14 +450,33 @@ func (t *tx64) DropBLOB(key fdbx.Key) (err error) {
 func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) (_ bool, err error) {
 	var status byte
 
+	if status, err = t.txStatus(local, r, x); err != nil {
+		return
+	}
+
+	return status == txStatusCommitted, nil
+}
+
+func (t *tx64) isAborted(local *txCache, r db.Reader, x uint64) (_ bool, err error) {
+	var status byte
+
+	if status, err = t.txStatus(local, r, x); err != nil {
+		return
+	}
+
+	return status == txStatusAborted, nil
+}
+
+func (t *tx64) txStatus(local *txCache, r db.Reader, x uint64) (status byte, err error) {
+
 	// Дешевле всего чекнуть в глобальном кеше, вдруг уже знаем такую
 	if status = globCache.get(x); status != txStatusUnknown {
-		return status == txStatusCommitted, nil
+		return
 	}
 
 	// Возможно, это открытая транзакция из локального кеша
 	if status = local.get(x); status != txStatusUnknown {
-		return status == txStatusCommitted, nil
+		return
 	}
 
 	// Придется слазать в БД за статусом и положить в кеш
@@ -461,7 +487,7 @@ func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) (_ bool, err e
 	}
 
 	if len(val) == 0 {
-		return false, nil
+		return txStatusUnknown, nil
 	}
 
 	// Получаем значение статуса как часть модели
@@ -474,7 +500,7 @@ func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) (_ bool, err e
 
 	// В локальный кеш можем положить в любом случае, затем вернуть
 	local.set(x, status)
-	return status == txStatusCommitted, nil
+	return status, nil
 }
 
 func (t *tx64) pack() []byte {
@@ -794,4 +820,125 @@ func (t *tx64) txWrapper(key fdbx.Key) (fdbx.Key, error) {
 	var txid [8]byte
 	binary.BigEndian.PutUint64(txid[:], t.txid)
 	return key.RPart(txid[:]...), nil
+}
+
+func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
+
+	opts := getOpts(args)
+	from := keyMgr.Wrap(prefix)
+	to := from.Clone()
+
+	for {
+		if err = t.conn.Write(func(w db.Writer) (exp error) {
+			lg := w.List(from, to, uint64(opts.packSize), false)
+
+			if from, exp = t.vacuumPart(w, lg, opts.onVacuum); exp != nil {
+				return
+			}
+
+			return nil
+		}); err != nil {
+			return ErrVacuum.WithReason(err)
+		}
+
+		// Пустой ключ - значит больше не было строк, условие выхода
+		if from == nil {
+			return nil
+		}
+	}
+}
+
+// vacuumPart - функция обратная fetchAll, в том смысле, что она удаляет все ключи, которые больше не нужны в БД
+func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) (_ fdbx.Key, err error) {
+	var ok bool
+	var val []byte
+	var key fdbx.Key
+	var buf models.RowState
+	var row models.RowStateT
+
+	lc := makeCache()
+	list := lg()
+	drop := make([]fdbx.Pair, 0, len(list))
+
+	// Больше нечего получить - условие выхода
+	if len(list) == 0 {
+		return nil, nil
+	}
+
+	// Проверяем все пары ключ/значение, удаляя все, что может помешать
+	for i := range list {
+		if val, err = list[i].Value(); err != nil {
+			return
+		}
+
+		// Могут попадаться не только значения mvcc, но и произвольные счетчики
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					val = nil
+				}
+			}()
+			models.GetRootAsRow(val, 0).State(&buf).UnPackTo(&row)
+		}()
+
+		if len(val) == 0 {
+			continue
+		}
+
+		// Частный случай - если запись создана в рамках текущей транзакции
+		if row.XMin == t.txid {
+			// Хотя в ряде случаев запись уже можно удалять, но для упрощения логики не будем.
+			// К тому же, это будет транзакция очистки, вряд ли мы вообще сюда когда-то попадем
+			continue
+		}
+
+		// Проверяем статус транзакции, которая создала запись
+		if ok, err = t.isAborted(lc, w, row.XMin); err != nil {
+			return
+		}
+
+		// Удаляем, если запись точно ушла в мусор в самом начале
+		if ok {
+			drop = append(drop, list[i])
+			continue
+		}
+
+		// Если запись еще не удалена, то в любом случае не трогаем
+		// Если она удалена данной транзакцией, то для упрощения тоже пока не трогаем
+		if row.XMax == 0 || row.XMax == t.txid {
+			continue
+		}
+
+		// Проверяем статус транзакции, которая создала запись
+		if ok, err = t.isCommitted(lc, w, row.XMax); err != nil {
+			return
+		}
+
+		// Если запись была удалена другой транзакцией, и она закоммичена, то смело можем удалять
+		if ok {
+			drop = append(drop, list[i])
+		}
+	}
+
+	// Теперь можем грохнуть все, что нашли
+	for i := range drop {
+		if onVacuum != nil {
+			if err = onVacuum(t, drop[i].Clone().WrapKey(keyMgr.Unwrapper).WrapValue(valWrapper), w); err != nil {
+				return
+			}
+		}
+
+		if key, err = drop[i].Key(); err != nil {
+			return
+		}
+
+		w.Delete(key)
+	}
+
+	// Возвращаем последний проверенный ключ, с которого надо начать след. цикл
+	if key, err = list[len(list)-1].Key(); err != nil {
+		return
+	}
+
+	return key.RPart(0x01), nil
 }

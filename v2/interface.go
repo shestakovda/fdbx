@@ -18,10 +18,13 @@ type ValueWrapper func([]byte) ([]byte, error)
 
 // Pair - пара ключ/значение, с возможностью трансформации
 type Pair interface {
+	Raw() []byte
+
 	Key() (Key, error)
 	Value() ([]byte, error)
 
 	Clone() Pair
+	Apply() error
 
 	WrapKey(KeyWrapper) Pair
 	WrapValue(ValueWrapper) Pair

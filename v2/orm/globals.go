@@ -42,6 +42,8 @@ var qTotalWorkKey = fdbx.Key("work").LPart(qStat)
 
 // usrValWrapper - преобразователь пользовательского значения в системное, для вставки
 func usrValWrapper(tx mvcc.Tx, tbid uint16) fdbx.ValueWrapper {
+	mgr := newBLOBKeyManager(tbid)
+
 	return func(v []byte) (_ []byte, err error) {
 		mod := models.ValueT{
 			Blob: false,
@@ -75,9 +77,8 @@ func usrValWrapper(tx mvcc.Tx, tbid uint16) fdbx.ValueWrapper {
 		// Слишком длинное значение, даже после сжатия не влезает в ячейку
 		if mod.Size > loLimit {
 			uid := typex.NewUUID()
-			key := fdbx.Key(uid).LPart(byte(tbid>>8), byte(tbid), nsBLOB)
 
-			if err = tx.SaveBLOB(key, mod.Data); err != nil {
+			if err = tx.SaveBLOB(mgr.Wrap(fdbx.Key(uid)), mod.Data); err != nil {
 				return nil, ErrValPack.WithReason(err)
 			}
 
@@ -96,6 +97,8 @@ func usrValWrapper(tx mvcc.Tx, tbid uint16) fdbx.ValueWrapper {
 
 // sysValWrapper - преобразователь системного значения в пользовательское, для выборки
 func sysValWrapper(tx mvcc.Tx, tbid uint16) fdbx.ValueWrapper {
+	mgr := newBLOBKeyManager(tbid)
+
 	return func(v []byte) (_ []byte, err error) {
 		if len(v) == 0 {
 			return nil, nil
@@ -106,8 +109,7 @@ func sysValWrapper(tx mvcc.Tx, tbid uint16) fdbx.ValueWrapper {
 
 		// Если значение лежит в BLOB, надо достать
 		if mod.Blob {
-			key := fdbx.Key(mod.Data).LPart(byte(tbid>>8), byte(tbid), nsBLOB)
-			if mod.Data, err = tx.LoadBLOB(key, int(mod.Size)); err != nil {
+			if mod.Data, err = tx.LoadBLOB(mgr.Wrap(fdbx.Key(mod.Data)), int(mod.Size)); err != nil {
 				return nil, ErrValUnpack.WithReason(err)
 			}
 			mod.Blob = false
