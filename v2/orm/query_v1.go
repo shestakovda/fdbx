@@ -3,8 +3,12 @@ package orm
 import (
 	"context"
 
+	fbs "github.com/google/flatbuffers/go"
+
 	"github.com/shestakovda/fdbx/v2"
+	"github.com/shestakovda/fdbx/v2/models"
 	"github.com/shestakovda/fdbx/v2/mvcc"
+	"github.com/shestakovda/typex"
 )
 
 func NewQuery(tb Table, tx mvcc.Tx) Query {
@@ -12,24 +16,72 @@ func NewQuery(tb Table, tx mvcc.Tx) Query {
 		tx: tx,
 		tb: tb,
 
+		queryid: typex.NewUUID(),
 		filters: make([]Filter, 0, 8),
-		selOpts: make([]mvcc.Option, 0, 8),
 	}
 	return &q
+}
+
+func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
+	var val []byte
+	var uid typex.UUID
+	var pair fdbx.Pair
+
+	if uid, err = typex.ParseUUID(id); err != nil {
+		return nil, ErrLoadQuery.WithReason(err)
+	}
+
+	q := v1Query{
+		tx: tx,
+		tb: tb,
+
+		queryid: uid,
+		filters: make([]Filter, 0, 8),
+	}
+
+	if pair, err = tx.Select(NewQueryKeyManager(q.tb.ID()).Wrap(fdbx.Key(uid))); err != nil {
+		return nil, ErrLoadQuery.WithReason(err)
+	}
+
+	if val, err = pair.Value(); err != nil {
+		return nil, ErrLoadQuery.WithReason(err)
+	}
+
+	cur := models.GetRootAsCursor(val, 0).UnPack()
+
+	q.reverse = cur.Reverse
+	q.idxtype = cur.IdxType
+	q.iprefix = cur.IPrefix
+	q.lastkey = cur.LastKey
+
+	if q.idxtype > 0 {
+		q.selector = NewIndexSelector(tx, q.idxtype, q.iprefix)
+	} else {
+		q.selector = NewFullSelector(tx)
+	}
+
+	return &q, nil
 }
 
 type v1Query struct {
 	tx mvcc.Tx
 	tb Table
 
+	// Сохраняемые значения (курсор)
+	reverse bool
+	idxtype uint16
+	iprefix fdbx.Key
+	lastkey fdbx.Key
+	queryid typex.UUID
+
+	// Текущие значения
 	limit    int
 	filters  []Filter
-	selOpts  []mvcc.Option
 	selector Selector
 }
 
 func (q *v1Query) Reverse() Query {
-	q.selOpts = append(q.selOpts, mvcc.Reverse())
+	q.reverse = true
 	return q
 }
 
@@ -42,7 +94,7 @@ func (q *v1Query) Limit(lim int) Query {
 
 func (q *v1Query) All() ([]fdbx.Pair, error) {
 	list := make([]fdbx.Pair, 0, 128)
-	pairs, errs := q.filtered(context.Background())
+	pairs, errs := q.Sequence(context.Background())
 
 	for pair := range pairs {
 		list = append(list, pair)
@@ -61,7 +113,7 @@ func (q *v1Query) First() (fdbx.Pair, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pairs, errs := q.filtered(ctx)
+	pairs, errs := q.Sequence(ctx)
 
 	for pair := range pairs {
 		return pair, nil
@@ -80,7 +132,7 @@ func (q *v1Query) Agg(funcs ...Aggregator) (err error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pairs, errs := q.filtered(ctx)
+	pairs, errs := q.Sequence(ctx)
 
 	for pair := range pairs {
 		for i := range funcs {
@@ -124,6 +176,8 @@ func (q *v1Query) PossibleByID(ids ...fdbx.Key) Query {
 }
 
 func (q *v1Query) ByIndex(idx uint16, prefix fdbx.Key) Query {
+	q.idxtype = idx
+	q.iprefix = prefix
 	q.selector = NewIndexSelector(q.tx, idx, prefix)
 	return q
 }
@@ -135,7 +189,7 @@ func (q *v1Query) Where(hdl Filter) Query {
 	return q
 }
 
-func (q *v1Query) filtered(ctx context.Context) (<-chan fdbx.Pair, <-chan error) {
+func (q *v1Query) Sequence(ctx context.Context) (<-chan fdbx.Pair, <-chan error) {
 	list := make(chan fdbx.Pair)
 	errs := make(chan error, 1)
 
@@ -154,14 +208,14 @@ func (q *v1Query) filtered(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 		kwrp := q.tb.Mgr().Unwrapper
 		vwrp := sysValWrapper(q.tx, q.tb.ID())
 		wctx, exit := context.WithCancel(ctx)
-		pairs, errc := q.selector.Select(wctx, q.tb, q.selOpts...)
+		pairs, errc := q.selector.Select(wctx, q.tb, LastKey(q.lastkey), Reverse(q.reverse))
 		defer exit()
 
 		for pair := range pairs {
 			pair = pair.WrapKey(kwrp).WrapValue(vwrp)
 
 			if need, err = q.applyFilters(pair); err != nil {
-				errs <- err
+				errs <- ErrSequence.WithReason(err)
 				return
 			}
 
@@ -173,7 +227,7 @@ func (q *v1Query) filtered(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 			case list <- pair:
 				size++
 			case <-ctx.Done():
-				errs <- ErrSelect.WithReason(ctx.Err())
+				errs <- ErrSequence.WithReason(ctx.Err())
 				return
 			}
 
@@ -184,7 +238,7 @@ func (q *v1Query) filtered(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 
 		for err := range errc {
 			if err != nil {
-				errs <- ErrSelect.WithReason(err)
+				errs <- ErrSequence.WithReason(err)
 				return
 			}
 		}
@@ -193,10 +247,54 @@ func (q *v1Query) filtered(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 	return list, errs
 }
 
+func (q *v1Query) Save() (cid string, err error) {
+	if q.selector == nil {
+		q.selector = NewFullSelector(q.tx)
+	}
+
+	q.lastkey = q.selector.LastKey()
+
+	cur := models.CursorT{
+		Reverse: q.reverse,
+		IdxType: q.idxtype,
+		LastKey: q.lastkey,
+		IPrefix: q.iprefix,
+		QueryID: q.queryid,
+	}
+
+	buf := fbsPool.Get().(*fbs.Builder)
+	buf.Finish(cur.Pack(buf))
+	res := buf.FinishedBytes()
+	buf.Reset()
+	fbsPool.Put(buf)
+
+	pairs := []fdbx.Pair{
+		fdbx.NewPair(NewQueryKeyManager(q.tb.ID()).Wrap(fdbx.Key(q.queryid)), res),
+	}
+
+	if err = q.tx.Upsert(pairs); err != nil {
+		return "", ErrSaveQuery.WithReason(err)
+	}
+
+	return q.queryid.Hex(), nil
+}
+
+func (q *v1Query) Drop() (err error) {
+	keys := []fdbx.Key{
+		NewQueryKeyManager(q.tb.ID()).Wrap(fdbx.Key(q.queryid)),
+	}
+
+	if err = q.tx.Delete(keys); err != nil {
+		return ErrDropQuery.WithReason(err)
+	}
+
+	return nil
+}
+
 func (q *v1Query) applyFilters(pair fdbx.Pair) (need bool, err error) {
 	for i := range q.filters {
 		if need, err = q.filters[i](pair); err != nil {
-			return false, ErrSelect.WithReason(err)
+			return false, ErrFilter.WithReason(err)
 		}
 
 		if !need {

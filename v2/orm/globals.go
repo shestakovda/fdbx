@@ -20,6 +20,7 @@ const (
 	nsIndex byte = 2
 	nsQueue byte = 3
 	nsWatch byte = 4
+	nsQuery byte = 5
 )
 
 const (

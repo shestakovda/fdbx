@@ -40,6 +40,8 @@ func (t v1Table) Mgr() fdbx.KeyManager { return t.mgr }
 
 func (t v1Table) Select(tx mvcc.Tx) Query { return NewQuery(&t, tx) }
 
+func (t v1Table) Cursor(tx mvcc.Tx, id string) (Query, error) { return loadQuery(&t, tx, id) }
+
 func (t v1Table) Upsert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
 	if len(pairs) == 0 {
 		return nil
@@ -113,7 +115,7 @@ func (t v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 			return ErrIdxUpsert.WithReason(err)
 		}
 
-		ups[0] = fdbx.NewPair(t.idx[idx].Wrap(tmp), key)
+		ups[0] = fdbx.NewPair(t.idx[idx].Wrap(tmp), t.mgr.Unwrap(key))
 		if err = tx.Upsert(ups[:]); err != nil {
 			return ErrIdxUpsert.WithReason(err).WithDebug(errx.Debug{"idx": idx})
 		}
@@ -250,6 +252,11 @@ func (t v1Table) vacuumStep(cn db.Connection) (err error) {
 
 	// Отдельно очистка всех блобов
 	if err = tx.Vacuum(newBLOBKeyManager(t.id).Wrap(nil)); err != nil {
+		return ErrVacuum.WithReason(err)
+	}
+
+	// Отдельно очистка всех курсоров
+	if err = tx.Vacuum(NewQueryKeyManager(t.id).Wrap(nil)); err != nil {
 		return ErrVacuum.WithReason(err)
 	}
 

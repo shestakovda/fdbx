@@ -28,3 +28,11 @@ table Value {
     Hash:uint64;
     Data:[uint8];
 }
+
+table Cursor {
+    Reverse:bool;
+    IdxType:uint16;
+    LastKey:[uint8];
+    IPrefix:[uint8];
+    QueryID:[uint8];
+}

@@ -23,6 +23,7 @@ type Table interface {
 	Mgr() fdbx.KeyManager
 
 	Select(mvcc.Tx) Query
+	Cursor(mvcc.Tx, string) (Query, error)
 	Upsert(mvcc.Tx, ...fdbx.Pair) error
 	Delete(mvcc.Tx, ...fdbx.Pair) error
 
@@ -66,11 +67,16 @@ type Query interface {
 	Delete() error
 
 	Agg(...Aggregator) error
+
+	Drop() error
+	Save() (string, error)
+	Sequence(context.Context) (<-chan fdbx.Pair, <-chan error)
 }
 
 // Selector - поставщик сырых данных для запроса
 type Selector interface {
-	Select(context.Context, Table, ...mvcc.Option) (<-chan fdbx.Pair, <-chan error)
+	LastKey() fdbx.Key
+	Select(context.Context, Table, ...Option) (<-chan fdbx.Pair, <-chan error)
 }
 
 // IndexKey - для получения ключа при индексации коллекций
@@ -92,6 +98,7 @@ var (
 	ErrSelect    = errx.New("Ошибка загрузки объектов коллекции")
 	ErrDelete    = errx.New("Ошибка удаления объектов коллекции")
 	ErrUpsert    = errx.New("Ошибка обновления объектов коллекции")
+	ErrFilter    = errx.New("Ошибка фильтрации объектов коллекции")
 	ErrNotFound  = errx.New("Ошибка загрузки объекта")
 	ErrIdxDelete = errx.New("Ошибка очистки индекса")
 	ErrIdxUpsert = errx.New("Ошибка обновления индекса")
@@ -100,4 +107,8 @@ var (
 	ErrVacuum    = errx.New("Ошибка автоочистки значений")
 	ErrAll       = errx.New("Ошибка загрузки всех значений")
 	ErrFirst     = errx.New("Ошибка загрузки первого значения")
+	ErrSequence  = errx.New("Ошибка загрузки коллекции")
+	ErrLoadQuery = errx.New("Ошибка загрузки курсора запроса")
+	ErrDropQuery = errx.New("Ошибка удаления курсора запроса")
+	ErrSaveQuery = errx.New("Ошибка сохранения курсора запроса")
 )

@@ -9,20 +9,22 @@ import (
 
 func NewIndexSelector(tx mvcc.Tx, idx uint16, prefix fdbx.Key) Selector {
 	s := indexSelector{
-		tx:     tx,
 		idx:    idx,
 		prefix: prefix,
+
+		baseSelector: newBaseSelector(tx),
 	}
 	return &s
 }
 
 type indexSelector struct {
-	tx     mvcc.Tx
+	*baseSelector
+
 	idx    uint16
 	prefix fdbx.Key
 }
 
-func (s indexSelector) Select(ctx context.Context, tbl Table, args ...mvcc.Option) (<-chan fdbx.Pair, <-chan error) {
+func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-chan fdbx.Pair, <-chan error) {
 	list := make(chan fdbx.Pair)
 	errs := make(chan error, 1)
 
@@ -34,11 +36,31 @@ func (s indexSelector) Select(ctx context.Context, tbl Table, args ...mvcc.Optio
 		defer close(list)
 		defer close(errs)
 
+		opts := getOpts(args)
 		kwrp := tbl.Mgr().Wrap
-		ikey := newIndexKeyManager(tbl.ID(), s.idx).Wrap(nil)
-		pairs, errc := s.tx.SeqScan(ctx, append(args, mvcc.From(ikey))...)
+		imgr := newIndexKeyManager(tbl.ID(), s.idx)
+		lkey := imgr.Wrap(opts.lastkey)
+		reqs := make([]mvcc.Option, 0, 3)
+		skip := opts.lastkey != nil
+
+		if opts.reverse {
+			reqs = append(reqs, mvcc.Reverse(), mvcc.From(imgr.Wrap(nil)), mvcc.To(lkey))
+		} else {
+			reqs = append(reqs, mvcc.From(lkey), mvcc.To(imgr.Wrap(nil)))
+		}
+
+		wctx, exit := context.WithCancel(ctx)
+		pairs, errc := s.tx.SeqScan(wctx, reqs...)
+		defer exit()
 
 		for item := range pairs {
+			// В случае реверса из середины интервала нужно пропускать первое значение (b)
+			// Потому что драйвер выбирает отрезок (a, b] и у нас нет возможности уменьшить b
+			if skip {
+				skip = false
+				continue
+			}
+
 			if val, err = item.Value(); err != nil {
 				errs <- ErrSelect.WithReason(err)
 				return
@@ -49,10 +71,13 @@ func (s indexSelector) Select(ctx context.Context, tbl Table, args ...mvcc.Optio
 				return
 			}
 
-			select {
-			case list <- pair:
-			case <-ctx.Done():
-				errs <- ErrSelect.WithReason(ctx.Err())
+			if err = s.sendPair(wctx, list, pair); err != nil {
+				errs <- err
+				return
+			}
+
+			if s.lk, err = item.WrapKey(imgr.Unwrapper).Key(); err != nil {
+				errs <- ErrSelect.WithReason(err)
 				return
 			}
 		}

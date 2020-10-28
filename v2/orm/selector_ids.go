@@ -10,20 +10,22 @@ import (
 
 func NewIDsSelector(tx mvcc.Tx, ids []fdbx.Key, strict bool) Selector {
 	s := idsSelector{
-		tx:     tx,
 		ids:    ids,
 		strict: strict,
+
+		baseSelector: newBaseSelector(tx),
 	}
 	return &s
 }
 
 type idsSelector struct {
-	tx     mvcc.Tx
+	*baseSelector
+
 	ids    []fdbx.Key
 	strict bool
 }
 
-func (s idsSelector) Select(ctx context.Context, tbl Table, args ...mvcc.Option) (<-chan fdbx.Pair, <-chan error) {
+func (s *idsSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-chan fdbx.Pair, <-chan error) {
 	list := make(chan fdbx.Pair)
 	errs := make(chan error, 1)
 
@@ -34,17 +36,19 @@ func (s idsSelector) Select(ctx context.Context, tbl Table, args ...mvcc.Option)
 		defer close(list)
 		defer close(errs)
 
+		opts := getOpts(args)
 		kwrp := tbl.Mgr().Wrap
+		rids := s.reversed(s.ids, opts.reverse)
 
-		for i := range s.ids {
-			if pair, err = s.tx.Select(kwrp(s.ids[i])); err != nil {
+		for i := range rids {
+			if pair, err = s.tx.Select(kwrp(rids[i])); err != nil {
 				if errx.Is(err, mvcc.ErrNotFound) {
 					if !s.strict {
 						continue
 					}
 
 					err = ErrNotFound.WithReason(err).WithDebug(errx.Debug{
-						"id": s.ids[i].String(),
+						"id": rids[i].String(),
 					})
 				}
 
@@ -52,14 +56,21 @@ func (s idsSelector) Select(ctx context.Context, tbl Table, args ...mvcc.Option)
 				return
 			}
 
-			select {
-			case list <- pair:
-			case <-ctx.Done():
-				errs <- ErrSelect.WithReason(ctx.Err())
+			if err = s.sendPair(ctx, list, pair); err != nil {
+				errs <- err
 				return
 			}
 		}
 	}()
 
 	return list, errs
+}
+
+func (s idsSelector) reversed(a []fdbx.Key, rev bool) []fdbx.Key {
+	if rev {
+		for left, right := 0, len(a)-1; left < right; left, right = left+1, right-1 {
+			a[left], a[right] = a[right], a[left]
+		}
+	}
+	return a
 }

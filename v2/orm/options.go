@@ -1,6 +1,10 @@
 package orm
 
-import "time"
+import (
+	"time"
+
+	"github.com/shestakovda/fdbx/v2"
+)
 
 func getOpts(args []Option) (o options) {
 	o.vpack = 1000
@@ -14,8 +18,9 @@ func getOpts(args []Option) (o options) {
 }
 
 type options struct {
-	reverse bool
 	prefix  []byte
+	reverse bool
+	lastkey fdbx.Key
 	vpack   uint64
 	vwait   time.Duration
 	refresh time.Duration
@@ -61,8 +66,14 @@ func Prefix(p []byte) Option {
 	}
 }
 
-func Reverse() Option {
+func Reverse(r bool) Option {
 	return func(o *options) {
-		o.reverse = true
+		o.reverse = r
+	}
+}
+
+func LastKey(k fdbx.Key) Option {
+	return func(o *options) {
+		o.lastkey = k
 	}
 }

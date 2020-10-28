@@ -10,11 +10,6 @@ func getOpts(args []Option) (o options) {
 		args[i](&o)
 	}
 
-	// Особая логика - для выборки в рамках значения
-	if o.from != nil && o.to == nil {
-		o.to = o.from
-	}
-
 	return
 }
 

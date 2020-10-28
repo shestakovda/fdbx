@@ -52,8 +52,8 @@ func (s *ORMSuite) SetupTest() {
 	s.tbl = orm.NewTable(
 		TestTable,
 		orm.Index(TestIndex, func(v []byte) (k fdbx.Key) {
-			if len(v) > 8 {
-				k = fdbx.Key(v[:8])
+			if len(v) >= 4 {
+				k = fdbx.Key(v[:4])
 			}
 			s.idx = append(s.idx, string(k))
 			return k
@@ -70,7 +70,7 @@ func (s *ORMSuite) TestWorkflow() {
 	var val []byte
 
 	// Обычное значение
-	baseMsg := []byte("message")
+	baseMsg := []byte("msg")
 
 	// Чтобы потестить сжатие в gzip
 	longMsg := make([]byte, 20<<10)
@@ -471,7 +471,219 @@ func (s *ORMSuite) TestWhereLimit() {
 			s.Equal("msg3 false", string(val))
 		}
 	}
+}
 
+func (s *ORMSuite) TestCursor() {
+	const recCount = 3
+
+	id1 := fdbx.Key("id1")
+	id2 := fdbx.Key("id2")
+	id3 := fdbx.Key("id3")
+	id4 := fdbx.Key("id4")
+	id5 := fdbx.Key("id5")
+	id6 := fdbx.Key("id6")
+
+	s.Require().NoError(s.tbl.Upsert(s.tx,
+		fdbx.NewPair(id1, []byte("msg1")),
+		fdbx.NewPair(id2, []byte("msg2")),
+		fdbx.NewPair(id3, []byte("msg3")),
+		fdbx.NewPair(id4, []byte("msg4")),
+		fdbx.NewPair(id5, []byte("msg5")),
+		fdbx.NewPair(id6, []byte("msg6")),
+	))
+	s.Require().NoError(s.tx.Commit())
+
+	// Проверка курсора по индексу прямо
+
+	tx, err := mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+
+	query := s.tbl.Select(tx).ByIndex(TestIndex, fdbx.Key("msg"))
+
+	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+		if key, err := list[0].Key(); s.NoError(err) {
+			s.Equal("id1", key.String())
+		}
+		if val, err := list[0].Value(); s.NoError(err) {
+			s.Equal("msg1", string(val))
+		}
+
+		if key, err := list[1].Key(); s.NoError(err) {
+			s.Equal("id2", key.String())
+		}
+		if val, err := list[1].Value(); s.NoError(err) {
+			s.Equal("msg2", string(val))
+		}
+	}
+
+	qid, err := query.Save()
+	s.Require().NoError(err)
+	s.Require().NoError(tx.Commit())
+
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+
+	query, err = s.tbl.Cursor(tx, qid)
+	s.Require().NoError(err)
+
+	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+		if key, err := list[0].Key(); s.NoError(err) {
+			s.Equal("id3", key.String())
+		}
+		if val, err := list[0].Value(); s.NoError(err) {
+			s.Equal("msg3", string(val))
+		}
+
+		if key, err := list[1].Key(); s.NoError(err) {
+			s.Equal("id4", key.String())
+		}
+		if val, err := list[1].Value(); s.NoError(err) {
+			s.Equal("msg4", string(val))
+		}
+	}
+
+	// Проверка курсора по индексу с реверсом
+
+	query = s.tbl.Select(tx).ByIndex(TestIndex, fdbx.Key("msg")).Reverse()
+
+	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+		if key, err := list[0].Key(); s.NoError(err) {
+			s.Equal("id6", key.String())
+		}
+		if val, err := list[0].Value(); s.NoError(err) {
+			s.Equal("msg6", string(val))
+		}
+
+		if key, err := list[1].Key(); s.NoError(err) {
+			s.Equal("id5", key.String())
+		}
+		if val, err := list[1].Value(); s.NoError(err) {
+			s.Equal("msg5", string(val))
+		}
+	}
+
+	qid, err = query.Save()
+	s.Require().NoError(err)
+	s.Require().NoError(tx.Commit())
+
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+
+	query, err = s.tbl.Cursor(tx, qid)
+	s.Require().NoError(err)
+
+	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+		if key, err := list[0].Key(); s.NoError(err) {
+			s.Equal("id4", key.String())
+		}
+		if val, err := list[0].Value(); s.NoError(err) {
+			s.Equal("msg4", string(val))
+		}
+
+		if key, err := list[1].Key(); s.NoError(err) {
+			s.Equal("id3", key.String())
+		}
+		if val, err := list[1].Value(); s.NoError(err) {
+			s.Equal("msg3", string(val))
+		}
+	}
+
+	// Проверка курсора по коллекции прямо
+
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+
+	query = s.tbl.Select(tx)
+
+	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+		if key, err := list[0].Key(); s.NoError(err) {
+			s.Equal("id1", key.String())
+		}
+		if val, err := list[0].Value(); s.NoError(err) {
+			s.Equal("msg1", string(val))
+		}
+
+		if key, err := list[1].Key(); s.NoError(err) {
+			s.Equal("id2", key.String())
+		}
+		if val, err := list[1].Value(); s.NoError(err) {
+			s.Equal("msg2", string(val))
+		}
+	}
+
+	qid, err = query.Save()
+	s.Require().NoError(err)
+	s.Require().NoError(tx.Commit())
+
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+
+	query, err = s.tbl.Cursor(tx, qid)
+	s.Require().NoError(err)
+
+	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+		if key, err := list[0].Key(); s.NoError(err) {
+			s.Equal("id3", key.String())
+		}
+		if val, err := list[0].Value(); s.NoError(err) {
+			s.Equal("msg3", string(val))
+		}
+
+		if key, err := list[1].Key(); s.NoError(err) {
+			s.Equal("id4", key.String())
+		}
+		if val, err := list[1].Value(); s.NoError(err) {
+			s.Equal("msg4", string(val))
+		}
+	}
+
+	// Проверка курсора по коллекции с реверсом
+
+	query = s.tbl.Select(tx).Reverse()
+
+	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+		if key, err := list[0].Key(); s.NoError(err) {
+			s.Equal("id6", key.String())
+		}
+		if val, err := list[0].Value(); s.NoError(err) {
+			s.Equal("msg6", string(val))
+		}
+
+		if key, err := list[1].Key(); s.NoError(err) {
+			s.Equal("id5", key.String())
+		}
+		if val, err := list[1].Value(); s.NoError(err) {
+			s.Equal("msg5", string(val))
+		}
+	}
+
+	qid, err = query.Save()
+	s.Require().NoError(err)
+	s.Require().NoError(tx.Commit())
+
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+
+	query, err = s.tbl.Cursor(tx, qid)
+	s.Require().NoError(err)
+
+	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+		if key, err := list[0].Key(); s.NoError(err) {
+			s.Equal("id4", key.String())
+		}
+		if val, err := list[0].Value(); s.NoError(err) {
+			s.Equal("msg4", string(val))
+		}
+
+		if key, err := list[1].Key(); s.NoError(err) {
+			s.Equal("id3", key.String())
+		}
+		if val, err := list[1].Value(); s.NoError(err) {
+			s.Equal("msg3", string(val))
+		}
+	}
+
+	s.Require().NoError(tx.Commit())
 }
 
 func BenchmarkUpsert(b *testing.B) {

@@ -151,3 +151,31 @@ func (m watchKeyManager) Wrapper(k fdbx.Key) (fdbx.Key, error) {
 func (m watchKeyManager) Unwrapper(k fdbx.Key) (fdbx.Key, error) {
 	return m.Unwrap(k), nil
 }
+
+func NewQueryKeyManager(id uint16) fdbx.KeyManager {
+	m := queryKeyManager{
+		id: id,
+	}
+
+	return &m
+}
+
+type queryKeyManager struct {
+	id uint16
+}
+
+func (m queryKeyManager) Wrap(k fdbx.Key) fdbx.Key {
+	return k.LPart(byte(m.id>>8), byte(m.id), nsQuery)
+}
+
+func (m queryKeyManager) Unwrap(k fdbx.Key) fdbx.Key {
+	return k.LSkip(3)
+}
+
+func (m queryKeyManager) Wrapper(k fdbx.Key) (fdbx.Key, error) {
+	return m.Wrap(k), nil
+}
+
+func (m queryKeyManager) Unwrapper(k fdbx.Key) (fdbx.Key, error) {
+	return m.Unwrap(k), nil
+}
