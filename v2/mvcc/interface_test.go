@@ -317,7 +317,7 @@ func (s *MVCCSuite) TestBLOB() {
 	}
 }
 
-func (s *MVCCSuite) TestSeqScan() {
+func (s *MVCCSuite) TestListAll() {
 	key1 := fdbx.Key("key1")
 	key2 := fdbx.Key("key2")
 	key3 := fdbx.Key("key3")
@@ -343,11 +343,11 @@ func (s *MVCCSuite) TestSeqScan() {
 		fdbx.NewPair(key7, val7),
 	}))
 
-	if list, err := s.tx.SeqScan(nil, nil); s.NoError(err) {
+	if list, err := s.tx.ListAll(nil, nil); s.NoError(err) {
 		s.Len(list, 7)
 	}
 
-	if list, err := s.tx.SeqScan(key2, key6); s.NoError(err) {
+	if list, err := s.tx.ListAll(key2, key6); s.NoError(err) {
 		s.Len(list, 5)
 	}
 	s.Require().NoError(s.tx.Commit())
@@ -379,7 +379,7 @@ func (s *MVCCSuite) TestSeqScan() {
 	s.Require().NoError(err)
 
 	s.Require().NoError(s.cn.Write(func(w db.Writer) error {
-		if list, err := tx2.SeqScan(
+		if list, err := tx2.ListAll(
 			key2, nil,
 			mvcc.Limit(3),
 			mvcc.PackSize(2),

@@ -1,6 +1,7 @@
 package mvcc
 
 import (
+	"context"
 	"encoding/binary"
 	"sync/atomic"
 	"time"
@@ -255,89 +256,165 @@ func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
 	return res, nil
 }
 
-func (t *tx64) SeqScan(from, to fdbx.Key, args ...Option) (_ []fdbx.Pair, err error) {
-	var part, list []fdbx.Pair
+func (t *tx64) ListAll(start, finish fdbx.Key, args ...Option) (_ []fdbx.Pair, err error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	size := 0
-	opts := getOpts(args)
-	opid := atomic.AddUint32(&t.opid, 1)
-	hdlr := func(r db.Reader) (exp error) {
-		var ok bool
-		var w db.Writer
-		var key fdbx.Key
+	list := make([]fdbx.Pair, 0, 128)
+	parts, errc := t.seqScan(ctx, start, finish, args...)
 
-		if part, exp = t.fetchAll(r, nil, opid, r.List(from, to, uint64(opts.packSize), false)); exp != nil {
+	for part := range parts {
+		list = append(list, part...)
+	}
+
+	for err = range errc {
+		if err != nil {
 			return
 		}
+	}
 
-		if opts.lock {
-			if w, ok = r.(db.Writer); ok {
-				w.Lock(from, to)
-			}
-		}
+	return list, nil
+}
 
-		if len(part) == 0 {
-			return nil
-		}
+func (t *tx64) SeqScan(ctx context.Context, start, finish fdbx.Key, args ...Option) (<-chan fdbx.Pair, <-chan error) {
+	list := make(chan fdbx.Pair)
+	errs := make(chan error, 1)
 
-		cnt := len(part)
+	go func() {
+		defer close(list)
+		defer close(errs)
 
-		if opts.limit > 0 && (size+cnt) > opts.limit {
-			cnt = opts.limit - size
-		}
+		parts, errc := t.seqScan(ctx, start, finish, args...)
 
-		part = part[:cnt]
-
-		for i := range part {
-			part[i] = part[i].WrapKey(keyMgr.Unwrapper).WrapValue(valWrapper)
-
-			if opts.onLock != nil {
-				if exp = opts.onLock(t, part[i].Clone(), w); exp != nil {
+		for part := range parts {
+			for i := range part {
+				select {
+				case list <- part[i]:
+				case <-ctx.Done():
+					errs <- ErrSeqScan.WithReason(ctx.Err())
 					return
 				}
 			}
 		}
 
-		size += len(part)
-
-		if key, exp = part[len(part)-1].Key(); exp != nil {
-			return
-		}
-
-		from = keyMgr.Wrap(key).RPart(0x01)
-		return nil
-	}
-
-	from = keyMgr.Wrap(from)
-	to = keyMgr.Wrap(to)
-
-	for {
-		if opts.lock {
-			if opts.writer == nil {
-				err = t.conn.Write(func(w db.Writer) error { return hdlr(w) })
-			} else {
-				err = hdlr(opts.writer)
+		for err := range errc {
+			if err != nil {
+				errs <- err
+				return
 			}
-		} else {
-			err = t.conn.Read(hdlr)
+		}
+	}()
+
+	return list, errs
+}
+
+func (t *tx64) seqScan(ctx context.Context, start, finish fdbx.Key, args ...Option) (<-chan []fdbx.Pair, <-chan error) {
+	list := make(chan []fdbx.Pair)
+	errs := make(chan error, 1)
+
+	go func() {
+		var err error
+		var part []fdbx.Pair
+
+		defer close(list)
+		defer close(errs)
+
+		size := 0
+		opts := getOpts(args)
+		from := keyMgr.Wrap(start)
+		last := keyMgr.Wrap(finish)
+		opid := atomic.AddUint32(&t.opid, 1)
+		hdlr := func(r db.Reader) (exp error) {
+			part, from, exp = t.selectPart(r, from, last, size, opid, &opts)
+			size += len(part)
+			return exp
 		}
 
-		if err != nil {
-			return nil, ErrSeqScan.WithReason(err)
+		for {
+			if opts.lock {
+				if opts.writer == nil {
+					err = t.conn.Write(func(w db.Writer) error { return hdlr(w) })
+				} else {
+					err = hdlr(opts.writer)
+				}
+			} else {
+				err = t.conn.Read(hdlr)
+			}
+
+			if err != nil {
+				errs <- ErrSeqScan.WithReason(err)
+				return
+			}
+
+			if len(part) == 0 {
+				return
+			}
+
+			select {
+			case list <- part:
+				size += len(part)
+			case <-ctx.Done():
+				errs <- ErrSeqScan.WithReason(ctx.Err())
+				return
+			}
+
+			if opts.limit > 0 && size >= opts.limit {
+				return
+			}
 		}
+	}()
 
-		if len(part) == 0 {
-			break
-		}
+	return list, errs
+}
 
-		list = append(list, part...)
+func (t *tx64) selectPart(
+	r db.Reader,
+	from, to fdbx.Key,
+	size int,
+	opid uint32,
+	opts *options,
+) (part []fdbx.Pair, last fdbx.Key, err error) {
+	var ok bool
+	var w db.Writer
+	var key fdbx.Key
 
-		if opts.limit > 0 && len(list) >= opts.limit {
-			break
+	if part, err = t.fetchAll(r, nil, opid, r.List(from, to, uint64(opts.packSize), false)); err != nil {
+		return
+	}
+
+	if len(part) == 0 {
+		return nil, from, nil
+	}
+
+	if opts.lock {
+		if w, ok = r.(db.Writer); ok {
+			w.Lock(from, to)
 		}
 	}
 
-	return list, nil
+	cnt := len(part)
+
+	if opts.limit > 0 && (size+cnt) > opts.limit {
+		cnt = opts.limit - size
+	}
+
+	part = part[:cnt]
+
+	if key, err = part[cnt-1].Key(); err != nil {
+		return
+	}
+
+	for i := range part {
+		part[i] = part[i].WrapKey(keyMgr.Unwrapper).WrapValue(valWrapper)
+
+		if opts.onLock != nil {
+			if err = opts.onLock(t, part[i].Clone(), w); err != nil {
+				return
+			}
+		}
+	}
+
+	return part, key.RPart(0x01), nil
 }
 
 func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte, args ...Option) (err error) {

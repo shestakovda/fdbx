@@ -1,6 +1,8 @@
 package orm
 
 import (
+	"context"
+
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
@@ -23,34 +25,59 @@ type v1Query struct {
 	filters []Filter
 }
 
-func (q *v1Query) All() ([]fdbx.Pair, error) { return q.filtered() }
+func (q *v1Query) All() ([]fdbx.Pair, error) {
+	list := make([]fdbx.Pair, 0, 128)
+	pairs, errs := q.filtered(context.Background())
 
-func (q *v1Query) First() (_ fdbx.Pair, err error) {
-	var list []fdbx.Pair
-
-	if list, err = q.filtered(); err != nil {
-		return
+	for pair := range pairs {
+		list = append(list, pair)
 	}
 
-	if len(list) == 0 {
-		return nil, nil
+	for err := range errs {
+		if err != nil {
+			return nil, ErrAll.WithReason(err)
+		}
 	}
 
-	return list[0], nil
+	return list, nil
+}
+
+func (q *v1Query) First() (fdbx.Pair, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pairs, errs := q.filtered(ctx)
+
+	for pair := range pairs {
+		return pair, nil
+	}
+
+	for err := range errs {
+		if err != nil {
+			return nil, ErrFirst.WithReason(err)
+		}
+	}
+
+	return nil, nil
 }
 
 func (q *v1Query) Agg(funcs ...AggFunc) (err error) {
-	var list []fdbx.Pair
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	if list, err = q.filtered(); err != nil {
-		return
-	}
+	pairs, errs := q.filtered(ctx)
 
-	for i := range funcs {
-		for j := range list {
-			if err = funcs[i](list[j]); err != nil {
+	for pair := range pairs {
+		for i := range funcs {
+			if err = funcs[i](pair); err != nil {
 				return ErrAgg.WithReason(err)
 			}
+		}
+	}
+
+	for err = range errs {
+		if err != nil {
+			return ErrAgg.WithReason(err)
 		}
 	}
 
@@ -60,8 +87,8 @@ func (q *v1Query) Agg(funcs ...AggFunc) (err error) {
 func (q *v1Query) Delete() (err error) {
 	var list []fdbx.Pair
 
-	if list, err = q.filtered(); err != nil {
-		return
+	if list, err = q.All(); err != nil {
+		return ErrDelete.WithReason(err)
 	}
 
 	if err = q.tb.Delete(q.tx, list...); err != nil {
@@ -81,43 +108,59 @@ func (q *v1Query) PossibleByID(ids ...fdbx.Key) Query {
 	return q
 }
 
-func (q *v1Query) filtered() (res []fdbx.Pair, err error) {
-	var skip bool
-	var list []fdbx.Pair
+func (q *v1Query) ByIndex(idx uint16, prefix fdbx.Key) Query {
+	q.search = NewIndexSelector(q.tx, idx, prefix)
+	return q
+}
+
+func (q *v1Query) filtered(ctx context.Context) (<-chan fdbx.Pair, <-chan error) {
+	list := make(chan fdbx.Pair)
+	errs := make(chan error, 1)
 
 	if q.search == nil {
 		q.search = NewFullSelector(q.tx)
 	}
 
-	if list, err = q.search.Select(q.tb); err != nil {
-		return
-	}
+	go func() {
+		var err error
+		var skip bool
 
-	res = list[:0]
+		defer close(list)
+		defer close(errs)
 
-	for i := range list {
-		need := true
+		kwrp := q.tb.Mgr().Unwrapper
+		vwrp := sysValWrapper(q.tx, q.tb.ID())
+		pairs, errc := q.search.Select(ctx, q.tb)
 
-		for j := range q.filters {
-			if skip, err = q.filters[j].Skip(list[i]); err != nil {
-				return nil, ErrSelect.WithReason(err)
+	Recs:
+		for pair := range pairs {
+
+			for j := range q.filters {
+				if skip, err = q.filters[j].Skip(pair); err != nil {
+					errs <- ErrSelect.WithReason(err)
+					return
+				}
+
+				if skip {
+					continue Recs
+				}
 			}
 
-			if skip {
-				need = false
-				break
+			select {
+			case list <- pair.WrapKey(kwrp).WrapValue(vwrp):
+			case <-ctx.Done():
+				errs <- ErrSelect.WithReason(ctx.Err())
+				return
 			}
 		}
 
-		if need {
-			res = append(res, list[i])
+		for err := range errc {
+			if err != nil {
+				errs <- ErrSelect.WithReason(err)
+				return
+			}
 		}
-	}
+	}()
 
-	// Стираем хвост, чтобы сборщик мусора пришел за ним
-	for i := len(res); i < len(list); i++ {
-		list[i] = nil
-	}
-
-	return res, nil
+	return list, errs
 }

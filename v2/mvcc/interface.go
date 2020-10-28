@@ -1,6 +1,8 @@
 package mvcc
 
 import (
+	"context"
+
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -39,7 +41,11 @@ type Tx interface {
 
 	// Последовательная выборка всех активных ключей в диапазоне
 	// Поддерживает опции Writer, Limit, PackSize, Exclusive
-	SeqScan(from, to fdbx.Key, args ...Option) ([]fdbx.Pair, error)
+	ListAll(start, finish fdbx.Key, args ...Option) ([]fdbx.Pair, error)
+
+	// Последовательная выборка всех активных ключей в диапазоне
+	// Поддерживает опции Writer, Limit, PackSize, Exclusive
+	SeqScan(ctx context.Context, start, finish fdbx.Key, args ...Option) (<-chan fdbx.Pair, <-chan error)
 
 	// Удаление бинарных данных по ключу
 	// Поддерживает опции Writer

@@ -61,7 +61,7 @@ type Query interface {
 
 // Selector - поставщик сырых данных для запроса
 type Selector interface {
-	Select(Table) ([]fdbx.Pair, error)
+	Select(context.Context, Table) (<-chan fdbx.Pair, <-chan error)
 }
 
 // Filter - управляющий объект для фильтрации выборок
@@ -94,4 +94,6 @@ var (
 	ErrValPack   = errx.New("Ошибка упаковки значения")
 	ErrValUnpack = errx.New("Ошибка распаковки значения")
 	ErrVacuum    = errx.New("Ошибка автоочистки значений")
+	ErrAll       = errx.New("Ошибка загрузки всех значений")
+	ErrFirst     = errx.New("Ошибка загрузки первого значения")
 )

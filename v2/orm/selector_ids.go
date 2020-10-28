@@ -1,6 +1,8 @@
 package orm
 
 import (
+	"context"
+
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/mvcc"
@@ -21,30 +23,43 @@ type idsSelector struct {
 	strict bool
 }
 
-func (s idsSelector) Select(tbl Table) (list []fdbx.Pair, err error) {
-	var pair fdbx.Pair
+func (s idsSelector) Select(ctx context.Context, tbl Table) (<-chan fdbx.Pair, <-chan error) {
+	list := make(chan fdbx.Pair)
+	errs := make(chan error, 1)
 
-	mgr := tbl.Mgr()
-	wrp := sysValWrapper(s.tx, tbl.ID())
-	list = make([]fdbx.Pair, 0, len(s.ids))
+	go func() {
+		var err error
+		var pair fdbx.Pair
 
-	for i := range s.ids {
-		if pair, err = s.tx.Select(mgr.Wrap(s.ids[i])); err != nil {
-			if errx.Is(err, mvcc.ErrNotFound) {
-				if !s.strict {
-					continue
+		defer close(list)
+		defer close(errs)
+
+		kwrp := tbl.Mgr().Wrap
+
+		for i := range s.ids {
+			if pair, err = s.tx.Select(kwrp(s.ids[i])); err != nil {
+				if errx.Is(err, mvcc.ErrNotFound) {
+					if !s.strict {
+						continue
+					}
+
+					err = ErrNotFound.WithReason(err).WithDebug(errx.Debug{
+						"id": s.ids[i].String(),
+					})
 				}
 
-				err = ErrNotFound.WithReason(err).WithDebug(errx.Debug{
-					"id": s.ids[i].String(),
-				})
+				errs <- ErrSelect.WithReason(err)
+				return
 			}
 
-			return nil, ErrSelect.WithReason(err)
+			select {
+			case list <- pair:
+			case <-ctx.Done():
+				errs <- ErrSelect.WithReason(ctx.Err())
+				return
+			}
 		}
+	}()
 
-		list = append(list, pair.WrapKey(mgr.Unwrapper).WrapValue(wrp))
-	}
-
-	return list, nil
+	return list, errs
 }
