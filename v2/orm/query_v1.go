@@ -21,8 +21,16 @@ type v1Query struct {
 	tx mvcc.Tx
 	tb Table
 
+	limit   int
 	search  Selector
 	filters []Filter
+}
+
+func (q *v1Query) Limit(lim int) Query {
+	if lim > 0 {
+		q.limit = lim
+	}
+	return q
 }
 
 func (q *v1Query) All() ([]fdbx.Pair, error) {
@@ -61,7 +69,7 @@ func (q *v1Query) First() (fdbx.Pair, error) {
 	return nil, nil
 }
 
-func (q *v1Query) Agg(funcs ...AggFunc) (err error) {
+func (q *v1Query) Agg(funcs ...Aggregator) (err error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -113,6 +121,13 @@ func (q *v1Query) ByIndex(idx uint16, prefix fdbx.Key) Query {
 	return q
 }
 
+func (q *v1Query) Where(hdl Filter) Query {
+	if hdl != nil {
+		q.filters = append(q.filters, hdl)
+	}
+	return q
+}
+
 func (q *v1Query) filtered(ctx context.Context) (<-chan fdbx.Pair, <-chan error) {
 	list := make(chan fdbx.Pair)
 	errs := make(chan error, 1)
@@ -123,33 +138,39 @@ func (q *v1Query) filtered(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 
 	go func() {
 		var err error
-		var skip bool
+		var need bool
 
 		defer close(list)
 		defer close(errs)
 
+		size := 0
 		kwrp := q.tb.Mgr().Unwrapper
 		vwrp := sysValWrapper(q.tx, q.tb.ID())
-		pairs, errc := q.search.Select(ctx, q.tb)
+		wctx, exit := context.WithCancel(ctx)
+		pairs, errc := q.search.Select(wctx, q.tb)
+		defer exit()
 
-	Recs:
 		for pair := range pairs {
+			pair = pair.WrapKey(kwrp).WrapValue(vwrp)
 
-			for j := range q.filters {
-				if skip, err = q.filters[j].Skip(pair); err != nil {
-					errs <- ErrSelect.WithReason(err)
-					return
-				}
+			if need, err = q.applyFilters(pair); err != nil {
+				errs <- err
+				return
+			}
 
-				if skip {
-					continue Recs
-				}
+			if !need {
+				continue
 			}
 
 			select {
-			case list <- pair.WrapKey(kwrp).WrapValue(vwrp):
+			case list <- pair:
+				size++
 			case <-ctx.Done():
 				errs <- ErrSelect.WithReason(ctx.Err())
+				return
+			}
+
+			if q.limit > 0 && size >= q.limit {
 				return
 			}
 		}
@@ -163,4 +184,18 @@ func (q *v1Query) filtered(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 	}()
 
 	return list, errs
+}
+
+func (q *v1Query) applyFilters(pair fdbx.Pair) (need bool, err error) {
+	for i := range q.filters {
+		if need, err = q.filters[i](pair); err != nil {
+			return false, ErrSelect.WithReason(err)
+		}
+
+		if !need {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }

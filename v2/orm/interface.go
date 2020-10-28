@@ -44,29 +44,32 @@ type Queue interface {
 	Status(mvcc.Tx, ...fdbx.Key) (map[string]byte, error)
 }
 
-// AggFunc - описание функции-агрегатора для запросов
-type AggFunc func(fdbx.Pair) error
+// Aggregator - описание функции-агрегатора для запросов
+type Aggregator func(fdbx.Pair) error
+
+// Filter - управляющий метод для фильтрации выборок
+// Должен возвращать true, если объект нужно оставить и false в другом случае
+type Filter func(fdbx.Pair) (ok bool, err error)
 
 // Query - универсальный интерфейс объекта запроса данных, основная логика
 type Query interface {
 	ByID(ids ...fdbx.Key) Query
 	PossibleByID(ids ...fdbx.Key) Query
+	ByIndex(idx uint16, query fdbx.Key) Query
+
+	Limit(int) Query
+	Where(Filter) Query
 
 	All() ([]fdbx.Pair, error)
 	First() (fdbx.Pair, error)
 	Delete() error
 
-	Agg(...AggFunc) error
+	Agg(...Aggregator) error
 }
 
 // Selector - поставщик сырых данных для запроса
 type Selector interface {
 	Select(context.Context, Table) (<-chan fdbx.Pair, <-chan error)
-}
-
-// Filter - управляющий объект для фильтрации выборок
-type Filter interface {
-	Skip(fdbx.Pair) (bool, error)
 }
 
 // IndexKey - для получения ключа при индексации коллекций
