@@ -178,7 +178,9 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 			txmgr := mvcc.NewTxKeyManager()
 
 			if pairs, e = tx.ListAll(
-				from, to, mvcc.Limit(pack),
+				mvcc.To(to),
+				mvcc.From(from),
+				mvcc.Limit(pack),
 				mvcc.Exclusive(q.onTaskWork),
 				mvcc.Writer(w),
 			); e != nil {
@@ -243,7 +245,7 @@ func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []fdbx.Pair, err error) {
 	key := q.mgr.Wrap(fdbx.Key{qWork})
 
 	// Значения в этих парах - айдишки элементов коллекции
-	if pairs, err = tx.ListAll(key, key, mvcc.Limit(pack)); err != nil {
+	if pairs, err = tx.ListAll(mvcc.From(key), mvcc.Limit(pack)); err != nil {
 		return nil, ErrLost.WithReason(err)
 	}
 

@@ -256,12 +256,12 @@ func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
 	return res, nil
 }
 
-func (t *tx64) ListAll(start, finish fdbx.Key, args ...Option) (_ []fdbx.Pair, err error) {
+func (t *tx64) ListAll(args ...Option) (_ []fdbx.Pair, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	list := make([]fdbx.Pair, 0, 128)
-	parts, errc := t.seqScan(ctx, start, finish, args...)
+	parts, errc := t.seqScan(ctx, args...)
 
 	for part := range parts {
 		list = append(list, part...)
@@ -276,7 +276,7 @@ func (t *tx64) ListAll(start, finish fdbx.Key, args ...Option) (_ []fdbx.Pair, e
 	return list, nil
 }
 
-func (t *tx64) SeqScan(ctx context.Context, start, finish fdbx.Key, args ...Option) (<-chan fdbx.Pair, <-chan error) {
+func (t *tx64) SeqScan(ctx context.Context, args ...Option) (<-chan fdbx.Pair, <-chan error) {
 	list := make(chan fdbx.Pair)
 	errs := make(chan error, 1)
 
@@ -284,7 +284,7 @@ func (t *tx64) SeqScan(ctx context.Context, start, finish fdbx.Key, args ...Opti
 		defer close(list)
 		defer close(errs)
 
-		parts, errc := t.seqScan(ctx, start, finish, args...)
+		parts, errc := t.seqScan(ctx, args...)
 
 		for part := range parts {
 			for i := range part {
@@ -308,7 +308,7 @@ func (t *tx64) SeqScan(ctx context.Context, start, finish fdbx.Key, args ...Opti
 	return list, errs
 }
 
-func (t *tx64) seqScan(ctx context.Context, start, finish fdbx.Key, args ...Option) (<-chan []fdbx.Pair, <-chan error) {
+func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair, <-chan error) {
 	list := make(chan []fdbx.Pair)
 	errs := make(chan error, 1)
 
@@ -321,8 +321,8 @@ func (t *tx64) seqScan(ctx context.Context, start, finish fdbx.Key, args ...Opti
 
 		size := 0
 		opts := getOpts(args)
-		from := keyMgr.Wrap(start)
-		last := keyMgr.Wrap(finish)
+		from := keyMgr.Wrap(opts.from)
+		last := keyMgr.Wrap(opts.to)
 		opid := atomic.AddUint32(&t.opid, 1)
 		hdlr := func(r db.Reader) (exp error) {
 			if opts.reverse {
@@ -382,7 +382,7 @@ func (t *tx64) selectPart(
 	var w db.Writer
 	var key fdbx.Key
 
-	if part, err = t.fetchAll(r, nil, opid, r.List(from, to, uint64(opts.packSize), opts.reverse)); err != nil {
+	if part, err = t.fetchAll(r, nil, opid, r.List(from, to, MaxRowCount, opts.reverse)); err != nil {
 		return
 	}
 
@@ -433,7 +433,7 @@ func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte, args ...Option) (err error) {
 	sum := 0
 	tmp := blob
 	num := uint16(0)
-	prs := make([]fdbx.Pair, 0, txLimit/loLimit+1)
+	prs := make([]fdbx.Pair, 0, MaxRowMem/MaxRowSize+1)
 	wrp := func(k fdbx.Key) (fdbx.Key, error) {
 		return k.RPart(byte(num>>8), byte(num)), nil
 	}
@@ -450,17 +450,17 @@ func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte, args ...Option) (err error) {
 
 	// Разбиваем на элементарные значения, пишем пачками по 10 мб
 	for {
-		if len(tmp) > loLimit {
-			prs = append(prs, fdbx.NewPair(key, tmp[:loLimit]))
-			tmp = tmp[loLimit:]
-			sum += loLimit
+		if len(tmp) > MaxRowSize {
+			prs = append(prs, fdbx.NewPair(key, tmp[:MaxRowSize]))
+			tmp = tmp[MaxRowSize:]
+			sum += MaxRowSize
 		} else {
 			prs = append(prs, fdbx.NewPair(key, tmp))
 			sum += len(tmp)
 			break
 		}
 
-		if sum >= txLimit-loLimit {
+		if sum >= MaxRowMem-MaxRowSize {
 			if err = t.conn.Write(set); err != nil {
 				return ErrBLOBSave.WithReason(err)
 			}

@@ -36,7 +36,7 @@ func (s indexSelector) Select(ctx context.Context, tbl Table, args ...mvcc.Optio
 
 		kwrp := tbl.Mgr().Wrap
 		ikey := newIndexKeyManager(tbl.ID(), s.idx).Wrap(nil)
-		pairs, errc := s.tx.SeqScan(ctx, ikey, ikey, args...)
+		pairs, errc := s.tx.SeqScan(ctx, append(args, mvcc.From(ikey))...)
 
 		for item := range pairs {
 			if val, err = item.Value(); err != nil {

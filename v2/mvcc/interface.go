@@ -40,12 +40,12 @@ type Tx interface {
 	Upsert([]fdbx.Pair, ...Option) error
 
 	// Последовательная выборка всех активных ключей в диапазоне
-	// Поддерживает опции Writer, Limit, PackSize, Exclusive
-	ListAll(start, finish fdbx.Key, args ...Option) ([]fdbx.Pair, error)
+	// Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
+	ListAll(...Option) ([]fdbx.Pair, error)
 
 	// Последовательная выборка всех активных ключей в диапазоне
-	// Поддерживает опции Writer, Limit, PackSize, Exclusive
-	SeqScan(ctx context.Context, start, finish fdbx.Key, args ...Option) (<-chan fdbx.Pair, <-chan error)
+	// Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
+	SeqScan(ctx context.Context, args ...Option) (<-chan fdbx.Pair, <-chan error)
 
 	// Удаление бинарных данных по ключу
 	// Поддерживает опции Writer

@@ -343,11 +343,11 @@ func (s *MVCCSuite) TestListAll() {
 		fdbx.NewPair(key7, val7),
 	}))
 
-	if list, err := s.tx.ListAll(nil, nil); s.NoError(err) {
+	if list, err := s.tx.ListAll(); s.NoError(err) {
 		s.Len(list, 7)
 	}
 
-	if list, err := s.tx.ListAll(key2, key6); s.NoError(err) {
+	if list, err := s.tx.ListAll(mvcc.From(key2), mvcc.To(key6)); s.NoError(err) {
 		s.Len(list, 5)
 	}
 	s.Require().NoError(s.tx.Commit())
@@ -380,9 +380,8 @@ func (s *MVCCSuite) TestListAll() {
 
 	s.Require().NoError(s.cn.Write(func(w db.Writer) error {
 		if list, err := tx2.ListAll(
-			key2, nil,
+			mvcc.From(key2),
 			mvcc.Limit(3),
-			mvcc.PackSize(2),
 			mvcc.Writer(w),
 			mvcc.Exclusive(hdlr),
 		); s.NoError(err) {
@@ -392,9 +391,8 @@ func (s *MVCCSuite) TestListAll() {
 
 		vals = make([]string, 0, 2)
 		if list, err := tx2.ListAll(
-			key2, nil,
+			mvcc.From(key2),
 			mvcc.Limit(3),
-			mvcc.PackSize(2),
 			mvcc.Writer(w),
 			mvcc.Exclusive(hdlr),
 			mvcc.Reverse(),
