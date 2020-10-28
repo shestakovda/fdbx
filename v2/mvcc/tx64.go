@@ -325,7 +325,11 @@ func (t *tx64) seqScan(ctx context.Context, start, finish fdbx.Key, args ...Opti
 		last := keyMgr.Wrap(finish)
 		opid := atomic.AddUint32(&t.opid, 1)
 		hdlr := func(r db.Reader) (exp error) {
-			part, from, exp = t.selectPart(r, from, last, size, opid, &opts)
+			if opts.reverse {
+				part, last, exp = t.selectPart(r, from, last, size, opid, &opts)
+			} else {
+				part, from, exp = t.selectPart(r, from, last, size, opid, &opts)
+			}
 			size += len(part)
 			return exp
 		}
@@ -378,7 +382,7 @@ func (t *tx64) selectPart(
 	var w db.Writer
 	var key fdbx.Key
 
-	if part, err = t.fetchAll(r, nil, opid, r.List(from, to, uint64(opts.packSize), false)); err != nil {
+	if part, err = t.fetchAll(r, nil, opid, r.List(from, to, uint64(opts.packSize), opts.reverse)); err != nil {
 		return
 	}
 
@@ -400,8 +404,16 @@ func (t *tx64) selectPart(
 
 	part = part[:cnt]
 
-	if key, err = part[cnt-1].Key(); err != nil {
-		return
+	if opts.reverse {
+		if key, err = part[0].Key(); err != nil {
+			return
+		}
+		last = key
+	} else {
+		if key, err = part[cnt-1].Key(); err != nil {
+			return
+		}
+		last = key.RPart(0x01)
 	}
 
 	for i := range part {
@@ -414,7 +426,7 @@ func (t *tx64) selectPart(
 		}
 	}
 
-	return part, key.RPart(0x01), nil
+	return part, last, nil
 }
 
 func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte, args ...Option) (err error) {

@@ -14,6 +14,7 @@ func getOpts(args []Option) (o options) {
 }
 
 type options struct {
+	reverse bool
 	prefix  []byte
 	vpack   uint64
 	vwait   time.Duration
@@ -57,5 +58,11 @@ func VacuumWait(d time.Duration) Option {
 func Prefix(p []byte) Option {
 	return func(o *options) {
 		o.prefix = p
+	}
+}
+
+func Reverse() Option {
+	return func(o *options) {
+		o.reverse = true
 	}
 }

@@ -12,6 +12,7 @@ func getOpts(args []Option) (o options) {
 
 type options struct {
 	lock     bool
+	reverse  bool
 	limit    int
 	packSize int
 	onDelete Handler
@@ -22,6 +23,7 @@ type options struct {
 }
 
 func Limit(l int) Option              { return func(o *options) { o.limit = l } }
+func Reverse() Option                 { return func(o *options) { o.reverse = true } }
 func Writer(w db.Writer) Option       { return func(o *options) { o.writer = w } }
 func PackSize(s int) Option           { return func(o *options) { o.packSize = s } }
 func OnDelete(hdl Handler) Option     { return func(o *options) { o.onDelete = hdl } }

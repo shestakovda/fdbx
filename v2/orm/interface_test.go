@@ -415,8 +415,8 @@ func (s *ORMSuite) TestWhereLimit() {
 		fdbx.NewPair(id1, []byte("msg1 true")),
 		fdbx.NewPair(id2, []byte("txt2 false")),
 		fdbx.NewPair(id3, []byte("msg3 false")),
-		fdbx.NewPair(id4, []byte("txt4 true")),
-		fdbx.NewPair(id5, []byte("msg5 false")),
+		fdbx.NewPair(id4, []byte("msg4 true")),
+		fdbx.NewPair(id5, []byte("txt5 false")),
 		fdbx.NewPair(id6, []byte("txt6 true")),
 	))
 
@@ -437,26 +437,10 @@ func (s *ORMSuite) TestWhereLimit() {
 			return
 		}
 
-		return strings.HasPrefix(string(val), "txt"), nil
+		return strings.HasPrefix(string(val), "msg"), nil
 	}
 
 	if list, err := s.tbl.Select(s.tx).Where(f1).Where(f2).All(); s.NoError(err) && s.Len(list, 2) {
-		if key, err := list[0].Key(); s.NoError(err) {
-			s.Equal("id4", key.String())
-		}
-		if val, err := list[0].Value(); s.NoError(err) {
-			s.Equal("txt4 true", string(val))
-		}
-
-		if key, err := list[1].Key(); s.NoError(err) {
-			s.Equal("id6", key.String())
-		}
-		if val, err := list[1].Value(); s.NoError(err) {
-			s.Equal("txt6 true", string(val))
-		}
-	}
-
-	if list, err := s.tbl.Select(s.tx).Where(f1).Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
 		if key, err := list[0].Key(); s.NoError(err) {
 			s.Equal("id1", key.String())
 		}
@@ -468,7 +452,23 @@ func (s *ORMSuite) TestWhereLimit() {
 			s.Equal("id4", key.String())
 		}
 		if val, err := list[1].Value(); s.NoError(err) {
-			s.Equal("txt4 true", string(val))
+			s.Equal("msg4 true", string(val))
+		}
+	}
+
+	if list, err := s.tbl.Select(s.tx).Where(f2).Limit(2).Reverse().All(); s.NoError(err) && s.Len(list, 2) {
+		if key, err := list[0].Key(); s.NoError(err) {
+			s.Equal("id4", key.String())
+		}
+		if val, err := list[0].Value(); s.NoError(err) {
+			s.Equal("msg4 true", string(val))
+		}
+
+		if key, err := list[1].Key(); s.NoError(err) {
+			s.Equal("id3", key.String())
+		}
+		if val, err := list[1].Value(); s.NoError(err) {
+			s.Equal("msg3 false", string(val))
 		}
 	}
 

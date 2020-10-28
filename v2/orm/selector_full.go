@@ -18,7 +18,7 @@ type fullSelector struct {
 	tx mvcc.Tx
 }
 
-func (s fullSelector) Select(ctx context.Context, tbl Table) (<-chan fdbx.Pair, <-chan error) {
+func (s fullSelector) Select(ctx context.Context, tbl Table, args ...mvcc.Option) (<-chan fdbx.Pair, <-chan error) {
 	key := tbl.Mgr().Wrap(nil)
-	return s.tx.SeqScan(ctx, key, key)
+	return s.tx.SeqScan(ctx, key, key, args...)
 }

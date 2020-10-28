@@ -390,6 +390,19 @@ func (s *MVCCSuite) TestListAll() {
 			s.Equal([]string{"val2", "val4", "val6"}, vals)
 		}
 
+		vals = make([]string, 0, 2)
+		if list, err := tx2.ListAll(
+			key2, nil,
+			mvcc.Limit(3),
+			mvcc.PackSize(2),
+			mvcc.Writer(w),
+			mvcc.Exclusive(hdlr),
+			mvcc.Reverse(),
+		); s.NoError(err) {
+			s.Len(list, 3)
+			s.Equal([]string{"val7", "val6", "val4"}, vals)
+		}
+
 		return nil
 	}))
 	s.Require().NoError(tx.Cancel())

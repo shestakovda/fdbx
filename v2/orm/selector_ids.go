@@ -23,7 +23,7 @@ type idsSelector struct {
 	strict bool
 }
 
-func (s idsSelector) Select(ctx context.Context, tbl Table) (<-chan fdbx.Pair, <-chan error) {
+func (s idsSelector) Select(ctx context.Context, tbl Table, args ...mvcc.Option) (<-chan fdbx.Pair, <-chan error) {
 	list := make(chan fdbx.Pair)
 	errs := make(chan error, 1)
 

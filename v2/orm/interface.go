@@ -57,6 +57,7 @@ type Query interface {
 	PossibleByID(ids ...fdbx.Key) Query
 	ByIndex(idx uint16, query fdbx.Key) Query
 
+	Reverse() Query
 	Limit(int) Query
 	Where(Filter) Query
 
@@ -69,7 +70,7 @@ type Query interface {
 
 // Selector - поставщик сырых данных для запроса
 type Selector interface {
-	Select(context.Context, Table) (<-chan fdbx.Pair, <-chan error)
+	Select(context.Context, Table, ...mvcc.Option) (<-chan fdbx.Pair, <-chan error)
 }
 
 // IndexKey - для получения ключа при индексации коллекций

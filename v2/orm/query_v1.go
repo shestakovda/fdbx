@@ -13,6 +13,7 @@ func NewQuery(tb Table, tx mvcc.Tx) Query {
 		tb: tb,
 
 		filters: make([]Filter, 0, 8),
+		selOpts: make([]mvcc.Option, 0, 8),
 	}
 	return &q
 }
@@ -21,9 +22,15 @@ type v1Query struct {
 	tx mvcc.Tx
 	tb Table
 
-	limit   int
-	search  Selector
-	filters []Filter
+	limit    int
+	filters  []Filter
+	selOpts  []mvcc.Option
+	selector Selector
+}
+
+func (q *v1Query) Reverse() Query {
+	q.selOpts = append(q.selOpts, mvcc.Reverse())
+	return q
 }
 
 func (q *v1Query) Limit(lim int) Query {
@@ -107,17 +114,17 @@ func (q *v1Query) Delete() (err error) {
 }
 
 func (q *v1Query) ByID(ids ...fdbx.Key) Query {
-	q.search = NewIDsSelector(q.tx, ids, true)
+	q.selector = NewIDsSelector(q.tx, ids, true)
 	return q
 }
 
 func (q *v1Query) PossibleByID(ids ...fdbx.Key) Query {
-	q.search = NewIDsSelector(q.tx, ids, false)
+	q.selector = NewIDsSelector(q.tx, ids, false)
 	return q
 }
 
 func (q *v1Query) ByIndex(idx uint16, prefix fdbx.Key) Query {
-	q.search = NewIndexSelector(q.tx, idx, prefix)
+	q.selector = NewIndexSelector(q.tx, idx, prefix)
 	return q
 }
 
@@ -132,8 +139,8 @@ func (q *v1Query) filtered(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 	list := make(chan fdbx.Pair)
 	errs := make(chan error, 1)
 
-	if q.search == nil {
-		q.search = NewFullSelector(q.tx)
+	if q.selector == nil {
+		q.selector = NewFullSelector(q.tx)
 	}
 
 	go func() {
@@ -147,7 +154,7 @@ func (q *v1Query) filtered(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 		kwrp := q.tb.Mgr().Unwrapper
 		vwrp := sysValWrapper(q.tx, q.tb.ID())
 		wctx, exit := context.WithCancel(ctx)
-		pairs, errc := q.search.Select(wctx, q.tb)
+		pairs, errc := q.selector.Select(wctx, q.tb, q.selOpts...)
 		defer exit()
 
 		for pair := range pairs {

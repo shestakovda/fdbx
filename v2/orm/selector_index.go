@@ -22,7 +22,7 @@ type indexSelector struct {
 	prefix fdbx.Key
 }
 
-func (s indexSelector) Select(ctx context.Context, tbl Table) (<-chan fdbx.Pair, <-chan error) {
+func (s indexSelector) Select(ctx context.Context, tbl Table, args ...mvcc.Option) (<-chan fdbx.Pair, <-chan error) {
 	list := make(chan fdbx.Pair)
 	errs := make(chan error, 1)
 
@@ -36,7 +36,7 @@ func (s indexSelector) Select(ctx context.Context, tbl Table) (<-chan fdbx.Pair,
 
 		kwrp := tbl.Mgr().Wrap
 		ikey := newIndexKeyManager(tbl.ID(), s.idx).Wrap(nil)
-		pairs, errc := s.tx.SeqScan(ctx, ikey, ikey)
+		pairs, errc := s.tx.SeqScan(ctx, ikey, ikey, args...)
 
 		for item := range pairs {
 			if val, err = item.Value(); err != nil {
