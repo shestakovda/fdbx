@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/shestakovda/fdbx/v2"
+	"github.com/shestakovda/fdbx/v2/models"
 )
 
 func getOpts(args []Option) (o options) {
@@ -20,10 +21,14 @@ func getOpts(args []Option) (o options) {
 type options struct {
 	prefix  []byte
 	reverse bool
+	creator string
 	lastkey fdbx.Key
 	vpack   uint64
 	vwait   time.Duration
+	delay   time.Duration
 	refresh time.Duration
+	task    *models.TaskT
+	headers map[string]string
 	indexes map[uint16]IndexKey
 }
 
@@ -75,5 +80,38 @@ func Reverse(r bool) Option {
 func LastKey(k fdbx.Key) Option {
 	return func(o *options) {
 		o.lastkey = k
+	}
+}
+
+func Delay(d time.Duration) Option {
+	return func(o *options) {
+		o.delay = d
+	}
+}
+
+func Creator(s string) Option {
+	return func(o *options) {
+		o.creator = s
+	}
+}
+
+func Header(k, v string) Option {
+	return func(o *options) {
+		if o.headers == nil {
+			o.headers = make(map[string]string, 1)
+		}
+		o.headers[k] = v
+	}
+}
+
+func Headers(h map[string]string) Option {
+	return func(o *options) {
+		o.headers = h
+	}
+}
+
+func metatask(t *models.TaskT) Option {
+	return func(o *options) {
+		o.task = t
 	}
 }

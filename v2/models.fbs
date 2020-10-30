@@ -36,3 +36,22 @@ table Cursor {
     IPrefix:[uint8];
     QueryID:[uint8];
 }
+
+table TaskHeader {
+    name:string;
+    text:string;
+}
+
+struct TaskState {
+    status:uint8;
+    repeats:uint32;
+    created:int64;
+    planned:int64;
+}
+
+table Task {
+    key:[uint8];
+    state:TaskState (required);
+    creator:string;
+    headers:[TaskHeader];
+}

@@ -7,8 +7,10 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
+	"github.com/shestakovda/fdbx/v2/models"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
@@ -35,13 +37,26 @@ type v1Queue struct {
 func (q v1Queue) ID() uint16 { return q.id }
 
 func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
-	keys := make([]fdbx.Key, 2*len(ids))
+	var tsk *v1Task
+
+	keys := make([]fdbx.Key, 0, 3*len(ids))
 
 	for i := range ids {
-		// Удаляем из неподтвержденных
-		keys[2*i] = q.mgr.Wrap(ids[i].LPart(qWork))
-		// Удаляем из индекса статусов задач
-		keys[2*i+1] = q.mgr.Wrap(ids[i].LPart(qStat))
+		// Помечаем к удалению из неподтвержденных
+		keys = append(keys, q.mgr.Wrap(ids[i].LPart(qWork)))
+
+		// Помечаем к удалению из индекса статусов задач
+		keys = append(keys, q.mgr.Wrap(ids[i].LPart(qMeta)))
+
+		// Пока не удалили - загружаем задачу
+		if tsk, err = q.loadTask(tx, ids[i]); err != nil {
+			return ErrAck.WithReason(err)
+		}
+
+		// Если задача еще висит и в ней указано плановое время, можем грохнуть из плана
+		if plan := tsk.Planned(); !plan.IsZero() {
+			keys = append(keys, q.mgr.Wrap(ids[i].LPart(fdbx.Time2Byte(plan)...).LPart(qList)))
+		}
 	}
 
 	if err = tx.Delete(keys); err != nil {
@@ -57,30 +72,26 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 	return nil
 }
 
-func (q v1Queue) Pub(tx mvcc.Tx, when time.Time, ids ...fdbx.Key) (err error) {
+func (q v1Queue) Pub(tx mvcc.Tx, key fdbx.Key, args ...Option) error {
+	return q.PubList(tx, []fdbx.Key{key}, args...)
+}
 
-	if when.IsZero() {
-		when = time.Now()
-	}
-
-	delay := fdbx.Time2Byte(when)
+func (q v1Queue) PubList(tx mvcc.Tx, ids []fdbx.Key, args ...Option) (err error) {
+	opts := getOpts(args)
+	plan := time.Now().Add(opts.delay)
+	when := fdbx.Time2Byte(plan)
 
 	// Структура ключа:
 	// db nsUser tb.id q.id qList delay uid = taskID
-	pairs := make([]fdbx.Pair, 2*len(ids))
+	pairs := make([]fdbx.Pair, 0, 2*len(ids))
 	for i := range ids {
-		// Основная запись таски
-		pairs[2*i] = fdbx.NewPair(
-			// Случайная айдишка таски, чтобы не было конфликтов при одинаковом времени
-			q.mgr.Wrap(ids[i].LPart(delay...).LPart(qList)),
-			// Айдишку элемента очереди записываем в значение, именно она и является таской
-			[]byte(ids[i]),
-		)
+		task := q.newTask(ids[i], plan, &opts)
 
-		// Служебная запись в индекс состояний
-		pairs[2*i+1] = fdbx.NewPair(
-			q.mgr.Wrap(ids[i].LPart(qStat)),
-			[]byte{StatusPublished},
+		pairs = append(pairs,
+			// Основная запись таски (только айдишка, на которую триггеримся)
+			fdbx.NewPair(q.mgr.Wrap(ids[i].LPart(when...).LPart(qList)), task.Key()),
+			// Служебная запись в коллекцию метаданных
+			fdbx.NewPair(q.mgr.Wrap(ids[i].LPart(qMeta)), task.Dump()),
 		)
 	}
 
@@ -102,8 +113,8 @@ func (q v1Queue) Pub(tx mvcc.Tx, when time.Time, ids ...fdbx.Key) (err error) {
 	return nil
 }
 
-func (q v1Queue) Sub(ctx context.Context, cn db.Connection, pack int) (<-chan fdbx.Pair, <-chan error) {
-	res := make(chan fdbx.Pair)
+func (q v1Queue) Sub(ctx context.Context, cn db.Connection, pack int) (<-chan Task, <-chan error) {
+	res := make(chan Task)
 	errc := make(chan error, 1)
 
 	go func() {
@@ -121,7 +132,7 @@ func (q v1Queue) Sub(ctx context.Context, cn db.Connection, pack int) (<-chan fd
 		}()
 
 		hdlr := func() (err error) {
-			var list []fdbx.Pair
+			var list []Task
 
 			if list, err = q.SubList(ctx, cn, pack); err != nil {
 				return
@@ -153,7 +164,7 @@ func (q v1Queue) Sub(ctx context.Context, cn db.Connection, pack int) (<-chan fd
 	return res, errc
 }
 
-func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list []fdbx.Pair, err error) {
+func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list []Task, err error) {
 	if pack == 0 {
 		return nil, nil
 	}
@@ -193,21 +204,13 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 				return nil
 			}
 
-			ids := make([]fdbx.Key, len(pairs))
-
-			for i := range pairs {
-				if ids[i], e = pairs[i].Value(); e != nil {
-					return
-				}
-
-			}
-
-			if list, e = q.tb.Select(tx).PossibleByID(ids...).All(); e != nil {
+			// Достаем данные по каждой задаче, кроме тех, по которым исходный объект уже удален
+			if list, e = q.loadTasks(tx, pairs, true); e != nil {
 				return
 			}
 
 			// Уменьшаем счетчик задач в ожидании
-			w.Increment(txmgr.Wrap(q.mgr.Wrap(qTotalWaitKey)), int64(-len(ids)))
+			w.Increment(txmgr.Wrap(q.mgr.Wrap(qTotalWaitKey)), int64(-len(pairs)))
 
 			// Увеличиваем счетчик задач в ожидании
 			w.Increment(txmgr.Wrap(q.mgr.Wrap(qTotalWorkKey)), int64(len(list)))
@@ -232,65 +235,6 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 			return list, nil
 		}
 	}
-}
-
-func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []fdbx.Pair, err error) {
-	if pack == 0 {
-		return nil, nil
-	}
-
-	var id []byte
-	var pairs []fdbx.Pair
-
-	key := q.mgr.Wrap(fdbx.Key{qWork})
-
-	// Значения в этих парах - айдишки элементов коллекции
-	if pairs, err = tx.ListAll(mvcc.From(key), mvcc.Limit(pack)); err != nil {
-		return nil, ErrLost.WithReason(err)
-	}
-
-	if len(pairs) == 0 {
-		return nil, nil
-	}
-
-	ids := make([]fdbx.Key, len(pairs))
-
-	for i := range pairs {
-		if id, err = pairs[i].Value(); err != nil {
-			return nil, ErrLost.WithReason(err)
-		}
-		ids[i] = fdbx.Key(id)
-	}
-
-	if list, err = q.tb.Select(tx).PossibleByID(ids...).All(); err != nil {
-		return nil, ErrLost.WithReason(err)
-	}
-
-	return list, nil
-}
-
-func (q v1Queue) Status(tx mvcc.Tx, ids ...fdbx.Key) (res map[string]byte, err error) {
-	var val []byte
-	var pair fdbx.Pair
-
-	res = make(map[string]byte, len(ids))
-
-	for i := range ids {
-		status := StatusConfirmed
-
-		if pair, err = tx.Select(q.mgr.Wrap(ids[i].LPart(qStat))); err == nil {
-			if val, err = pair.Value(); err != nil {
-				return nil, ErrStatus.WithReason(err)
-			}
-			if len(val) > 0 {
-				status = val[0]
-			}
-		}
-
-		res[ids[i].String()] = status
-	}
-
-	return res, nil
 }
 
 func (q v1Queue) Stat(tx mvcc.Tx) (wait, work int64, err error) {
@@ -318,6 +262,47 @@ func (q v1Queue) Stat(tx mvcc.Tx) (wait, work int64, err error) {
 	}
 
 	return wait, work, nil
+}
+
+func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []Task, err error) {
+	if pack == 0 {
+		return nil, nil
+	}
+
+	var pairs []fdbx.Pair
+	wkey := q.mgr.Wrap(fdbx.Key{qWork})
+
+	if pairs, err = tx.ListAll(
+		mvcc.To(wkey),
+		mvcc.From(wkey),
+		mvcc.Limit(pack),
+	); err != nil {
+		return nil, ErrLost.WithReason(err)
+	}
+
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+
+	if list, err = q.loadTasks(tx, pairs, false); err != nil {
+		return nil, ErrLost.WithReason(err)
+	}
+
+	return list, nil
+}
+
+func (q v1Queue) Task(tx mvcc.Tx, key fdbx.Key) (res Task, err error) {
+	var tsk *v1Task
+
+	if tsk, err = q.loadTask(tx, key); err != nil {
+		// Если метаданные задачи не найдены, значит считаем задачу подтвержденной
+		if errx.Is(err, mvcc.ErrNotFound) {
+			return q.confTask(key), nil
+		}
+		return nil, ErrTask.WithReason(err)
+	}
+
+	return tsk, nil
 }
 
 func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter) (err error) {
@@ -348,32 +333,198 @@ func (q v1Queue) wrkKeyWrapper(key fdbx.Key) (fdbx.Key, error) {
 	return q.mgr.Wrap(q.mgr.Unwrap(key).LPart(qWork)), nil
 }
 
-func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (exp error) {
+func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
+	var val []byte
 	var key fdbx.Key
+	var pair fdbx.Pair
 
-	if key, exp = p.Key(); exp != nil {
-		return ErrSub.WithReason(exp)
+	if key, err = p.Key(); err != nil {
+		return ErrSub.WithReason(err)
 	}
 
 	// Удаление по ключу из основной очереди
-	if exp = tx.Delete([]fdbx.Key{key}, mvcc.Writer(w)); exp != nil {
-		return ErrSub.WithReason(exp)
+	if err = tx.Delete([]fdbx.Key{key}, mvcc.Writer(w)); err != nil {
+		return ErrSub.WithReason(err)
 	}
 
-	pairs := []fdbx.Pair{
-		// Вставка в коллекцию задач "в работе"
-		p.WrapKey(q.wrkKeyWrapper),
-		// Вставка в индекс статусов задач
-		fdbx.NewPair(q.mgr.Wrap(q.mgr.Unwrap(key).LPart(qStat)), []byte{StatusUnconfirmed}),
+	mkey := q.mgr.Wrap(q.mgr.Unwrap(key).LPart(qMeta))
+
+	// Выборка элемента из коллекции метаданных
+	if pair, err = tx.Select(mkey); err != nil {
+		return ErrSub.WithReason(err)
 	}
 
-	if key, exp = pairs[0].Key(); exp != nil {
-		return ErrSub.WithReason(exp)
+	// Получаем буфер метаданных
+	if val, err = pair.Value(); err != nil {
+		return ErrSub.WithReason(err)
 	}
 
-	if exp = tx.Upsert(pairs, mvcc.Writer(w)); exp != nil {
-		return ErrSub.WithReason(exp)
+	// Целиком распаковывать буфер нам нет смысла, меняем только кол-во попыток и статус
+	meta := models.GetRootAsTask(val, 0).State(nil)
+
+	if !meta.MutateRepeats(meta.Repeats() + 1) {
+		return ErrSub.WithStack()
+	}
+
+	if !meta.MutateStatus(StatusUnconfirmed) {
+		return ErrSub.WithStack()
+	}
+
+	if err = tx.Upsert([]fdbx.Pair{
+		p.WrapKey(q.wrkKeyWrapper), // Вставка в коллекцию задач "в работе"
+		fdbx.NewPair(mkey, val),    // Вставка в коллекцию метаданных измененного буфера
+	}, mvcc.Writer(w)); err != nil {
+		return ErrSub.WithReason(err)
 	}
 
 	return nil
+}
+
+func (q v1Queue) loadTask(tx mvcc.Tx, key fdbx.Key) (tsk *v1Task, err error) {
+	var buf []byte
+	var sel fdbx.Pair
+
+	// Выборка элемента из коллекции метаданных, если его нет - это ужасная ошибка
+	if sel, err = tx.Select(q.mgr.Wrap(key.LPart(qMeta))); err != nil {
+		return
+	}
+
+	// Получаем буфер метаданных
+	if buf, err = sel.Value(); err != nil {
+		return
+	}
+
+	// Распаковываем модель метаданных задачи
+	tsk = &v1Task{q: q, m: models.GetRootAsTask(buf, 0).UnPack()}
+
+	// Так мы достаем объект коллекции. Потенциально удаленный
+	if sel, err = q.tb.Select(tx).PossibleByID(key).First(); err != nil {
+		return
+	}
+
+	if sel != nil {
+		if tsk.b, err = sel.Value(); err != nil {
+			return
+		}
+	}
+
+	return tsk, nil
+}
+
+func (q v1Queue) loadTasks(tx mvcc.Tx, items []fdbx.Pair, strict bool) (res []Task, err error) {
+	var tsk *v1Task
+	var key fdbx.Key
+
+	res = make([]Task, 0, len(items))
+
+	for i := range items {
+		// Значение элемента - идентификатор объекта в коллекции
+		if key, err = items[i].Value(); err != nil {
+			return
+		}
+
+		// Получаем исходные данные объекта как данные задачи
+		if tsk, err = q.loadTask(tx, key); err != nil {
+			return
+		}
+
+		// Проверка на то, жив ли объект с исходными данными задачи
+		if tsk.b == nil && strict {
+			continue
+		}
+
+		res = append(res, tsk)
+	}
+
+	return res, nil
+}
+
+func (q v1Queue) newTask(key fdbx.Key, planned time.Time, opts *options) *v1Task {
+	t := v1Task{
+		q: q,
+	}
+
+	if opts.task != nil {
+		t.m = opts.task
+		t.m.State.Status = StatusPublished
+		t.m.State.Planned = planned.UTC().UnixNano()
+		return &t
+	}
+
+	t.m = &models.TaskT{
+		Key: key.Bytes(),
+		State: &models.TaskStateT{
+			Status:  StatusPublished,
+			Repeats: 0,
+			Created: time.Now().UTC().UnixNano(),
+			Planned: planned.UTC().UnixNano(),
+		},
+		Creator: opts.creator,
+		Headers: make([]*models.TaskHeaderT, 0, len(opts.headers)),
+	}
+
+	for name, text := range opts.headers {
+		t.m.Headers = append(t.m.Headers, &models.TaskHeaderT{
+			Name: name,
+			Text: text,
+		})
+	}
+
+	return &t
+}
+
+func (q v1Queue) confTask(key fdbx.Key) *v1Task {
+	t := v1Task{
+		q: q,
+		m: &models.TaskT{
+			Key: key.Bytes(),
+			State: &models.TaskStateT{
+				Status: StatusConfirmed,
+			},
+		},
+	}
+
+	return &t
+}
+
+type v1Task struct {
+	b []byte
+	q v1Queue
+	m *models.TaskT
+}
+
+func (t v1Task) Key() fdbx.Key { return t.m.Key }
+
+func (t v1Task) Body() []byte { return t.b }
+
+func (t v1Task) Dump() []byte { return fdbx.FlatPack(t.m) }
+
+func (t v1Task) Status() byte { return t.m.State.Status }
+
+func (t v1Task) Repeats() uint32 { return t.m.State.Repeats }
+
+func (t v1Task) Creator() string { return t.m.Creator }
+
+func (t v1Task) Created() time.Time { return time.Unix(0, t.m.State.Created) }
+
+func (t v1Task) Planned() time.Time { return time.Unix(0, t.m.State.Planned) }
+
+func (t v1Task) Headers() map[string]string {
+	res := make(map[string]string, len(t.m.Headers))
+
+	for i := range t.m.Headers {
+		res[t.m.Headers[i].Name] = t.m.Headers[i].Text
+	}
+
+	return res
+}
+
+func (t v1Task) Ack(tx mvcc.Tx) error { return t.q.Ack(tx, t.m.Key) }
+
+func (t v1Task) Repeat(tx mvcc.Tx, d time.Duration) (err error) {
+	if err = t.Ack(tx); err != nil {
+		return
+	}
+
+	return t.q.Pub(tx, t.m.Key, metatask(t.m), Delay(d))
 }

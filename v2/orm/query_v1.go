@@ -3,8 +3,6 @@ package orm
 import (
 	"context"
 
-	fbs "github.com/google/flatbuffers/go"
-
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/models"
 	"github.com/shestakovda/fdbx/v2/mvcc"
@@ -254,7 +252,7 @@ func (q *v1Query) Save() (cid string, err error) {
 
 	q.lastkey = q.selector.LastKey()
 
-	cur := models.CursorT{
+	cur := &models.CursorT{
 		Reverse: q.reverse,
 		IdxType: q.idxtype,
 		LastKey: q.lastkey,
@@ -262,14 +260,8 @@ func (q *v1Query) Save() (cid string, err error) {
 		QueryID: q.queryid,
 	}
 
-	buf := fbsPool.Get().(*fbs.Builder)
-	buf.Finish(cur.Pack(buf))
-	res := buf.FinishedBytes()
-	buf.Reset()
-	fbsPool.Put(buf)
-
 	pairs := []fdbx.Pair{
-		fdbx.NewPair(NewQueryKeyManager(q.tb.ID()).Wrap(fdbx.Key(q.queryid)), res),
+		fdbx.NewPair(NewQueryKeyManager(q.tb.ID()).Wrap(fdbx.Key(q.queryid)), fdbx.FlatPack(cur)),
 	}
 
 	if err = q.tx.Upsert(pairs); err != nil {

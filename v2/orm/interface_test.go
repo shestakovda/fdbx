@@ -248,8 +248,6 @@ func (s *ORMSuite) TestByID() {
 }
 
 func (s *ORMSuite) TestQueue() {
-	const recCount = 3
-
 	id1 := fdbx.Key("id1")
 	id2 := fdbx.Key("id2")
 	id3 := fdbx.Key("id3")
@@ -276,7 +274,7 @@ func (s *ORMSuite) TestQueue() {
 
 		recc, errc := q.Sub(ctx, s.cn, 1)
 
-		recs := make([]fdbx.Pair, 0, recCount)
+		recs := make([]orm.Task, 0, 2)
 		for rec := range recc {
 			recs = append(recs, rec)
 		}
@@ -286,31 +284,33 @@ func (s *ORMSuite) TestQueue() {
 			errs = append(errs, err)
 		}
 
-		s.Len(recs, recCount)
+		s.Len(recs, 2)
 		s.Len(errs, 1)
-		s.True(errors.Is(errs[0], context.DeadlineExceeded))
+		if !s.True(errors.Is(errs[0], context.DeadlineExceeded)) {
+			s.NoError(errs[0])
+		}
 	}()
 
 	// Публикация задачи, которой нет
 	tx, err := mvcc.Begin(s.cn)
 	s.Require().NoError(err)
-	s.Require().NoError(q.Pub(tx, time.Now().Add(5*time.Millisecond), id4))
+	s.Require().NoError(q.Pub(tx, id4, orm.Delay(5*time.Millisecond)))
 	s.Require().NoError(tx.Commit())
 
 	// Публикация задач по очереди
 	tx, err = mvcc.Begin(s.cn)
 	s.Require().NoError(err)
-	s.Require().NoError(q.Pub(tx, time.Now().Add(time.Millisecond), id1))
+	s.Require().NoError(q.Pub(tx, id1, orm.Delay(time.Millisecond)))
 	s.Require().NoError(tx.Commit())
 
 	tx, err = mvcc.Begin(s.cn)
 	s.Require().NoError(err)
-	s.Require().NoError(q.Pub(tx, time.Now().Add(50*time.Millisecond), id2))
+	s.Require().NoError(q.Pub(tx, id2, orm.Delay(50*time.Millisecond)))
 	s.Require().NoError(tx.Commit())
 
 	tx, err = mvcc.Begin(s.cn)
 	s.Require().NoError(err)
-	s.Require().NoError(q.Pub(tx, time.Now().Add(200*time.Millisecond), id3))
+	s.Require().NoError(q.Pub(tx, id3, orm.Delay(time.Hour)))
 	s.Require().NoError(tx.Commit())
 
 	// Ждем завершения подписки
@@ -325,17 +325,25 @@ func (s *ORMSuite) TestQueue() {
 	}
 
 	if wait, work, err := q.Stat(tx); s.NoError(err) {
-		s.Equal(int64(0), wait)
-		s.Equal(int64(3), work)
+		s.Equal(int64(1), wait)
+		s.Equal(int64(2), work)
 	}
 
 	if err := q.Ack(tx, id2); s.NoError(err) {
-		if stat, err := q.Status(tx, id1, id2, id3); s.NoError(err) {
-			s.Equal(map[string]byte{
-				"id1": orm.StatusUnconfirmed,
-				"id2": orm.StatusConfirmed,
-				"id3": orm.StatusUnconfirmed,
-			}, stat)
+		if task, err := q.Task(tx, id1); s.NoError(err) {
+			s.Equal(orm.StatusUnconfirmed, task.Status())
+		}
+
+		if task, err := q.Task(tx, id2); s.NoError(err) {
+			s.Equal(orm.StatusConfirmed, task.Status())
+		}
+
+		if task, err := q.Task(tx, id3); s.NoError(err) {
+			s.Equal(orm.StatusPublished, task.Status())
+		}
+
+		if task, err := q.Task(tx, id4); s.NoError(err) {
+			s.Equal(orm.StatusUnconfirmed, task.Status())
 		}
 
 		if lost, err := q.Lost(tx, 100); s.NoError(err) {
@@ -343,13 +351,21 @@ func (s *ORMSuite) TestQueue() {
 		}
 	}
 
-	if err := q.Ack(tx, id1, id3); s.NoError(err) {
-		if stat, err := q.Status(tx, id1, id2, id3); s.NoError(err) {
-			s.Equal(map[string]byte{
-				"id1": orm.StatusConfirmed,
-				"id2": orm.StatusConfirmed,
-				"id3": orm.StatusConfirmed,
-			}, stat)
+	if err := q.Ack(tx, id1, id3, id4); s.NoError(err) {
+		if task, err := q.Task(tx, id1); s.NoError(err) {
+			s.Equal(orm.StatusConfirmed, task.Status())
+		}
+
+		if task, err := q.Task(tx, id2); s.NoError(err) {
+			s.Equal(orm.StatusConfirmed, task.Status())
+		}
+
+		if task, err := q.Task(tx, id3); s.NoError(err) {
+			s.Equal(orm.StatusConfirmed, task.Status())
+		}
+
+		if task, err := q.Task(tx, id4); s.NoError(err) {
+			s.Equal(orm.StatusConfirmed, task.Status())
 		}
 
 		if lost, err := q.Lost(tx, 100); s.NoError(err) {
@@ -373,9 +389,9 @@ func (s *ORMSuite) TestQueue() {
 	s.Require().NoError(s.cn.Read(func(r db.Reader) error {
 		list := r.List(fdbx.Key{0x00}, fdbx.Key{0x00}, 1000, false)()
 
-		// Должно быть 5 значений
-		if s.Len(list, 5) {
-			keys := make([]string, 5)
+		// Должно быть 3 значения, только счетчики
+		if s.Len(list, 3) {
+			keys := make([]string, 3)
 
 			for i := range list {
 				if key, err := list[i].Key(); s.NoError(err) {
@@ -387,9 +403,7 @@ func (s *ORMSuite) TestQueue() {
 				"\\x00\\xaa\\xaa\\x03\\xcc\\xcclox\\x00trigger",
 				"\\x00\\xaa\\xaa\\x03\\xcc\\xcclox\\x00wait",
 				"\\x00\\xaa\\xaa\\x03\\xcc\\xcclox\\x00work",
-			}, keys[:3])
-			s.True(strings.HasPrefix(keys[3], "\\x00\\xaa\\xaa\\x03\\xcc\\xcclox\\x02id4"))
-			s.True(strings.HasPrefix(keys[4], "\\x00\\xaa\\xaa\\x03\\xcc\\xcclox\\x03id4"))
+			}, keys)
 		} else {
 			for i := range list {
 				if key, err := list[i].Key(); s.NoError(err) {

@@ -6,8 +6,6 @@ import (
 	"io"
 	"sync"
 
-	fbs "github.com/google/flatbuffers/go"
-
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/models"
 	"github.com/shestakovda/fdbx/v2/mvcc"
@@ -27,14 +25,13 @@ const (
 	qFlag byte = 0
 	qList byte = 1
 	qWork byte = 2
-	qStat byte = 3
+	qMeta byte = 3
 )
 
 var gzLimit uint32 = 840
 var loLimit uint32 = 100000
 
 var zipPool = sync.Pool{New: func() interface{} { return new(bytes.Buffer) }}
-var fbsPool = sync.Pool{New: func() interface{} { return fbs.NewBuilder(128) }}
 
 var qTriggerKey = fdbx.Key("trigger").LPart(qFlag)
 var qTotalWaitKey = fdbx.Key("wait").LPart(qFlag)
@@ -45,7 +42,7 @@ func usrValWrapper(tx mvcc.Tx, tbid uint16) fdbx.ValueWrapper {
 	mgr := newBLOBKeyManager(tbid)
 
 	return func(v []byte) (_ []byte, err error) {
-		mod := models.ValueT{
+		mod := &models.ValueT{
 			Blob: false,
 			GZip: false,
 			Size: uint32(len(v)),
@@ -86,12 +83,7 @@ func usrValWrapper(tx mvcc.Tx, tbid uint16) fdbx.ValueWrapper {
 			mod.Data = []byte(uid)
 		}
 
-		buf := fbsPool.Get().(*fbs.Builder)
-		buf.Finish(mod.Pack(buf))
-		res := buf.FinishedBytes()
-		buf.Reset()
-		fbsPool.Put(buf)
-		return res, nil
+		return fdbx.FlatPack(mod), nil
 	}
 }
 

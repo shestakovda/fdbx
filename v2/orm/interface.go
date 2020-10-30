@@ -35,14 +35,30 @@ type Queue interface {
 	ID() uint16
 
 	Ack(mvcc.Tx, ...fdbx.Key) (err error)
-	Pub(mvcc.Tx, time.Time, ...fdbx.Key) error
+	Pub(mvcc.Tx, fdbx.Key, ...Option) error
+	PubList(mvcc.Tx, []fdbx.Key, ...Option) error
 
-	Sub(context.Context, db.Connection, int) (<-chan fdbx.Pair, <-chan error)
-	SubList(context.Context, db.Connection, int) ([]fdbx.Pair, error)
+	Sub(context.Context, db.Connection, int) (<-chan Task, <-chan error)
+	SubList(context.Context, db.Connection, int) ([]Task, error)
 
 	Stat(mvcc.Tx) (int64, int64, error)
-	Lost(mvcc.Tx, int) ([]fdbx.Pair, error)
-	Status(mvcc.Tx, ...fdbx.Key) (map[string]byte, error)
+	Lost(mvcc.Tx, int) ([]Task, error)
+	Task(mvcc.Tx, fdbx.Key) (Task, error)
+}
+
+// Task - исполняемый элемент очереди
+type Task interface {
+	Key() fdbx.Key
+	Body() []byte
+	Status() byte
+	Repeats() uint32
+	Creator() string
+	Created() time.Time
+	Planned() time.Time
+	Headers() map[string]string
+
+	Ack(mvcc.Tx) error
+	Repeat(mvcc.Tx, time.Duration) error
 }
 
 // Aggregator - описание функции-агрегатора для запросов
@@ -92,7 +108,7 @@ var (
 	ErrAck       = errx.New("Ошибка подтверждения задач в очереди")
 	ErrLost      = errx.New("Ошибка получения неподтвержденных задач")
 	ErrStat      = errx.New("Ошибка получения статистики задач")
-	ErrStatus    = errx.New("Ошибка получения статуса задач")
+	ErrTask      = errx.New("Ошибка получения метаданных задачи")
 	ErrWatch     = errx.New("Ошибка отслеживания результата задачи")
 	ErrAgg       = errx.New("Ошибка агрегации объектов коллекции")
 	ErrSelect    = errx.New("Ошибка загрузки объектов коллекции")

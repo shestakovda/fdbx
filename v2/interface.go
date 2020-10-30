@@ -3,6 +3,8 @@ package fdbx
 import (
 	"context"
 
+	fbs "github.com/google/flatbuffers/go"
+
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/shestakovda/errx"
 )
@@ -45,6 +47,11 @@ type KeyManager interface {
 
 	Wrapper(Key) (Key, error)
 	Unwrapper(Key) (Key, error)
+}
+
+// FlatPacker - интерфейс для упаковки flatbuffers
+type FlatPacker interface {
+	Pack(*fbs.Builder) fbs.UOffsetT
 }
 
 var (

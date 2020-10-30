@@ -45,7 +45,7 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte) (val 
 		return nil, ErrSyncExec.WithReason(err)
 	}
 
-	if err = queue.Pub(tx, time.Now(), req); err != nil {
+	if err = queue.Pub(tx, req); err != nil {
 		return nil, ErrSyncExec.WithReason(err)
 	}
 

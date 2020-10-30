@@ -2,10 +2,15 @@ package fdbx
 
 import (
 	"encoding/binary"
+	"sync"
 	"time"
 
 	"github.com/shestakovda/errx"
+
+	fbs "github.com/google/flatbuffers/go"
 )
+
+var fbsPool = sync.Pool{New: func() interface{} { return fbs.NewBuilder(128) }}
 
 // Time2Byte - преобразователь времени в массив байт
 func Time2Byte(t time.Time) []byte {
@@ -23,4 +28,13 @@ func Byte2Time(buf []byte) (time.Time, error) {
 	}
 
 	return time.Unix(0, int64(binary.BigEndian.Uint64(buf[:8]))), nil
+}
+
+func FlatPack(obj FlatPacker) []byte {
+	buf := fbsPool.Get().(*fbs.Builder)
+	buf.Finish(obj.Pack(buf))
+	res := buf.FinishedBytes()
+	buf.Reset()
+	fbsPool.Put(buf)
+	return res
 }

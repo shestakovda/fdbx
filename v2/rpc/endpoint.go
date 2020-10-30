@@ -64,7 +64,7 @@ func (e endpoint) repeat(cn db.Connection, pair fdbx.Pair, wait time.Duration) (
 	}
 	defer tx.Cancel()
 
-	if err = e.Queue.Pub(tx, time.Now().Add(wait), key); err != nil {
+	if err = e.Queue.Pub(tx, key, orm.Delay(wait)); err != nil {
 		return ErrRepeat.WithReason(err)
 	}
 
