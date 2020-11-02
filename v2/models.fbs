@@ -55,3 +55,8 @@ table Task {
     creator:string;
     headers:[TaskHeader];
 }
+
+table Answer {
+    err:bool;
+    buf:[uint8];
+}

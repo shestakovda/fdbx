@@ -4,8 +4,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/golang/glog"
+	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
+	"github.com/shestakovda/fdbx/v2/models"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 	"github.com/shestakovda/fdbx/v2/orm"
 	"github.com/shestakovda/typex"
@@ -27,7 +30,6 @@ type v1Client struct {
 
 func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte) (val []byte, err error) {
 	var tx mvcc.Tx
-	var pair fdbx.Pair
 	var waiter fdbx.Waiter
 
 	queue := orm.NewQueue(endID, c.data)
@@ -39,7 +41,6 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte) (val 
 
 	key := fdbx.Key(typex.NewUUID())
 	req := key.RPart(NSRequest)
-	res := key.RPart(NSResponse)
 
 	if err = c.data.Upsert(tx, fdbx.NewPair(req, data)); err != nil {
 		return nil, ErrSyncExec.WithReason(err)
@@ -49,10 +50,12 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte) (val 
 		return nil, ErrSyncExec.WithReason(err)
 	}
 
-	wkey := mvcc.NewTxKeyManager().Wrap(orm.NewWatchKeyManager(c.data.ID()).Wrap(req))
-	wnow := fdbx.NewPair(wkey, fdbx.Time2Byte(time.Now()))
+	wkey, wnow := waits(c.data.ID(), req)
+	glog.Errorf("--------> %s", wkey)
 	defer func() { c.conn.Write(func(w db.Writer) error { w.Delete(wkey); return nil }) }()
 
+	// Важно выставить ожидание по ключу раньше, чем заккомитим транзакцию
+	// Чтобы не проворонить результат обработчика, который может сработать оч быстро
 	if err = c.conn.Write(func(w db.Writer) (exp error) {
 		if exp = w.Upsert(wnow); exp != nil {
 			return
@@ -74,18 +77,31 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte) (val 
 		return nil, ErrSyncExec.WithReason(err)
 	}
 
+	return c.Result(key)
+}
+
+func (c v1Client) Result(key fdbx.Key) (val []byte, err error) {
+	var tx mvcc.Tx
+	var pair fdbx.Pair
+
 	if tx, err = mvcc.Begin(c.conn); err != nil {
-		return nil, ErrSyncExec.WithReason(err)
+		return nil, ErrResult.WithReason(err)
 	}
 	defer tx.Cancel()
 
-	if pair, err = c.data.Select(tx).ByID(res).First(); err != nil {
-		return nil, ErrSyncExec.WithReason(err)
+	if pair, err = c.data.Select(tx).ByID(key.RPart(NSResponse)).First(); err != nil {
+		return nil, ErrResult.WithReason(err)
 	}
 
 	if val, err = pair.Value(); err != nil {
-		return nil, ErrSyncExec.WithReason(err)
+		return nil, ErrResult.WithReason(err)
 	}
 
-	return val, nil
+	ans := models.GetRootAsAnswer(val, 0).UnPack()
+
+	if ans.Err {
+		return nil, errx.Unpack(ans.Buf)
+	}
+
+	return ans.Buf, nil
 }

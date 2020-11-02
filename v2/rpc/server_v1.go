@@ -99,28 +99,46 @@ func (s *v1Server) listen(ctx context.Context, cn db.Connection, end *endpoint) 
 		}
 	}()
 
+	var res []byte
+	var exp error
+	var repeat bool
+	var delay time.Duration
+
 	// Собственный контекст для гарантированного завершения подписки в случае провала
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	pairs, errs := end.Queue.Sub(wctx, cn, 1)
+	tasks, errs := end.Queue.Sub(wctx, cn, 1)
 
-	for pair := range pairs {
-		// В случае ошибки при обработке задачи
-		if res, exp := end.OnTask(pair); exp != nil {
-			// Обрабатываем ошибку и если нужно, повторяем задачу
-			if repeat, wait := end.OnError(exp); repeat {
+	for task := range tasks {
+		// Получаем результаты обработки задачи
+		res, exp = end.OnTask(task)
+
+		// В случае ошибки при обработке задачи, даем возможность спасти положение
+		if exp != nil && end.OnError != nil {
+			// Обработчик ошибки должен решить, как он отреагирует на ситуацию
+			// Если сам обработчик завершился с ошибкой - значит тут нечего повторять
+			// Полученную ошибку пробрасываем клиенту, она могла быть заменена или преобразована
+			// Аналогично с результатом - он мог быть сформирован заново
+			repeat, delay, res, exp = end.OnError(task, exp)
+
+			// Если требуется повтор, переносим задачу в будущее и идем дальше
+			if repeat {
 				// Если не смогли повторить - это фиаско
-				if err = end.repeat(cn, pair, wait); err != nil {
+				if err = end.repeat(cn, task, delay); err != nil {
 					err = ErrListen.WithReason(err)
 					return
 				}
+
+				// Перепрыгиваем на след. задачу, чтобы по этой не было ответа
+				continue
 			}
-		} else {
-			if err = end.confirm(cn, s.data, pair, res); err != nil {
-				err = ErrListen.WithReason(err)
-				return
-			}
+		}
+
+		// Отправляем ответ и, если не было ошибки, подтверждаем задачу
+		if err = end.answer(cn, s.data, task, res, exp); err != nil {
+			err = ErrListen.WithReason(err)
+			return
 		}
 	}
 
@@ -187,7 +205,6 @@ func (s *v1Server) autovacuum(ctx context.Context, cn db.Connection, args []Opti
 				if when, exp = fdbx.Byte2Time(val); exp != nil {
 					return
 				}
-				glog.Errorf("%s", when)
 
 				if time.Since(when) < 24*time.Hour {
 					continue

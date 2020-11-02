@@ -7,6 +7,7 @@ import (
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
+	"github.com/shestakovda/fdbx/v2/orm"
 )
 
 // Суффиксы элементов
@@ -16,10 +17,13 @@ const (
 )
 
 // TaskHandler - обработчик задачи из очереди
-type TaskHandler func(fdbx.Pair) ([]byte, error)
+type TaskHandler func(orm.Task) ([]byte, error)
 
 // ErrorHandler - обработчик ошибки с возможностью перезапуска задачи
-type ErrorHandler func(error) (bool, time.Duration)
+type ErrorHandler func(orm.Task, error) (bool, time.Duration, []byte, error)
+
+// ListenHandler - обработчик ошибки с возможностью перезапуска задачи
+type ListenHandler func(error) (bool, time.Duration)
 
 // Option - дополнительный параметр обработчика
 type Option func(*options)
@@ -39,6 +43,7 @@ func NewClient(cn db.Connection, srvID uint16) Client { return newClientV1(cn, s
 
 // Client - локальный объект для выполнения удаленных операций
 type Client interface {
+	Result(fdbx.Key) ([]byte, error)
 	SyncExec(ctx context.Context, endID uint16, req []byte) ([]byte, error)
 }
 
@@ -48,6 +53,7 @@ var (
 	ErrVacuum      = errx.New("Ошибка автоочистки синхронизатора")
 	ErrBadListener = errx.New("Ошибка регистрации обработчика")
 	ErrSyncExec    = errx.New("Ошибка синхронной обработки")
+	ErrResult      = errx.New("Ошибка загрузки результата обработки")
 	ErrConfirm     = errx.New("Ошибка подтверждения обработки")
 	ErrRepeat      = errx.New("Ошибка регистрации повтора обработки")
 )

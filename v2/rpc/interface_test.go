@@ -48,14 +48,11 @@ func (s *RPCSuite) TestSyncRPC() {
 	cli := rpc.NewClient(s.cn, TestTable)
 
 	s.Require().NoError(srv.Endpoint(
-		TestQueue1, func(p fdbx.Pair) ([]byte, error) {
-			if val, err := p.Value(); s.NoError(err) {
-				s.Equal(msg1, string(val))
-			}
+		TestQueue1, func(t orm.Task) ([]byte, error) {
+			s.Equal(msg1, string(t.Body()))
 			return []byte(msg2), nil
 		},
 		rpc.Refresh(20*time.Millisecond),
-		rpc.Sync(),
 	))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -129,21 +126,18 @@ func (s *RPCSuite) TestServer() {
 	watch := make(map[string]int, 6)
 
 	s.Require().NoError(srv.Endpoint(
-		TestQueue1, func(p fdbx.Pair) ([]byte, error) {
+		TestQueue1, func(t orm.Task) ([]byte, error) {
 			watch["OnTask1"]++
-			if key, err := p.Key(); s.NoError(err) {
-				s.Equal(id1, key)
-			}
-			if val, err := p.Value(); s.NoError(err) {
-				s.Equal("msg1", string(val))
-			}
+			s.Equal(id1, t.Key())
+			s.Equal("msg1", string(t.Body()))
 			return nil, nil
 		},
+		rpc.Async(),
 		rpc.Refresh(20*time.Millisecond),
-		rpc.OnError(func(e error) (bool, time.Duration) {
+		rpc.OnError(func(t orm.Task, e error) (bool, time.Duration, []byte, error) {
 			watch["OnError1"]++
 			s.NoError(e)
-			return false, 0
+			return false, 0, nil, nil
 		}),
 		rpc.OnListenError(func(e error) (bool, time.Duration) {
 			watch["OnListen1"]++
@@ -153,24 +147,21 @@ func (s *RPCSuite) TestServer() {
 	))
 
 	s.Require().NoError(srv.Endpoint(
-		TestQueue2, func(p fdbx.Pair) ([]byte, error) {
+		TestQueue2, func(t orm.Task) ([]byte, error) {
 			watch["OnTask2"]++
-			if key, err := p.Key(); s.NoError(err) {
-				s.Equal(id3, key)
-			}
-			if val, err := p.Value(); s.NoError(err) {
-				if string(val) == "msg3" {
-					watch["OnTask2_1"]++
-					return nil, wtf.WithStack()
-				} else {
-					watch["OnTask2_2"]++
-					s.Equal("updmsg", string(val))
-				}
+			s.Equal(id3, t.Key())
+			if string(t.Body()) == "msg3" {
+				watch["OnTask2_1"]++
+				return nil, wtf.WithStack()
+			} else {
+				watch["OnTask2_2"]++
+				s.Equal("updmsg", string(t.Body()))
 			}
 			return nil, nil
 		},
+		rpc.Async(),
 		rpc.Refresh(20*time.Millisecond),
-		rpc.OnError(func(e error) (bool, time.Duration) {
+		rpc.OnError(func(t orm.Task, e error) (bool, time.Duration, []byte, error) {
 			watch["OnError2"]++
 			if s.Error(e) {
 				s.True(errx.Is(e, wtf))
@@ -180,9 +171,9 @@ func (s *RPCSuite) TestServer() {
 				s.Require().NoError(err)
 				s.Require().NoError(s.tbl.Upsert(tx, fdbx.NewPair(id3, []byte("updmsg"))))
 				s.Require().NoError(tx.Commit())
-				return true, 100 * time.Millisecond
+				return true, 100 * time.Millisecond, nil, nil
 			}
-			return false, 0
+			return false, 0, nil, nil
 		}),
 		rpc.OnListenError(func(e error) (bool, time.Duration) {
 			watch["OnListen2"]++
@@ -195,8 +186,8 @@ func (s *RPCSuite) TestServer() {
 
 	tx, err = mvcc.Begin(s.cn)
 	s.Require().NoError(err)
-	s.Require().NoError(orm.NewQueue(TestQueue1, s.tbl).Pub(tx, time.Now().Add(80*time.Millisecond), id1))
-	s.Require().NoError(orm.NewQueue(TestQueue2, s.tbl).Pub(tx, time.Now(), id3))
+	s.Require().NoError(orm.NewQueue(TestQueue1, s.tbl).Pub(tx, id1, orm.Delay(80*time.Millisecond)))
+	s.Require().NoError(orm.NewQueue(TestQueue2, s.tbl).Pub(tx, id3))
 	s.Require().NoError(tx.Commit())
 
 	time.Sleep(2 * time.Second)

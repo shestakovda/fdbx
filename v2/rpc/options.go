@@ -10,8 +10,7 @@ func getOpts(args []Option) (o options) {
 	o.vpack = 1000
 	o.vwait = time.Hour
 	o.refresh = time.Second
-	o.onError = defOnError
-	o.onListen = defOnError
+	o.onListen = defOnListen
 
 	for i := range args {
 		args[i](&o)
@@ -20,10 +19,10 @@ func getOpts(args []Option) (o options) {
 }
 
 type options struct {
-	asRPC bool
+	async bool
 
 	onError  ErrorHandler
-	onListen ErrorHandler
+	onListen ListenHandler
 
 	refresh time.Duration
 
@@ -31,9 +30,9 @@ type options struct {
 	vwait time.Duration
 }
 
-func Sync() Option {
+func Async() Option {
 	return func(o *options) {
-		o.asRPC = true
+		o.async = true
 	}
 }
 
@@ -69,7 +68,7 @@ func OnError(h ErrorHandler) Option {
 	}
 }
 
-func OnListenError(h ErrorHandler) Option {
+func OnListenError(h ListenHandler) Option {
 	return func(o *options) {
 		if h != nil {
 			o.onListen = h
@@ -77,7 +76,7 @@ func OnListenError(h ErrorHandler) Option {
 	}
 }
 
-func defOnError(err error) (bool, time.Duration) {
+func defOnListen(err error) (bool, time.Duration) {
 	glog.Errorf("%+v", err)
 	return false, 0
 }

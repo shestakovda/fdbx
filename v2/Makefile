@@ -3,6 +3,7 @@ TESTARGS=-run . -failfast -race -gcflags=all=-d=checkptr=0 -count=1 -cover
 all: test
 
 fbs:
+	@rm -rf ./models
 	@flatc --go --gen-mutable --gen-object-api ./models.fbs
 
 fmt: fbs
