@@ -44,7 +44,7 @@ func NewClient(cn db.Connection, srvID uint16) Client { return newClientV1(cn, s
 // Client - локальный объект для выполнения удаленных операций
 type Client interface {
 	Result(fdbx.Key) ([]byte, error)
-	SyncExec(ctx context.Context, endID uint16, req []byte) ([]byte, error)
+	SyncExec(ctx context.Context, endID uint16, req []byte, args ...Option) ([]byte, error)
 }
 
 // Ошибки модуля

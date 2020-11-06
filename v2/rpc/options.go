@@ -10,6 +10,7 @@ func getOpts(args []Option) (o options) {
 	o.vpack = 1000
 	o.vwait = time.Hour
 	o.refresh = time.Second
+	o.timeout = time.Minute
 	o.onListen = defOnListen
 
 	for i := range args {
@@ -25,6 +26,7 @@ type options struct {
 	onListen ListenHandler
 
 	refresh time.Duration
+	timeout time.Duration
 
 	vpack uint64
 	vwait time.Duration
@@ -48,6 +50,14 @@ func VacuumWait(d time.Duration) Option {
 	return func(o *options) {
 		if d > 0 {
 			o.vwait = d
+		}
+	}
+}
+
+func Timeout(d time.Duration) Option {
+	return func(o *options) {
+		if d > 0 {
+			o.timeout = d
 		}
 	}
 }

@@ -2,9 +2,7 @@ package rpc
 
 import (
 	"context"
-	"time"
 
-	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -28,10 +26,11 @@ type v1Client struct {
 	conn db.Connection
 }
 
-func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte) (val []byte, err error) {
+func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte, args ...Option) (val []byte, err error) {
 	var tx mvcc.Tx
 	var waiter fdbx.Waiter
 
+	opts := getOpts(args)
 	queue := orm.NewQueue(endID, c.data)
 
 	if tx, err = mvcc.Begin(c.conn); err != nil {
@@ -51,7 +50,6 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte) (val 
 	}
 
 	wkey, wnow := waits(c.data.ID(), req)
-	glog.Errorf("--------> %s", wkey)
 	defer func() { c.conn.Write(func(w db.Writer) error { w.Delete(wkey); return nil }) }()
 
 	// Важно выставить ожидание по ключу раньше, чем заккомитим транзакцию
@@ -70,7 +68,7 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte) (val 
 		return nil, ErrSyncExec.WithReason(err)
 	}
 
-	wctx, cancel := context.WithTimeout(ctx, time.Minute)
+	wctx, cancel := context.WithTimeout(ctx, opts.timeout)
 	defer cancel()
 
 	if err = waiter.Resolve(wctx); err != nil {

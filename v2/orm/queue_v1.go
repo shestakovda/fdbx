@@ -48,14 +48,12 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 		// Помечаем к удалению из индекса статусов задач
 		keys = append(keys, q.mgr.Wrap(ids[i].LPart(qMeta)))
 
-		// Пока не удалили - загружаем задачу
-		if tsk, err = q.loadTask(tx, ids[i]); err != nil {
-			return ErrAck.WithReason(err)
-		}
-
-		// Если задача еще висит и в ней указано плановое время, можем грохнуть из плана
-		if plan := tsk.Planned(); !plan.IsZero() {
-			keys = append(keys, q.mgr.Wrap(ids[i].LPart(fdbx.Time2Byte(plan)...).LPart(qList)))
+		// Пока не удалили - загружаем задачу, если она есть
+		if tsk, err = q.loadTask(tx, ids[i]); err == nil {
+			// Если задача еще висит и в ней указано плановое время, можем грохнуть из плана
+			if plan := tsk.Planned(); !plan.IsZero() {
+				keys = append(keys, q.mgr.Wrap(ids[i].LPart(fdbx.Time2Byte(plan)...).LPart(qList)))
+			}
 		}
 	}
 

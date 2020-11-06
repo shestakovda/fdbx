@@ -3,7 +3,6 @@ package rpc
 import (
 	"time"
 
-	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -120,13 +119,11 @@ func (e endpoint) answer(cn db.Connection, tbl orm.Table, task orm.Task, res []b
 	}
 
 	// Формируем данные для подтверждения ключа ожидания
-	wkey, wnow := waits(tbl.ID(), key)
+	_, wnow := waits(tbl.ID(), key)
 
 	if err = cn.Write(func(w db.Writer) error { return w.Upsert(wnow) }); err != nil {
 		return cfe.WithReason(err)
 	}
-
-	glog.Errorf("=-=-=-=-=> %s", wkey)
 
 	return nil
 }

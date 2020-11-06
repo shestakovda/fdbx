@@ -214,7 +214,6 @@ func (s *v1Server) autovacuum(ctx context.Context, cn db.Connection, args []Opti
 					return
 				}
 
-				glog.Errorf("%s - %s", key, when)
 				w.Delete(key)
 			}
 
