@@ -45,6 +45,10 @@ func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
 		return nil, ErrLoadQuery.WithReason(err)
 	}
 
+	if len(val) == 0 {
+		return nil, ErrLoadQuery.WithReason(err)
+	}
+
 	cur := models.GetRootAsCursor(val, 0).UnPack()
 
 	q.reverse = cur.Reverse
@@ -156,7 +160,15 @@ func (q *v1Query) Delete() (err error) {
 		return ErrDelete.WithReason(err)
 	}
 
-	if err = q.tb.Delete(q.tx, list...); err != nil {
+	keys := make([]fdbx.Key, len(list))
+
+	for i := range list {
+		if keys[i], err = list[i].Key(); err != nil {
+			return ErrDelete.WithReason(err)
+		}
+	}
+
+	if err = q.tb.Delete(q.tx, keys...); err != nil {
 		return ErrDelete.WithReason(err)
 	}
 

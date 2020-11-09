@@ -4,8 +4,6 @@ import (
 	"sync"
 
 	"github.com/shestakovda/fdbx/v2/models"
-
-	fbs "github.com/google/flatbuffers/go"
 )
 
 // Переменные модуля, менять которые не рекомендуется
@@ -21,7 +19,6 @@ var (
 var globCache = makeCache()
 var keyMgr = NewTxKeyManager()
 
-var fbsPool = sync.Pool{New: func() interface{} { return fbs.NewBuilder(128) }}
 var hdlPool = sync.Pool{New: func() interface{} { return make([]CommitHandler, 0, 16) }}
 
 const (

@@ -52,7 +52,7 @@ type v610Conn struct {
 
 func (cn v610Conn) DB() byte { return cn.id }
 
-func (cn v610Conn) Read(hdl func(Reader) error) error {
+func (cn v610Conn) Read(hdl ReadHandler) error {
 	if _, err := cn.db.ReadTransact(func(tx fdb.ReadTransaction) (interface{}, error) {
 		return nil, hdl(&v610Reader{v610Conn: cn, tx: tx})
 	}); err != nil {
@@ -61,7 +61,7 @@ func (cn v610Conn) Read(hdl func(Reader) error) error {
 	return nil
 }
 
-func (cn v610Conn) Write(hdl func(Writer) error) error {
+func (cn v610Conn) Write(hdl WriteHandler) error {
 	if _, err := cn.db.Transact(func(tx fdb.Transaction) (interface{}, error) {
 		return nil, hdl(&v610Writer{v610Reader: v610Reader{v610Conn: cn, tx: tx}, tx: tx})
 	}); err != nil {

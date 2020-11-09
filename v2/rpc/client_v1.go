@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 
+	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -40,8 +41,9 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte, args 
 
 	key := fdbx.Key(typex.NewUUID())
 	req := key.RPart(NSRequest)
+	rep := fdbx.NewPair(req, data)
 
-	if err = c.data.Upsert(tx, fdbx.NewPair(req, data)); err != nil {
+	if err = c.data.Upsert(tx, rep); err != nil {
 		return nil, ErrSyncExec.WithReason(err)
 	}
 
@@ -68,6 +70,9 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte, args 
 		return nil, ErrSyncExec.WithReason(err)
 	}
 
+	// В любом случае, подчищаем за собой данные по задаче
+	defer c.clean(key)
+
 	wctx, cancel := context.WithTimeout(ctx, opts.timeout)
 	defer cancel()
 
@@ -75,7 +80,38 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte, args 
 		return nil, ErrSyncExec.WithReason(err)
 	}
 
-	return c.Result(key)
+	if val, err = c.Result(key); err != nil {
+		return nil, ErrSyncExec.WithReason(err)
+	}
+
+	return val, nil
+}
+
+// По сути ошибка очистки ни на что не влияет, поэтому просто принтим ее
+// Не возвращаем, потому что все равно метод вызывается в defer, это никому не нужно
+func (c v1Client) clean(key fdbx.Key) {
+	var err error
+	var tx mvcc.Tx
+
+	defer func() {
+		if err != nil {
+			glog.Errorf("%+v", ErrClean.WithReason(err))
+		}
+	}()
+
+	if tx, err = mvcc.Begin(c.conn); err != nil {
+		return
+	}
+	defer tx.Cancel()
+
+	// Подчищаем задачу, чтобы её больше никто не выполнял, а также ответ, если он был
+	if err = c.data.Delete(tx, key.RPart(NSRequest), key.RPart(NSResponse)); err != nil {
+		return
+	}
+
+	if err = tx.Commit(); err != nil {
+		return
+	}
 }
 
 func (c v1Client) Result(key fdbx.Key) (val []byte, err error) {
@@ -93,6 +129,10 @@ func (c v1Client) Result(key fdbx.Key) (val []byte, err error) {
 
 	if val, err = pair.Value(); err != nil {
 		return nil, ErrResult.WithReason(err)
+	}
+
+	if len(val) == 0 {
+		return nil, ErrResult.WithStack()
 	}
 
 	ans := models.GetRootAsAnswer(val, 0).UnPack()

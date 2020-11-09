@@ -11,13 +11,37 @@ import (
 // TxCacheSize - размер глобального кеша статусов завершенных транзакций
 var TxCacheSize = 8000000
 
+// ReadOnly - создание и старт новой транзакции только для чтения
+func ReadOnly(conn db.Connection) (Tx, error) { return newTx64(conn, true) }
+
+// ReadTx - объект "логической" транзакции MVCC поверх "физической" транзакции FDB
+// Только для чтения. Не требует коммита или роллбэка, т.к. не может внести изменений
+type ReadTx interface {
+	// Ссылка на подключение к БД, на всякий случай
+	Conn() db.Connection
+
+	// Выборка актуального значения для ключа
+	Select(fdbx.Key) (fdbx.Pair, error)
+
+	// Последовательная выборка всех активных ключей в диапазоне
+	// Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
+	ListAll(...Option) ([]fdbx.Pair, error)
+
+	// Последовательная выборка всех активных ключей в диапазоне
+	// Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
+	SeqScan(ctx context.Context, args ...Option) (<-chan fdbx.Pair, <-chan error)
+
+	// Загрузка бинарных данных по ключу, указывается ожидаемый размер
+	LoadBLOB(fdbx.Key, int, ...Option) ([]byte, error)
+}
+
 // Begin - создание и старт новой транзакции
-func Begin(conn db.Connection) (Tx, error) { return newTx64(conn) }
+func Begin(conn db.Connection) (Tx, error) { return newTx64(conn, false) }
 
 // Tx - объект "логической" транзакции MVCC поверх "физической" транзакции FDB
 type Tx interface {
-	// Ссылка на подключение к БД, на всякий случай
-	Conn() db.Connection
+	// То же самое, что и в транзакции на чтение
+	ReadTx
 
 	// Успешное завершение (принятие) транзакции
 	// Перед завершением выполняет хуки OnCommit
@@ -28,9 +52,6 @@ type Tx interface {
 	// Поддерживает опции Writer
 	Cancel(args ...Option) error
 
-	// Выборка актуального значения для ключа
-	Select(fdbx.Key) (fdbx.Pair, error)
-
 	// Удаление значения для ключа
 	// Поддерживает опции Writer
 	Delete([]fdbx.Key, ...Option) error
@@ -39,23 +60,12 @@ type Tx interface {
 	// Поддерживает опции Writer
 	Upsert([]fdbx.Pair, ...Option) error
 
-	// Последовательная выборка всех активных ключей в диапазоне
-	// Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
-	ListAll(...Option) ([]fdbx.Pair, error)
-
-	// Последовательная выборка всех активных ключей в диапазоне
-	// Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
-	SeqScan(ctx context.Context, args ...Option) (<-chan fdbx.Pair, <-chan error)
-
 	// Удаление бинарных данных по ключу
 	// Поддерживает опции Writer
 	DropBLOB(fdbx.Key, ...Option) error
 
 	// Сохранение бинарных данных по ключу
 	SaveBLOB(fdbx.Key, []byte, ...Option) error
-
-	// Загрузка бинарных данных по ключу, указывается ожидаемый размер
-	LoadBLOB(fdbx.Key, int, ...Option) ([]byte, error)
 
 	// Регистрация хука для выполнения при завершении транзакции
 	OnCommit(CommitHandler)
@@ -78,6 +88,7 @@ type CommitHandler func(db.Writer) error
 
 // Ошибки модуля
 var (
+	ErrWrite    = errx.New("Модифицикация в транзакции только для чтения")
 	ErrBegin    = errx.New("Ошибка старта транзакции")
 	ErrClose    = errx.New("Ошибка завершения транзакции")
 	ErrSelect   = errx.New("Ошибка получения данных")

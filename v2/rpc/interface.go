@@ -49,6 +49,7 @@ type Client interface {
 
 // Ошибки модуля
 var (
+	ErrWorker      = errx.New("Ошибка обработки задачи")
 	ErrListen      = errx.New("Ошибка обработки очереди")
 	ErrVacuum      = errx.New("Ошибка автоочистки синхронизатора")
 	ErrBadListener = errx.New("Ошибка регистрации обработчика")
@@ -56,4 +57,5 @@ var (
 	ErrResult      = errx.New("Ошибка загрузки результата обработки")
 	ErrConfirm     = errx.New("Ошибка подтверждения обработки")
 	ErrRepeat      = errx.New("Ошибка регистрации повтора обработки")
+	ErrClean       = errx.New("Ошибка очистки данных задачи")
 )

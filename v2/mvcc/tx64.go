@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	fbs "github.com/google/flatbuffers/go"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -27,9 +26,10 @@ import (
 	* Получить монотонно возрастающий идентификатор транзакции, синхронизированный между всеми инстансами
 	* Не создать ни одного конфликта записи/чтения между параллельно стартующими транзакциями
 */
-func newTx64(conn db.Connection) (t *tx64, err error) {
+func newTx64(conn db.Connection, readonly bool) (t *tx64, err error) {
 	t = &tx64{
 		conn:   conn,
+		read:   readonly,
 		start:  uint64(time.Now().UTC().UnixNano()),
 		status: txStatusRunning,
 		oncomm: hdlPool.Get().([]CommitHandler),
@@ -52,7 +52,11 @@ func newTx64(conn db.Connection) (t *tx64, err error) {
 		}
 
 		t.txid = binary.BigEndian.Uint64(val[:8]) + uint64(binary.BigEndian.Uint16(val[8:10]))
-		w.Upsert(fdbx.NewPair(fdbx.Key(val[:8]).LPart(nsTx), t.pack()))
+
+		if !t.read {
+			w.Upsert(fdbx.NewPair(fdbx.Key(val[:8]).LPart(nsTx), t.pack()))
+		}
+
 		w.Delete(key)
 		return nil
 	}); err != nil {
@@ -63,6 +67,7 @@ func newTx64(conn db.Connection) (t *tx64, err error) {
 }
 
 type tx64 struct {
+	read   bool
 	conn   db.Connection
 	opid   uint32
 	txid   uint64
@@ -78,6 +83,10 @@ func (t *tx64) OnCommit(hdl CommitHandler) {
 }
 
 func (t *tx64) Commit(args ...Option) (err error) {
+	if t.read {
+		return ErrWrite.WithStack()
+	}
+
 	opts := getOpts(args)
 
 	if len(t.oncomm) > 0 {
@@ -105,6 +114,10 @@ func (t *tx64) Commit(args ...Option) (err error) {
 }
 
 func (t *tx64) Cancel(args ...Option) (err error) {
+	if t.read {
+		return ErrWrite.WithStack()
+	}
+
 	opts := getOpts(args)
 
 	return t.close(txStatusAborted, opts.writer)
@@ -119,6 +132,10 @@ func (t *tx64) Cancel(args ...Option) (err error) {
 	Важно, чтобы выборка и обновление шли строго в одной внутренней FDB транзакции.
 */
 func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
+	if t.read {
+		return ErrWrite.WithStack()
+	}
+
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
 	hdlr := func(w db.Writer) (exp error) {
@@ -169,6 +186,10 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 	Важно, чтобы выборка и обновление шли строго в одной внутренней FDB транзакции.
 */
 func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
+	if t.read {
+		return ErrWrite.WithStack()
+	}
+
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
 	hdlr := func(w db.Writer) (exp error) {
@@ -430,6 +451,10 @@ func (t *tx64) selectPart(
 }
 
 func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte, args ...Option) (err error) {
+	if t.read {
+		return ErrWrite.WithStack()
+	}
+
 	sum := 0
 	tmp := blob
 	num := uint16(0)
@@ -516,6 +541,10 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size int, args ...Option) (_ []byte, err e
 }
 
 func (t *tx64) DropBLOB(key fdbx.Key, args ...Option) (err error) {
+	if t.read {
+		return ErrWrite.WithStack()
+	}
+
 	opts := getOpts(args)
 	ukey := keyMgr.Wrap(key)
 	hdlr := func(w db.Writer) error {
@@ -575,8 +604,12 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, x uint64) (status byte, err
 		return
 	}
 
+	// Если в БД нет записи, то считаем, что это откат
 	if len(val) == 0 {
-		return txStatusUnknown, nil
+		// Однако, мы немного подозреваем этот момент,
+		// Поэтому положим это пока только в локальный кеш
+		local.set(x, txStatusAborted)
+		return txStatusAborted, nil
 	}
 
 	// Получаем значение статуса как часть модели
@@ -593,52 +626,60 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, x uint64) (status byte, err
 }
 
 func (t *tx64) pack() []byte {
-	tx := &models.TransactionT{
+	return fdbx.FlatPack(&models.TransactionT{
 		TxID:   t.txid,
 		Start:  t.start,
 		Status: t.status,
-	}
-
-	buf := fbsPool.Get().(*fbs.Builder)
-	buf.Finish(tx.Pack(buf))
-	res := buf.FinishedBytes()
-	buf.Reset()
-	fbsPool.Put(buf)
-	return res
+	})
 }
 
 func (t *tx64) packWrapper(opid uint32) fdbx.ValueWrapper {
 	return func(v []byte) ([]byte, error) {
-		row := &models.RowT{
+		return fdbx.FlatPack(&models.RowT{
 			State: &models.RowStateT{
 				XMin: t.txid,
 				CMin: opid,
 			},
 			Data: v,
-		}
-
-		buf := fbsPool.Get().(*fbs.Builder)
-		buf.Finish(row.Pack(buf))
-		res := buf.FinishedBytes()
-		buf.Reset()
-		fbsPool.Put(buf)
-		return res, nil
+		}), nil
 	}
 }
 
+/*
+	close - закрывает транзакцию и применяет или откатывает изменения.
+
+	Интерпретация транзакций в БД идет следующим образом:
+
+	* Если запись есть в БД и статус "закоммичено" - значит закоммичено
+	* Если запись есть в БД и статус "в процессе" - значит еще в процессе
+	* Если запись есть в БД и статус "отменено" - значит отменено
+	* Если записи нет в БД - то транзакция считается отмененной (aborted)
+*/
 func (t *tx64) close(status byte, w db.Writer) (err error) {
+	var hdlr db.WriteHandler
+
+	// Если статус транзакции уже определен, менять его нельзя
 	if t.status == txStatusCommitted || t.status == txStatusAborted {
 		return nil
 	}
+
+	// Возвращаем пустой массив обработчиков для переиспользования
 	defer hdlPool.Put(t.oncomm[:0])
 
-	t.status = status
-	dump := t.pack()
+	// Получаем ключ транзакции и устанавливаем статус
 	txid := txKey(t.txid)
-	hdlr := func(w db.Writer) (exp error) {
-		return w.Upsert(fdbx.NewPair(txid, dump))
+	t.status = status
+
+	if t.status == txStatusCommitted {
+		// В случае коммита - сохраняем в БД объект с обновленным статусом
+		pair := fdbx.NewPair(txid, t.pack())
+		hdlr = func(w db.Writer) error { return w.Upsert(pair) }
+	} else {
+		// В случае отката - удаляем из БД объект для экономии места
+		hdlr = func(w db.Writer) error { w.Delete(txid); return nil }
 	}
 
+	// Выполняем обработчик в физической транзакции - указанной или новой
 	if w == nil {
 		err = t.conn.Write(hdlr)
 	} else {
@@ -649,6 +690,7 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 		return ErrClose.WithReason(err)
 	}
 
+	// При удачном стечении обстоятельств - устанавливаем глобальный кеш
 	globCache.set(t.txid, t.status)
 	return nil
 }
@@ -912,6 +954,9 @@ func (t *tx64) txWrapper(key fdbx.Key) (fdbx.Key, error) {
 }
 
 func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
+	if t.read {
+		return ErrWrite.WithStack()
+	}
 
 	opts := getOpts(args)
 	from := keyMgr.Wrap(prefix)

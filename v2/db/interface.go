@@ -17,6 +17,12 @@ func ConnectV610(dbID byte, opts ...Option) (Connection, error) {
 	return newConnV610(dbID, opts...)
 }
 
+// ReadHandler - обработчик физической транзакции чтения, должен быть идемпотентным
+type ReadHandler func(Reader) error
+
+// WriteHandler - обработчик физической транзакции записи, должен быть идемпотентным
+type WriteHandler func(Writer) error
+
 // Connection - объект подключения к БД, а также фабрика элементов
 type Connection interface {
 	// Получение номера БД, для контроля или формирования ключей
@@ -27,8 +33,8 @@ type Connection interface {
 	Clear() error
 
 	// Основные функции транзакций
-	Read(func(Reader) error) error
-	Write(func(Writer) error) error
+	Read(ReadHandler) error
+	Write(WriteHandler) error
 }
 
 // Reader - обработчик чтения значений из БД (физическая транзакция)

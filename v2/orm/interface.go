@@ -24,8 +24,8 @@ type Table interface {
 
 	Select(mvcc.Tx) Query
 	Cursor(mvcc.Tx, string) (Query, error)
+	Delete(mvcc.Tx, ...fdbx.Key) error
 	Upsert(mvcc.Tx, ...fdbx.Pair) error
-	Delete(mvcc.Tx, ...fdbx.Pair) error
 
 	Autovacuum(context.Context, db.Connection, ...Option)
 }

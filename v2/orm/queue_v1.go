@@ -54,6 +54,7 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 			if plan := tsk.Planned(); !plan.IsZero() {
 				keys = append(keys, q.mgr.Wrap(ids[i].LPart(fdbx.Time2Byte(plan)...).LPart(qList)))
 			}
+		} else {
 		}
 	}
 
@@ -91,6 +92,7 @@ func (q v1Queue) PubList(tx mvcc.Tx, ids []fdbx.Key, args ...Option) (err error)
 			// Служебная запись в коллекцию метаданных
 			fdbx.NewPair(q.mgr.Wrap(ids[i].LPart(qMeta)), task.Dump()),
 		)
+
 	}
 
 	if err = tx.Upsert(pairs); err != nil {
@@ -357,6 +359,16 @@ func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
 		return ErrSub.WithReason(err)
 	}
 
+	defer func() {
+		if rec := recover(); rec != nil {
+			if e, ok := rec.(error); ok {
+				err = ErrSub.WithReason(e)
+			} else {
+				err = ErrSub.WithDebug(errx.Debug{"panic": rec})
+			}
+		}
+	}()
+
 	// Целиком распаковывать буфер нам нет смысла, меняем только кол-во попыток и статус
 	meta := models.GetRootAsTask(val, 0).State(nil)
 
@@ -390,6 +402,10 @@ func (q v1Queue) loadTask(tx mvcc.Tx, key fdbx.Key) (tsk *v1Task, err error) {
 	// Получаем буфер метаданных
 	if buf, err = sel.Value(); err != nil {
 		return
+	}
+
+	if len(buf) == 0 {
+		return nil, ErrTask.WithStack()
 	}
 
 	// Распаковываем модель метаданных задачи

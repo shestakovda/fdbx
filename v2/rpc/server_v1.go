@@ -99,11 +99,6 @@ func (s *v1Server) listen(ctx context.Context, cn db.Connection, end *endpoint) 
 		}
 	}()
 
-	var res []byte
-	var exp error
-	var repeat bool
-	var delay time.Duration
-
 	// Собственный контекст для гарантированного завершения подписки в случае провала
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -111,9 +106,27 @@ func (s *v1Server) listen(ctx context.Context, cn db.Connection, end *endpoint) 
 	tasks, errs := end.Queue.Sub(wctx, cn, 1)
 
 	for task := range tasks {
-		// Получаем результаты обработки задачи
-		res, exp = end.OnTask(task)
+		go s.worker(cn, task, end)
+	}
 
+	for exp := range errs {
+		if exp != nil && !errx.Is(exp, context.Canceled, context.DeadlineExceeded) {
+			err = ErrListen.WithReason(exp)
+			return
+		}
+	}
+
+}
+
+func (s *v1Server) worker(cn db.Connection, task orm.Task, end *endpoint) {
+	var res []byte
+	var repeat bool
+	var delay time.Duration
+	var err, exp error
+
+	// TODO: журналирование
+
+	defer func() {
 		// В случае ошибки при обработке задачи, даем возможность спасти положение
 		if exp != nil && end.OnError != nil {
 			// Обработчик ошибки должен решить, как он отреагирует на ситуацию
@@ -126,29 +139,33 @@ func (s *v1Server) listen(ctx context.Context, cn db.Connection, end *endpoint) 
 			if repeat {
 				// Если не смогли повторить - это фиаско
 				if err = end.repeat(cn, task, delay); err != nil {
-					err = ErrListen.WithReason(err)
-					return
+					glog.Errorf("%+v", ErrWorker.WithReason(err))
 				}
 
 				// Перепрыгиваем на след. задачу, чтобы по этой не было ответа
-				continue
+				return
 			}
 		}
 
 		// Отправляем ответ и, если не было ошибки, подтверждаем задачу
 		if err = end.answer(cn, s.data, task, res, exp); err != nil {
-			err = ErrListen.WithReason(err)
-			return
+			glog.Errorf("%+v", ErrWorker.WithReason(err))
 		}
-	}
+	}()
 
-	for exp := range errs {
-		if exp != nil && !errx.Is(exp, context.Canceled, context.DeadlineExceeded) {
-			err = ErrListen.WithReason(exp)
-			return
+	// Отлавливаем панику и превращаем в ошибку
+	defer func() {
+		if rec := recover(); rec != nil {
+			if e, ok := rec.(error); ok {
+				err = ErrWorker.WithReason(e)
+			} else {
+				err = ErrWorker.WithDebug(errx.Debug{"panic": rec})
+			}
 		}
-	}
+	}()
 
+	// Получаем результаты обработки задачи
+	res, exp = end.OnTask(task)
 }
 
 func (s *v1Server) autovacuum(ctx context.Context, cn db.Connection, args []Option) {

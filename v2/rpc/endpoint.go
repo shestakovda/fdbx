@@ -72,6 +72,7 @@ func (e endpoint) repeat(cn db.Connection, task orm.Task, wait time.Duration) (e
 }
 
 func (e endpoint) answer(cn db.Connection, tbl orm.Table, task orm.Task, res []byte, exp error) (err error) {
+
 	// Если это асинхронный вызов, то можно только подтвердить задачу, ответ должен быть сформирован в обработчике
 	if e.Async {
 		return e.ack(cn, task, exp)
@@ -129,6 +130,7 @@ func (e endpoint) answer(cn db.Connection, tbl orm.Table, task orm.Task, res []b
 }
 
 func (e endpoint) ack(cn db.Connection, task orm.Task, exp error) (err error) {
+
 	// В случае ошибки, подтверждать задачу нельзя
 	if exp != nil {
 		return nil
@@ -157,8 +159,8 @@ func (e endpoint) errAnswer(err error) *models.AnswerT {
 	var exp errx.Error
 
 	// Сначала нужно преобразовать её к нужному типу
-	if exp, ok = exp.(errx.Error); !ok {
-		exp = errx.ErrInternal.WithReason(exp)
+	if exp, ok = err.(errx.Error); !ok {
+		exp = errx.ErrInternal.WithReason(err)
 	}
 
 	// Формируем ответную структуру с буфером ошибки

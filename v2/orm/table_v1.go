@@ -70,20 +70,15 @@ func (t v1Table) Upsert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
 	return nil
 }
 
-func (t v1Table) Delete(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
-	if len(pairs) == 0 {
+func (t v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
+	if len(keys) == 0 {
 		return nil
 	}
 
-	cp := make([]fdbx.Key, len(pairs))
-	for i := range pairs {
-		// Сначала получаем исходный ключ, чтобы не задеть исходные данные
-		if cp[i], err = pairs[i].Key(); err != nil {
-			return ErrDelete.WithReason(err)
-		}
-
-		// Оборачиваем ключ
-		cp[i] = t.mgr.Wrap(cp[i])
+	cp := make([]fdbx.Key, len(keys))
+	for i := range keys {
+		// Оборачиваем исходный ключ и делаем копию, чтобы не задеть исходные данные
+		cp[i] = t.mgr.Wrap(keys[i])
 	}
 
 	if err = tx.Delete(cp, mvcc.OnDelete(t.onDelete)); err != nil {
