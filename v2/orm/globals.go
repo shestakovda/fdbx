@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
-	"sync"
 
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/models"
@@ -31,8 +30,6 @@ const (
 var gzLimit uint32 = 840
 var loLimit uint32 = 100000
 
-var zipPool = sync.Pool{New: func() interface{} { return new(bytes.Buffer) }}
-
 var qTriggerKey = fdbx.Key("trigger").LPart(qFlag)
 var qTotalWaitKey = fdbx.Key("wait").LPart(qFlag)
 var qTotalWorkKey = fdbx.Key("work").LPart(qFlag)
@@ -52,7 +49,7 @@ func usrValWrapper(tx mvcc.Tx, tbid uint16) fdbx.ValueWrapper {
 
 		// Достаточно длинное значение, чтобы можно было пытаться сжать его
 		if mod.Size > gzLimit {
-			buf := zipPool.Get().(*bytes.Buffer)
+			buf := new(bytes.Buffer)
 			gzw := gzip.NewWriter(buf)
 
 			if _, err = gzw.Write(mod.Data); err != nil {
@@ -66,9 +63,6 @@ func usrValWrapper(tx mvcc.Tx, tbid uint16) fdbx.ValueWrapper {
 			mod.GZip = true
 			mod.Data = buf.Bytes()
 			mod.Size = uint32(len(mod.Data))
-
-			buf.Reset()
-			zipPool.Put(buf)
 		}
 
 		// Слишком длинное значение, даже после сжатия не влезает в ячейку
@@ -111,7 +105,7 @@ func sysValWrapper(tx mvcc.Tx, tbid uint16) fdbx.ValueWrapper {
 		if mod.GZip {
 			var gzr *gzip.Reader
 
-			buf := zipPool.Get().(*bytes.Buffer)
+			buf := new(bytes.Buffer)
 
 			if gzr, err = gzip.NewReader(bytes.NewReader(mod.Data)); err != nil {
 				return nil, ErrValUnpack.WithReason(err)
@@ -123,9 +117,6 @@ func sysValWrapper(tx mvcc.Tx, tbid uint16) fdbx.ValueWrapper {
 
 			mod.GZip = false
 			mod.Data = buf.Bytes()
-
-			buf.Reset()
-			zipPool.Put(buf)
 		}
 
 		mod.Size = uint32(len(mod.Data))

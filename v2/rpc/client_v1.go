@@ -27,12 +27,17 @@ type v1Client struct {
 	conn db.Connection
 }
 
-func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte, args ...Option) (val []byte, err error) {
+func (c v1Client) Call(
+	ctx context.Context,
+	end uint16,
+	data []byte,
+	args ...Option,
+) (val []byte, err error) {
 	var tx mvcc.Tx
 	var waiter fdbx.Waiter
 
 	opts := getOpts(args)
-	queue := orm.NewQueue(endID, c.data)
+	queue := orm.NewQueue(end, c.data)
 
 	if tx, err = mvcc.Begin(c.conn); err != nil {
 		return nil, ErrSyncExec.WithReason(err)
@@ -60,7 +65,9 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte, args 
 		if exp = w.Upsert(wnow); exp != nil {
 			return
 		}
+
 		waiter = w.Watch(wkey)
+
 		return nil
 	}); err != nil {
 		return nil, ErrSyncExec.WithReason(err)
@@ -70,8 +77,14 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte, args 
 		return nil, ErrSyncExec.WithReason(err)
 	}
 
+	// Открываем новую транзакцию для получения ответа и/или очистки
+	if tx, err = mvcc.Begin(c.conn); err != nil {
+		return
+	}
+	defer tx.Cancel()
+
 	// В любом случае, подчищаем за собой данные по задаче
-	defer c.clean(key)
+	defer c.clean(tx, key)
 
 	wctx, cancel := context.WithTimeout(ctx, opts.timeout)
 	defer cancel()
@@ -80,7 +93,7 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte, args 
 		return nil, ErrSyncExec.WithReason(err)
 	}
 
-	if val, err = c.Result(key); err != nil {
+	if val, err = c.Result(tx, key); err != nil {
 		return nil, ErrSyncExec.WithReason(err)
 	}
 
@@ -89,20 +102,14 @@ func (c v1Client) SyncExec(ctx context.Context, endID uint16, data []byte, args 
 
 // По сути ошибка очистки ни на что не влияет, поэтому просто принтим ее
 // Не возвращаем, потому что все равно метод вызывается в defer, это никому не нужно
-func (c v1Client) clean(key fdbx.Key) {
+func (c v1Client) clean(tx mvcc.Tx, key fdbx.Key) {
 	var err error
-	var tx mvcc.Tx
 
 	defer func() {
 		if err != nil {
 			glog.Errorf("%+v", ErrClean.WithReason(err))
 		}
 	}()
-
-	if tx, err = mvcc.Begin(c.conn); err != nil {
-		return
-	}
-	defer tx.Cancel()
 
 	// Подчищаем задачу, чтобы её больше никто не выполнял, а также ответ, если он был
 	if err = c.data.Delete(tx, key.RPart(NSRequest), key.RPart(NSResponse)); err != nil {
@@ -114,14 +121,8 @@ func (c v1Client) clean(key fdbx.Key) {
 	}
 }
 
-func (c v1Client) Result(key fdbx.Key) (val []byte, err error) {
-	var tx mvcc.Tx
+func (c v1Client) Result(tx mvcc.Tx, key fdbx.Key) (val []byte, err error) {
 	var pair fdbx.Pair
-
-	if tx, err = mvcc.Begin(c.conn); err != nil {
-		return nil, ErrResult.WithReason(err)
-	}
-	defer tx.Cancel()
 
 	if pair, err = c.data.Select(tx).ByID(key.RPart(NSResponse)).First(); err != nil {
 		return nil, ErrResult.WithReason(err)

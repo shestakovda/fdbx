@@ -25,6 +25,7 @@ github.com/shestakovda/errx v1.2.0 h1:wEMc40v7KcKgit5KuVY0zTl5gTAgm708V1KQQo+MXJ
 github.com/shestakovda/errx v1.2.0/go.mod h1:HBJCwRW/mX8OWomEM/eFJan2D8+2qUtcQTU7ikUX7sA=
 github.com/shestakovda/typex v1.0.0 h1:8e5Jgc7dS6EIaAT8z+KI6oNlop/HbRfcOQvN7vEs7Bc=
 github.com/shestakovda/typex v1.0.0/go.mod h1:Pjz2Ikohi4w39r4psqbBPD2THJhhiv6b7QUxtem+IZg=
+github.com/stretchr/objx v0.1.0 h1:4G4v2dO3VZwixGIRoQ5Lfboy6nUhCyYzaqnIAPPhYs4=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.5.1/go.mod h1:5W2xD1RspED5o8YsWQXVCued0rvSQ+mT+I5cxcmMvtA=
 github.com/stretchr/testify v1.6.1 h1:hDPOHmpOpP40lSULcqw7IrRb/u7w6RpDC9399XyoNd0=

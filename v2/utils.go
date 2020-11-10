@@ -32,11 +32,11 @@ func Byte2Time(buf []byte) (time.Time, error) {
 
 func FlatPack(obj FlatPacker) []byte {
 	buf := fbsPool.Get().(*fbs.Builder)
+	buf.Reset()
 	buf.Finish(obj.Pack(buf))
 	tmp := buf.FinishedBytes()
 	res := make([]byte, len(tmp))
 	copy(res, tmp)
-	buf.Reset()
 	fbsPool.Put(buf)
 	return res
 }

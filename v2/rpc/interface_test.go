@@ -60,7 +60,7 @@ func (s *RPCSuite) TestSyncRPC() {
 
 	srv.Run(ctx, s.cn, rpc.VacuumWait(20*time.Millisecond))
 
-	if res, err := cli.SyncExec(ctx, TestQueue1, []byte(msg1)); s.NoError(err) {
+	if res, err := cli.Call(ctx, TestQueue1, []byte(msg1)); s.NoError(err) {
 		s.Equal(msg2, string(res))
 	}
 

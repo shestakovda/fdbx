@@ -7,6 +7,7 @@ import (
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
+	"github.com/shestakovda/fdbx/v2/mvcc"
 	"github.com/shestakovda/fdbx/v2/orm"
 )
 
@@ -43,8 +44,8 @@ func NewClient(cn db.Connection, srvID uint16) Client { return newClientV1(cn, s
 
 // Client - локальный объект для выполнения удаленных операций
 type Client interface {
-	Result(fdbx.Key) ([]byte, error)
-	SyncExec(ctx context.Context, endID uint16, req []byte, args ...Option) ([]byte, error)
+	Result(mvcc.Tx, fdbx.Key) ([]byte, error)
+	Call(ctx context.Context, endID uint16, req []byte, args ...Option) ([]byte, error)
 }
 
 // Ошибки модуля

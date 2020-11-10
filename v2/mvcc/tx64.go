@@ -26,10 +26,9 @@ import (
 	* Получить монотонно возрастающий идентификатор транзакции, синхронизированный между всеми инстансами
 	* Не создать ни одного конфликта записи/чтения между параллельно стартующими транзакциями
 */
-func newTx64(conn db.Connection, readonly bool) (t *tx64, err error) {
+func newTx64(conn db.Connection) (t *tx64, err error) {
 	t = &tx64{
 		conn:   conn,
-		read:   readonly,
 		start:  uint64(time.Now().UTC().UnixNano()),
 		status: txStatusRunning,
 		oncomm: hdlPool.Get().([]CommitHandler),
@@ -51,12 +50,14 @@ func newTx64(conn db.Connection, readonly bool) (t *tx64, err error) {
 			return
 		}
 
-		t.txid = binary.BigEndian.Uint64(val[:8]) + uint64(binary.BigEndian.Uint16(val[8:10]))
-
-		if !t.read {
-			w.Upsert(fdbx.NewPair(fdbx.Key(val[:8]).LPart(nsTx), t.pack()))
+		if len(val) < 10 {
+			return ErrBegin.WithDebug(errx.Debug{
+				"VKey": key.String(),
+				"VVal": fdbx.Key(val).String(),
+			})
 		}
 
+		t.txid = binary.BigEndian.Uint64(val[:8]) + uint64(binary.BigEndian.Uint16(val[8:10]))
 		w.Delete(key)
 		return nil
 	}); err != nil {
@@ -67,8 +68,8 @@ func newTx64(conn db.Connection, readonly bool) (t *tx64, err error) {
 }
 
 type tx64 struct {
-	read   bool
 	conn   db.Connection
+	mods   uint32
 	opid   uint32
 	txid   uint64
 	start  uint64
@@ -83,13 +84,12 @@ func (t *tx64) OnCommit(hdl CommitHandler) {
 }
 
 func (t *tx64) Commit(args ...Option) (err error) {
-	if t.read {
-		return ErrWrite.WithStack()
-	}
-
 	opts := getOpts(args)
 
 	if len(t.oncomm) > 0 {
+		// Если передается Writer, значит могут быть модификации
+		atomic.AddUint32(&t.mods, 1)
+
 		hdlr := func(w db.Writer) (exp error) {
 			for i := range t.oncomm {
 				if exp = t.oncomm[i](w); exp != nil {
@@ -114,10 +114,6 @@ func (t *tx64) Commit(args ...Option) (err error) {
 }
 
 func (t *tx64) Cancel(args ...Option) (err error) {
-	if t.read {
-		return ErrWrite.WithStack()
-	}
-
 	opts := getOpts(args)
 
 	return t.close(txStatusAborted, opts.writer)
@@ -132,9 +128,7 @@ func (t *tx64) Cancel(args ...Option) (err error) {
 	Важно, чтобы выборка и обновление шли строго в одной внутренней FDB транзакции.
 */
 func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
-	if t.read {
-		return ErrWrite.WithStack()
-	}
+	atomic.AddUint32(&t.mods, 1)
 
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
@@ -186,9 +180,7 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 	Важно, чтобы выборка и обновление шли строго в одной внутренней FDB транзакции.
 */
 func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
-	if t.read {
-		return ErrWrite.WithStack()
-	}
+	atomic.AddUint32(&t.mods, 1)
 
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
@@ -412,6 +404,7 @@ func (t *tx64) selectPart(
 	}
 
 	if opts.lock {
+		// Блокировка не означает модификаций, поэтому mods не увеличиваем
 		if w, ok = r.(db.Writer); ok {
 			w.Lock(from, to)
 		}
@@ -441,6 +434,9 @@ func (t *tx64) selectPart(
 		part[i] = part[i].WrapKey(keyMgr.Unwrapper).WrapValue(valWrapper)
 
 		if opts.onLock != nil {
+			// Раз какой-то обработчик в записи, значит модификация - увеличиваем счетчик
+			atomic.AddUint32(&t.mods, 1)
+
 			if err = opts.onLock(t, part[i].Clone(), w); err != nil {
 				return
 			}
@@ -451,9 +447,7 @@ func (t *tx64) selectPart(
 }
 
 func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte, args ...Option) (err error) {
-	if t.read {
-		return ErrWrite.WithStack()
-	}
+	atomic.AddUint32(&t.mods, 1)
 
 	sum := 0
 	tmp := blob
@@ -541,9 +535,7 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size int, args ...Option) (_ []byte, err e
 }
 
 func (t *tx64) DropBLOB(key fdbx.Key, args ...Option) (err error) {
-	if t.read {
-		return ErrWrite.WithStack()
-	}
+	atomic.AddUint32(&t.mods, 1)
 
 	opts := getOpts(args)
 	ukey := keyMgr.Wrap(key)
@@ -586,7 +578,6 @@ func (t *tx64) isAborted(local *txCache, r db.Reader, x uint64) (_ bool, err err
 }
 
 func (t *tx64) txStatus(local *txCache, r db.Reader, x uint64) (status byte, err error) {
-
 	// Дешевле всего чекнуть в глобальном кеше, вдруг уже знаем такую
 	if status = globCache.get(x); status != txStatusUnknown {
 		return
@@ -604,11 +595,9 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, x uint64) (status byte, err
 		return
 	}
 
-	// Если в БД нет записи, то считаем, что это откат
+	// Если в БД нет записи, то либо транзакция еще открыта, либо это был откат
+	// Поскольку нет определенности, в кеш ничего не складываем
 	if len(val) == 0 {
-		// Однако, мы немного подозреваем этот момент,
-		// Поэтому положим это пока только в локальный кеш
-		local.set(x, txStatusAborted)
 		return txStatusAborted, nil
 	}
 
@@ -656,8 +645,6 @@ func (t *tx64) packWrapper(opid uint32) fdbx.ValueWrapper {
 	* Если записи нет в БД - то транзакция считается отмененной (aborted)
 */
 func (t *tx64) close(status byte, w db.Writer) (err error) {
-	var hdlr db.WriteHandler
-
 	// Если статус транзакции уже определен, менять его нельзя
 	if t.status == txStatusCommitted || t.status == txStatusAborted {
 		return nil
@@ -668,16 +655,20 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 
 	// Получаем ключ транзакции и устанавливаем статус
 	txid := txKey(t.txid)
+	mods := atomic.LoadUint32(&t.mods)
 	t.status = status
 
-	if t.status == txStatusCommitted {
-		// В случае коммита - сохраняем в БД объект с обновленным статусом
-		pair := fdbx.NewPair(txid, t.pack())
-		hdlr = func(w db.Writer) error { return w.Upsert(pair) }
-	} else {
-		// В случае отката - удаляем из БД объект для экономии места
-		hdlr = func(w db.Writer) error { w.Delete(txid); return nil }
+	// Если это откат - то сохраняем данные только в случае, если
+	// в рамках транзакции могли быть какие-то изменения (счетчик mods > 0)
+	// В остальных случаях можем спокойно установить локальный кеш и выйти
+	if t.status == txStatusAborted && mods == 0 {
+		globCache.set(t.txid, t.status)
+		return nil
 	}
+
+	// Cохраняем в БД объект с обновленным статусом
+	pair := fdbx.NewPair(txid, t.pack())
+	hdlr := func(w db.Writer) error { return w.Upsert(pair) }
 
 	// Выполняем обработчик в физической транзакции - указанной или новой
 	if w == nil {
@@ -906,6 +897,8 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handle
 	var key fdbx.Key
 	var data []byte
 
+	atomic.AddUint32(&t.mods, 1)
+
 	w.Upsert(pair.WrapValue(func(v []byte) ([]byte, error) {
 		if len(v) > 0 {
 			var state models.RowState
@@ -954,9 +947,7 @@ func (t *tx64) txWrapper(key fdbx.Key) (fdbx.Key, error) {
 }
 
 func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
-	if t.read {
-		return ErrWrite.WithStack()
-	}
+	atomic.AddUint32(&t.mods, 1)
 
 	opts := getOpts(args)
 	from := keyMgr.Wrap(prefix)
@@ -990,14 +981,17 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 	var buf models.RowState
 	var row models.RowStateT
 
-	lc := makeCache()
 	list := lg()
-	drop := make([]fdbx.Pair, 0, len(list))
 
 	// Больше нечего получить - условие выхода
 	if len(list) == 0 {
 		return nil, nil
 	}
+
+	lc := makeCache()
+	drop := make([]fdbx.Pair, 0, len(list))
+
+	atomic.AddUint32(&t.mods, 1)
 
 	// Проверяем все пары ключ/значение, удаляя все, что может помешать
 	for i := range list {
