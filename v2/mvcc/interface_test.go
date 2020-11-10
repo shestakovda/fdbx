@@ -407,12 +407,15 @@ func (s *MVCCSuite) TestListAll() {
 	s.Require().NoError(tx2.Cancel())
 }
 
-func BenchmarkSequenceWorkflowFourTx(b *testing.B) {
+func BenchmarkSequenceWorkflowDiffTx(b *testing.B) {
 	cn, err := db.ConnectV610(TestDB)
 	require.NoError(b, err)
 	require.NoError(b, cn.Clear())
 
 	b.ResetTimer()
+
+	var keys [1]fdbx.Key
+	var pairs [1]fdbx.Pair
 
 	for i := 0; i < b.N; i++ {
 		key := fdbx.Key(typex.NewUUID())
@@ -422,13 +425,15 @@ func BenchmarkSequenceWorkflowFourTx(b *testing.B) {
 		// INSERT
 		tx, err := mvcc.Begin(cn)
 		require.NoError(b, err)
-		require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(key, val)}))
+		pairs[0] = fdbx.NewPair(key, val)
+		require.NoError(b, tx.Upsert(pairs[:]))
 		require.NoError(b, tx.Commit())
 
 		// UPDATE
 		tx, err = mvcc.Begin(cn)
 		require.NoError(b, err)
-		require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(key, val2)}))
+		pairs[0] = fdbx.NewPair(key, val2)
+		require.NoError(b, tx.Upsert(pairs[:]))
 		require.NoError(b, tx.Commit())
 
 		// SELECT / DELETE
@@ -438,17 +443,18 @@ func BenchmarkSequenceWorkflowFourTx(b *testing.B) {
 		require.NoError(b, err)
 		vv, err := sl.Value()
 		require.NoError(b, err)
-		require.Equal(b, string(val2), string(vv))
-		require.NoError(b, tx.Delete([]fdbx.Key{key}))
+		require.Equal(b, val2, vv)
+		keys[0] = key
+		require.NoError(b, tx.Delete(keys[:]))
 		require.NoError(b, tx.Commit())
 
 		// SELECT EMPTY
-		tx, err = mvcc.Begin(cn)
-		require.NoError(b, err)
-		sl, err = tx.Select(key)
-		require.Error(b, err)
-		require.True(b, errx.Is(err, mvcc.ErrNotFound))
-		require.NoError(b, tx.Cancel())
+		// tx, err = mvcc.Begin(cn)
+		// require.NoError(b, err)
+		// sl, err = tx.Select(key)
+		// require.Error(b, err)
+		// require.True(b, errx.Is(err, mvcc.ErrNotFound))
+		// require.NoError(b, tx.Cancel())
 	}
 }
 

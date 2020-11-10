@@ -10,7 +10,7 @@ import (
 func getOpts(args []Option) (o options) {
 	o.vpack = 1000
 	o.vwait = time.Hour
-	o.refresh = time.Second
+	o.refresh = time.Minute
 
 	for i := range args {
 		args[i](&o)

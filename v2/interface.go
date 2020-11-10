@@ -33,7 +33,9 @@ type Pair interface {
 }
 
 // ListGetter - метод для отложенного получения списка значений
-type ListGetter func() []Pair
+type ListGetter interface {
+	Resolve() []Pair
+}
 
 // Waiter - объект ожидания изменения ключа
 type Waiter interface {

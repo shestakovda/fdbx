@@ -48,7 +48,7 @@ func (s *RPCSuite) TestSyncRPC() {
 	cli := rpc.NewClient(s.cn, TestTable)
 
 	s.Require().NoError(srv.Endpoint(
-		TestQueue1, func(t orm.Task) ([]byte, error) {
+		TestQueue1, func(ctx context.Context, t orm.Task) ([]byte, error) {
 			s.Equal(msg1, string(t.Body()))
 			return []byte(msg2), nil
 		},
@@ -93,7 +93,7 @@ func (s *RPCSuite) TestSyncRPC() {
 	// Проверяем, что старого ключа нет, а новый еще на месте
 	s.Require().NoError(s.cn.Read(func(r db.Reader) (e error) {
 		wnil := mvcc.NewTxKeyManager().Wrap(orm.NewWatchKeyManager(TestTable).Wrap(nil))
-		list := r.List(wnil, wnil, 1000, false)()
+		list := r.List(wnil, wnil, 1000, false).Resolve()
 
 		if s.Len(list, 1) {
 			if key, exp := list[0].Key(); s.NoError(exp) {
@@ -126,7 +126,7 @@ func (s *RPCSuite) TestServer() {
 	watch := make(map[string]int, 6)
 
 	s.Require().NoError(srv.Endpoint(
-		TestQueue1, func(t orm.Task) ([]byte, error) {
+		TestQueue1, func(ctx context.Context, t orm.Task) ([]byte, error) {
 			watch["OnTask1"]++
 			s.Equal(id1, t.Key())
 			s.Equal("msg1", string(t.Body()))
@@ -141,13 +141,15 @@ func (s *RPCSuite) TestServer() {
 		}),
 		rpc.OnListenError(func(e error) (bool, time.Duration) {
 			watch["OnListen1"]++
-			s.NoError(e)
+			if s.Error(e) {
+				s.True(errx.Is(e, context.Canceled))
+			}
 			return false, 0
 		}),
 	))
 
 	s.Require().NoError(srv.Endpoint(
-		TestQueue2, func(t orm.Task) ([]byte, error) {
+		TestQueue2, func(ctx context.Context, t orm.Task) ([]byte, error) {
 			watch["OnTask2"]++
 			s.Equal(id3, t.Key())
 			if string(t.Body()) == "msg3" {
@@ -177,7 +179,9 @@ func (s *RPCSuite) TestServer() {
 		}),
 		rpc.OnListenError(func(e error) (bool, time.Duration) {
 			watch["OnListen2"]++
-			s.NoError(e)
+			if s.Error(e) {
+				s.True(errx.Is(e, context.Canceled))
+			}
 			return false, 0
 		}),
 	))
@@ -196,10 +200,10 @@ func (s *RPCSuite) TestServer() {
 
 	s.Equal(1, watch["OnTask1"])
 	s.Equal(0, watch["OnError1"])
-	s.Equal(0, watch["OnListen1"])
+	s.Equal(1, watch["OnListen1"])
 	s.Equal(2, watch["OnTask2"])
 	s.Equal(1, watch["OnTask2_1"])
 	s.Equal(1, watch["OnTask2_2"])
 	s.Equal(1, watch["OnError2"])
-	s.Equal(0, watch["OnListen2"])
+	s.Equal(1, watch["OnListen2"])
 }

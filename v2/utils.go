@@ -1,8 +1,12 @@
 package fdbx
 
 import (
+	"context"
 	"encoding/binary"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/shestakovda/errx"
@@ -11,6 +15,16 @@ import (
 )
 
 var fbsPool = sync.Pool{New: func() interface{} { return fbs.NewBuilder(128) }}
+
+// ExitSignals - список системных сигналов, которые означают завершение программы
+//nolint:gochecknoglobals
+var ExitSignals = []os.Signal{
+	syscall.SIGINT,
+	syscall.SIGHUP,
+	syscall.SIGABRT,
+	syscall.SIGQUIT,
+	syscall.SIGTERM,
+}
 
 // Time2Byte - преобразователь времени в массив байт
 func Time2Byte(t time.Time) []byte {
@@ -39,4 +53,27 @@ func FlatPack(obj FlatPacker) []byte {
 	copy(res, tmp)
 	fbsPool.Put(buf)
 	return res
+}
+
+func WithSignal(ctx context.Context, signals ...os.Signal) (context.Context, context.CancelFunc) {
+	exit := make(chan os.Signal, 1)
+	signal.Notify(exit, signals...)
+
+	wctx, cancel := context.WithCancel(ctx)
+
+	go func() {
+		defer signal.Stop(exit)
+		defer cancel()
+
+		for {
+			select {
+			case <-wctx.Done():
+				return
+			case <-exit:
+				return
+			}
+		}
+	}()
+
+	return wctx, cancel
 }

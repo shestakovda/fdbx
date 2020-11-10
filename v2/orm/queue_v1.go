@@ -54,7 +54,6 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 			if plan := tsk.Planned(); !plan.IsZero() {
 				keys = append(keys, q.mgr.Wrap(ids[i].LPart(fdbx.Time2Byte(plan)...).LPart(qList)))
 			}
-		} else {
 		}
 	}
 
@@ -171,6 +170,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 
 	var pairs []fdbx.Pair
 	var waiter fdbx.Waiter
+	var refresh time.Duration
 
 	from := q.mgr.Wrap(fdbx.Key{qList})
 	hdlr := func() (exp error) {
@@ -201,6 +201,44 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 			if len(pairs) == 0 {
 				// В этом случае не коммитим, т.к. по сути ничего не изменилось
 				waiter = w.Watch(txmgr.Wrap(q.mgr.Wrap(qTriggerKey)))
+
+				// Поскольку выборка задач идет в эксклюзивной блокировке, можем
+				// этим воспользоваться тут и выбрать время следующей задачи по плану.
+				if pairs, e = tx.ListAll(
+					mvcc.To(from),
+					mvcc.From(from),
+					mvcc.Limit(1),
+					mvcc.Writer(w),
+				); e != nil {
+					return
+				}
+
+				if len(pairs) > 0 {
+					var key fdbx.Key
+					var when time.Time
+
+					if key, e = pairs[0].Key(); e != nil {
+						return
+					}
+
+					// Применяем обратное экранирование транзакции и очереди, чтобы получить исходный ключ
+					// Айдишку мы не знаем, но знаем, что сначала идут флаги коллекции, а затем 8 байт времени
+					wkey := key.LSkip(5 + 1 + uint16(len(q.options.prefix))).Bytes()
+					if when, e = fdbx.Byte2Time(wkey[:8]); e != nil {
+						return
+					}
+
+					refresh = when.Sub(time.Now())
+				} else {
+					// Если следующей задачи нет (очередь пуста), ставим таймаут из опций
+					refresh = q.options.refresh
+				}
+
+				// Если по какой-то причине задача уже в прошлом, большой таймаут не нужен
+				if refresh <= 0 {
+					refresh = time.Millisecond
+				}
+
 				return nil
 			}
 
@@ -223,7 +261,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 	}
 
 	for {
-		if err = q.waitTask(ctx, waiter); err != nil {
+		if err = q.waitTask(ctx, waiter, refresh); err != nil {
 			return
 		}
 
@@ -305,7 +343,7 @@ func (q v1Queue) Task(tx mvcc.Tx, key fdbx.Key) (res Task, err error) {
 	return tsk, nil
 }
 
-func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter) (err error) {
+func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter, refresh time.Duration) (err error) {
 	if waiter == nil {
 		return nil
 	}
@@ -316,15 +354,17 @@ func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter) (err error) {
 
 	// Даже если waiter установлен, то при отсутствии других публикаций мы тут зависнем навечно.
 	// А задачи, время которых настало, будут просрочены. Для этого нужен особый механизм обработки по таймауту.
-	wctx, cancel := context.WithTimeout(ctx, q.options.refresh)
+	wctx, cancel := context.WithTimeout(ctx, refresh)
 	defer cancel()
 
-	if err = waiter.Resolve(wctx); err != nil {
-		// Если запущено много обработчиков, все они рванут забирать события одновременно.
-		// Чтобы избежать массовых конфликтов транзакций и улучшить распределение задач делаем небольшую
-		// случайную задержку, в пределах 20 мс. Немного для человека, значительно для уменьшения конфликтов
-		time.Sleep(time.Duration(rand.Intn(20)) * time.Millisecond)
-	}
+	// Игнорируем ошибку. Вышли так вышли, главное, что не застряли. Очередь должна работать дальше
+	//nolint:errcheck
+	waiter.Resolve(wctx)
+
+	// Если запущено много обработчиков, все они рванут забирать события одновременно.
+	// Чтобы избежать массовых конфликтов транзакций и улучшить распределение задач делаем небольшую
+	// случайную задержку, в пределах 5 мс. Немного для человека, значительно для уменьшения конфликтов
+	time.Sleep(time.Duration(rand.Intn(5)) * time.Millisecond)
 
 	return nil
 }

@@ -1,8 +1,7 @@
 package mvcc
 
 import (
-	"sync"
-
+	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/models"
 )
 
@@ -19,13 +18,13 @@ var (
 var globCache = makeCache()
 var keyMgr = NewTxKeyManager()
 
-var hdlPool = sync.Pool{New: func() interface{} { return make([]CommitHandler, 0, 16) }}
-
 const (
-	nsUser  byte = 0
-	nsTx    byte = 1
-	nsTxTmp byte = 2
+	nsUser   byte = 0
+	nsTx     byte = 1
+	nsTxFlag byte = 2
 )
+
+var counterKey = fdbx.Key("counter").LPart(nsTxFlag)
 
 const (
 	txStatusUnknown   byte = 0

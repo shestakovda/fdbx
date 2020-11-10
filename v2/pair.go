@@ -2,10 +2,10 @@ package fdbx
 
 func NewPair(k Key, v []byte) Pair {
 	p := pair{
-		k:  k,
-		v:  v,
-		kc: make([]KeyWrapper, 0, 4),
-		vc: make([]ValueWrapper, 0, 4),
+		k: k,
+		v: v,
+		// kc: make([]KeyWrapper, 0, 4),
+		// vc: make([]ValueWrapper, 0, 4),
 	}
 	return &p
 }

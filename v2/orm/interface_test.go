@@ -135,7 +135,7 @@ func (s *ORMSuite) TestWorkflow() {
 
 	// В базе ничего не должно оставаться
 	s.Require().NoError(s.cn.Read(func(r db.Reader) error {
-		list := r.List(fdbx.Key{0x00}, fdbx.Key{0x00}, 1000, false)()
+		list := r.List(fdbx.Key{0x00}, fdbx.Key{0x00}, 1000, false).Resolve()
 
 		if !s.Len(list, 0) {
 			for i := range list {
@@ -234,7 +234,7 @@ func (s *ORMSuite) TestByID() {
 
 	// В базе ничего не должно оставаться
 	s.Require().NoError(s.cn.Read(func(r db.Reader) error {
-		list := r.List(fdbx.Key{0x00}, fdbx.Key{0x00}, 1000, false)()
+		list := r.List(fdbx.Key{0x00}, fdbx.Key{0x00}, 1000, false).Resolve()
 
 		if !s.Len(list, 0) {
 			for i := range list {
@@ -380,6 +380,8 @@ func (s *ORMSuite) TestQueue() {
 	s.Require().NoError(s.tbl.Select(tx).Delete())
 	s.Require().NoError(tx.Commit())
 
+	time.Sleep(100 * time.Millisecond)
+
 	// Запускаем вакуум
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -387,7 +389,7 @@ func (s *ORMSuite) TestQueue() {
 
 	// Проверим, что осталось в БД
 	s.Require().NoError(s.cn.Read(func(r db.Reader) error {
-		list := r.List(fdbx.Key{0x00}, fdbx.Key{0x00}, 1000, false)()
+		list := r.List(fdbx.Key{0x00}, fdbx.Key{0x00}, 1000, false).Resolve()
 
 		// Должно быть 3 значения, только счетчики
 		if s.Len(list, 3) {

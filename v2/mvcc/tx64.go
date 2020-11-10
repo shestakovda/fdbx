@@ -6,11 +6,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/models"
-	"github.com/shestakovda/typex"
 )
 
 /*
@@ -26,45 +26,31 @@ import (
 	* Получить монотонно возрастающий идентификатор транзакции, синхронизированный между всеми инстансами
 	* Не создать ни одного конфликта записи/чтения между параллельно стартующими транзакциями
 */
-func newTx64(conn db.Connection) (t *tx64, err error) {
-	t = &tx64{
+func newTx64(conn db.Connection) (*tx64, error) {
+	var waiter fdb.FutureKey
+
+	if err := conn.Write(func(w db.Writer) error {
+		w.Increment(counterKey, 1)
+		waiter = w.Version()
+		return nil
+	}); err != nil {
+		return nil, ErrBegin.WithReason(err)
+	}
+
+	ver := waiter.MustGet()
+
+	if len(ver) < 10 {
+		return nil, ErrBegin.WithDebug(errx.Debug{
+			"version": fdbx.Key(ver).String(),
+		})
+	}
+
+	return &tx64{
+		txid:   binary.BigEndian.Uint64(ver[:8]) + uint64(binary.BigEndian.Uint16(ver[8:10])),
 		conn:   conn,
 		start:  uint64(time.Now().UTC().UnixNano()),
 		status: txStatusRunning,
-		oncomm: hdlPool.Get().([]CommitHandler),
-	}
-
-	key := fdbx.Key(typex.NewUUID()).LPart(nsTxTmp)
-
-	if err = conn.Write(func(w db.Writer) error {
-		w.Versioned(key)
-		return nil
-	}); err != nil {
-		return nil, ErrBegin.WithReason(err)
-	}
-
-	if err = conn.Write(func(w db.Writer) (exp error) {
-		var val []byte
-
-		if val, exp = w.Data(key).Value(); exp != nil {
-			return
-		}
-
-		if len(val) < 10 {
-			return ErrBegin.WithDebug(errx.Debug{
-				"VKey": key.String(),
-				"VVal": fdbx.Key(val).String(),
-			})
-		}
-
-		t.txid = binary.BigEndian.Uint64(val[:8]) + uint64(binary.BigEndian.Uint16(val[8:10]))
-		w.Delete(key)
-		return nil
-	}); err != nil {
-		return nil, ErrBegin.WithReason(err)
-	}
-
-	return t, nil
+	}, nil
 }
 
 type tx64 struct {
@@ -180,10 +166,15 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 	Важно, чтобы выборка и обновление шли строго в одной внутренней FDB транзакции.
 */
 func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
+	if len(pairs) == 1 {
+		return t.upsertOne(pairs[0], args)
+	}
+
 	atomic.AddUint32(&t.mods, 1)
 
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
+	wrap := t.packWrapper(opid)
 	hdlr := func(w db.Writer) (exp error) {
 		var ukey fdbx.Key
 		var row fdbx.Pair
@@ -211,7 +202,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 				return
 			}
 
-			if exp = w.Upsert(cp[i].WrapKey(t.txWrapper).WrapValue(t.packWrapper(opid))); exp != nil {
+			if exp = w.Upsert(cp[i].WrapKey(t.txWrapper).WrapValue(wrap)); exp != nil {
 				return
 			}
 
@@ -220,6 +211,56 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 			}
 
 			if exp = opts.onInsert(t, pairs[i]); exp != nil {
+				return
+			}
+		}
+
+		return nil
+	}
+
+	if opts.writer != nil {
+		err = hdlr(opts.writer)
+	} else {
+		err = t.conn.Write(hdlr)
+	}
+
+	if err != nil {
+		return ErrUpsert.WithReason(err)
+	}
+
+	return nil
+}
+
+func (t *tx64) upsertOne(pair fdbx.Pair, args []Option) (err error) {
+	atomic.AddUint32(&t.mods, 1)
+
+	opts := getOpts(args)
+	opid := atomic.AddUint32(&t.opid, 1)
+	wrap := t.packWrapper(opid)
+	hdlr := func(w db.Writer) (exp error) {
+		var ukey fdbx.Key
+		var row fdbx.Pair
+
+		cp := pair.Clone().WrapKey(keyMgr.Wrapper)
+
+		if ukey, exp = cp.Key(); exp != nil {
+			return
+		}
+
+		if row, exp = t.fetchRow(w, nil, opid, w.List(ukey, ukey, 0, true)); exp != nil {
+			return
+		}
+
+		if exp = t.dropRow(w, opid, row, opts.onDelete); exp != nil {
+			return
+		}
+
+		if exp = w.Upsert(cp.WrapKey(t.txWrapper).WrapValue(wrap)); exp != nil {
+			return
+		}
+
+		if opts.onInsert != nil {
+			if exp = opts.onInsert(t, pair); exp != nil {
 				return
 			}
 		}
@@ -507,7 +548,7 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size int, args ...Option) (_ []byte, err e
 
 	for {
 		if err = t.conn.Read(func(r db.Reader) (exp error) {
-			rows = r.List(ukey, end, 10, false)()
+			rows = r.List(ukey, end, 10, false).Resolve()
 			return nil
 		}); err != nil {
 			return nil, ErrBLOBLoad.WithReason(err)
@@ -623,13 +664,14 @@ func (t *tx64) pack() []byte {
 }
 
 func (t *tx64) packWrapper(opid uint32) fdbx.ValueWrapper {
+	state := &models.RowStateT{
+		XMin: t.txid,
+		CMin: opid,
+	}
 	return func(v []byte) ([]byte, error) {
 		return fdbx.FlatPack(&models.RowT{
-			State: &models.RowStateT{
-				XMin: t.txid,
-				CMin: opid,
-			},
-			Data: v,
+			State: state,
+			Data:  v,
 		}), nil
 	}
 }
@@ -649,9 +691,6 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	if t.status == txStatusCommitted || t.status == txStatusAborted {
 		return nil
 	}
-
-	// Возвращаем пустой массив обработчиков для переиспользования
-	defer hdlPool.Put(t.oncomm[:0])
 
 	// Получаем ключ транзакции и устанавливаем статус
 	txid := txKey(t.txid)
@@ -730,7 +769,7 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 	}
 
 	// Загружаем список версий, существующих в рамках этой операции
-	list := lg()
+	list := lg.Resolve()
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
@@ -811,7 +850,7 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 		lc = makeCache()
 	}
 
-	list := lg()
+	list := lg.Resolve()
 	res = list[:0]
 
 	// Проверяем все версии, пока не получим актуальную
@@ -981,7 +1020,7 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 	var buf models.RowState
 	var row models.RowStateT
 
-	list := lg()
+	list := lg.Resolve()
 
 	// Больше нечего получить - условие выхода
 	if len(list) == 0 {

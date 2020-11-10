@@ -32,6 +32,10 @@ func (w v610Writer) Upsert(pair fdbx.Pair) (err error) {
 	return nil
 }
 
+func (w v610Writer) Version() fdb.FutureKey {
+	return w.tx.GetVersionstamp()
+}
+
 func (w v610Writer) Versioned(key fdbx.Key) {
 	var data [14]byte
 	w.tx.SetVersionstampedValue(w.usrWrap(key).Bytes(), data[:])

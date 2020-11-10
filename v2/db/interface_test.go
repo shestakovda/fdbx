@@ -50,12 +50,27 @@ func (s *InterfaceSuite) TestConnection() {
 	key2 := fdbx.Key("key2")
 	key3 := fdbx.Key("key3")
 
-	s.Require().NoError(cn.Write(func(w db.Writer) error {
-		w.Upsert(fdbx.NewPair(key1, []byte("val1")))
-		w.Upsert(fdbx.NewPair(key2, buf[:]))
+	s.Require().NoError(cn.Write(func(w db.Writer) (exp error) {
+		if val, exp = w.Data(key1).Value(); exp != nil {
+			return
+		}
+		s.Empty(val)
+
+		if exp = w.Upsert(fdbx.NewPair(key1, []byte("val1"))); exp != nil {
+			return
+		}
+
+		if exp = w.Upsert(fdbx.NewPair(key2, buf[:])); exp != nil {
+			return
+		}
 		w.Versioned(key3)
 		waiter = w.Watch(key2)
 		waiter2 = w.Watch(key3)
+
+		if val, exp = w.Data(key1).Value(); exp != nil {
+			return
+		}
+		s.Equal("val1", string(val))
 		return nil
 	}))
 
@@ -99,7 +114,7 @@ func (s *InterfaceSuite) TestConnection() {
 				s.Empty(val)
 			}
 
-			s.Len(r.List(nil, nil, 0, false)(), 2)
+			s.Len(r.List(nil, nil, 0, false).Resolve(), 2)
 			return nil
 		}))
 
@@ -134,7 +149,7 @@ func (s *InterfaceSuite) TestConnection() {
 	s.Require().NoError(cn.Write(func(w db.Writer) error {
 		w.Lock(key1, key3)
 		w.Erase(key1, key3)
-		s.Len(w.List(nil, nil, 0, false)(), 0)
+		s.Len(w.List(nil, nil, 0, false).Resolve(), 0)
 		return nil
 	}))
 }

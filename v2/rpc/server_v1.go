@@ -43,7 +43,9 @@ func (s *v1Server) Endpoint(id uint16, hdl TaskHandler, args ...Option) (err err
 func (s *v1Server) Run(ctx context.Context, cn db.Connection, args ...Option) {
 	var wctx context.Context
 
-	wctx, s.exit = context.WithCancel(ctx)
+	// Для аккуратного завершения обработчика в случае краха приложения, чтобы события не потерялись
+	wctx, s.exit = fdbx.WithSignal(ctx, fdbx.ExitSignals...)
+
 	s.wait = new(sync.WaitGroup)
 	s.wait.Add(len(s.list) + 1)
 
@@ -106,11 +108,11 @@ func (s *v1Server) listen(ctx context.Context, cn db.Connection, end *endpoint) 
 	tasks, errs := end.Queue.Sub(wctx, cn, 1)
 
 	for task := range tasks {
-		go s.worker(cn, task, end)
+		go s.worker(ctx, cn, task, end)
 	}
 
 	for exp := range errs {
-		if exp != nil && !errx.Is(exp, context.Canceled, context.DeadlineExceeded) {
+		if exp != nil && !errx.Is(exp, context.DeadlineExceeded) {
 			err = ErrListen.WithReason(exp)
 			return
 		}
@@ -118,28 +120,28 @@ func (s *v1Server) listen(ctx context.Context, cn db.Connection, end *endpoint) 
 
 }
 
-func (s *v1Server) worker(cn db.Connection, task orm.Task, end *endpoint) {
+func (s *v1Server) worker(ctx context.Context, cn db.Connection, task orm.Task, end *endpoint) {
+	var err error
 	var res []byte
 	var repeat bool
 	var delay time.Duration
-	var err, exp error
 
 	// TODO: журналирование
 
 	defer func() {
 		// В случае ошибки при обработке задачи, даем возможность спасти положение
-		if exp != nil && end.OnError != nil {
+		if err != nil && end.OnError != nil {
 			// Обработчик ошибки должен решить, как он отреагирует на ситуацию
 			// Если сам обработчик завершился с ошибкой - значит тут нечего повторять
 			// Полученную ошибку пробрасываем клиенту, она могла быть заменена или преобразована
 			// Аналогично с результатом - он мог быть сформирован заново
-			repeat, delay, res, exp = end.OnError(task, exp)
+			repeat, delay, res, err = end.OnError(task, err)
 
 			// Если требуется повтор, переносим задачу в будущее и идем дальше
 			if repeat {
 				// Если не смогли повторить - это фиаско
-				if err = end.repeat(cn, task, delay); err != nil {
-					glog.Errorf("%+v", ErrWorker.WithReason(err))
+				if exp := end.repeat(cn, task, delay); exp != nil {
+					glog.Errorf("%+v", ErrWorker.WithReason(exp))
 				}
 
 				// Перепрыгиваем на след. задачу, чтобы по этой не было ответа
@@ -148,8 +150,8 @@ func (s *v1Server) worker(cn db.Connection, task orm.Task, end *endpoint) {
 		}
 
 		// Отправляем ответ и, если не было ошибки, подтверждаем задачу
-		if err = end.answer(cn, s.data, task, res, exp); err != nil {
-			glog.Errorf("%+v", ErrWorker.WithReason(err))
+		if exp := end.answer(cn, s.data, task, res, err); exp != nil {
+			glog.Errorf("%+v", ErrWorker.WithReason(exp))
 		}
 	}()
 
@@ -164,8 +166,25 @@ func (s *v1Server) worker(cn db.Connection, task orm.Task, end *endpoint) {
 		}
 	}()
 
+	// Контекст для прерывания обработки в случае разрыва со стороны клиента
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var waiter fdbx.Waiter
+
+	wkey, _ := waits(s.data.ID(), task.Key())
+	if err = cn.Write(func(w db.Writer) error { waiter = w.Watch(wkey); return nil }); err != nil {
+		err = ErrWorker.WithReason(err)
+		return
+	}
+
+	// В отдельной горутине следим за клиентом и закрываем контекст
+	// Либо обработчик закончит работу и ожидание будет сброшено
+	// Либо клиент при завершении подчищает за собой, удаляя ключ задачи
+	go func() { waiter.Resolve(wctx); cancel() }()
+
 	// Получаем результаты обработки задачи
-	res, exp = end.OnTask(task)
+	res, err = end.OnTask(wctx, task)
 }
 
 func (s *v1Server) autovacuum(ctx context.Context, cn db.Connection, args []Option) {
@@ -212,7 +231,7 @@ func (s *v1Server) autovacuum(ctx context.Context, cn db.Connection, args []Opti
 			var key fdbx.Key
 			var when time.Time
 
-			pairs := w.List(wkey, wkey, opts.vpack, false)()
+			pairs := w.List(wkey, wkey, opts.vpack, false).Resolve()
 
 			for i := range pairs {
 				if val, exp = pairs[i].Value(); exp != nil {

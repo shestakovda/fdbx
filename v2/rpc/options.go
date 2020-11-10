@@ -9,8 +9,8 @@ import (
 func getOpts(args []Option) (o options) {
 	o.vpack = 1000
 	o.vwait = time.Hour
-	o.refresh = time.Second
-	o.timeout = time.Minute
+	o.refresh = time.Minute
+	o.timeout = 3 * time.Minute
 	o.onListen = defOnListen
 
 	for i := range args {

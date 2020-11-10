@@ -2,11 +2,7 @@ package mvcc
 
 import "sync"
 
-func makeCache() *txCache {
-	return &txCache{
-		cache: make(map[uint64]byte, 8),
-	}
-}
+func makeCache() *txCache { return new(txCache) }
 
 type txCache struct {
 	sync.RWMutex
@@ -24,6 +20,11 @@ func (c *txCache) get(txid uint64) byte {
 func (c *txCache) set(txid uint64, status byte) {
 	c.Lock()
 	defer c.Unlock()
+
+	if c.cache == nil {
+		c.cache = make(map[uint64]byte, 8)
+	}
+
 	c.cache[txid] = status
 
 	if txid > c.max {

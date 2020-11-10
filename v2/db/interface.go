@@ -1,6 +1,7 @@
 package db
 
 import (
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 )
@@ -50,6 +51,8 @@ type Reader interface {
 // Writer - обработчик модификации значений в БД (физическая транзакция)
 type Writer interface {
 	Reader
+
+	Version() fdb.FutureKey
 
 	// Удаление конкретного значения. Не расстраивается, если его нет
 	Delete(fdbx.Key)

@@ -18,7 +18,7 @@ const (
 )
 
 // TaskHandler - обработчик задачи из очереди
-type TaskHandler func(orm.Task) ([]byte, error)
+type TaskHandler func(context.Context, orm.Task) ([]byte, error)
 
 // ErrorHandler - обработчик ошибки с возможностью перезапуска задачи
 type ErrorHandler func(orm.Task, error) (bool, time.Duration, []byte, error)
