@@ -8,10 +8,9 @@ import (
 )
 
 func NewFullSelector(tx mvcc.Tx) Selector {
-	s := fullSelector{
+	return &fullSelector{
 		baseSelector: newBaseSelector(tx),
 	}
-	return &s
 }
 
 type fullSelector struct {
@@ -29,14 +28,15 @@ func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<
 		defer close(errs)
 
 		opts := getOpts(args)
-		lkey := tbl.Mgr().Wrap(opts.lastkey)
+		nkey := WrapTableKey(tbl.ID(), nil)
+		lkey := WrapTableKey(tbl.ID(), opts.lastkey)
 		reqs := make([]mvcc.Option, 0, 3)
-		skip := opts.lastkey != nil
+		skip := len(opts.lastkey.Bytes()) > 0
 
 		if opts.reverse {
-			reqs = append(reqs, mvcc.From(tbl.Mgr().Wrap(nil)), mvcc.To(lkey), mvcc.Reverse())
+			reqs = append(reqs, mvcc.From(nkey), mvcc.To(lkey), mvcc.Reverse())
 		} else {
-			reqs = append(reqs, mvcc.From(lkey), mvcc.To(tbl.Mgr().Wrap(nil)))
+			reqs = append(reqs, mvcc.From(lkey), mvcc.To(nkey))
 		}
 
 		wctx, exit := context.WithCancel(ctx)
@@ -55,6 +55,8 @@ func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<
 				errs <- err
 				return
 			}
+
+			s.setKey(UnwrapTableKey(pair.Key()))
 		}
 
 		for err := range errc {

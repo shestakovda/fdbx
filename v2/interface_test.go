@@ -3,7 +3,6 @@ package fdbx_test
 import (
 	"testing"
 
-	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -24,13 +23,13 @@ type InterfaceSuite struct {
 func (s *InterfaceSuite) TestKey() {
 
 	// read-only
-	s.Equal(predict, fdbx.Key(unpredictable).LSkip(2).RSkip(4).String())
-	s.Equal(predict, fdbx.Key(unpredictable).RSkip(4).LSkip(2).String())
+	s.Equal(predict, fdbx.String2Key(unpredictable).LSkip(2).RSkip(4).String())
+	s.Equal(predict, fdbx.String2Key(unpredictable).RSkip(4).LSkip(2).String())
 
 	// write-only
-	s.Equal(unpredictable, fdbx.Key(predict).LPart('u', 'n').RPart('a', 'b', 'l', 'e').String())
-	s.Equal(unpredictable, fdbx.Key(predict).RPart('a', 'b', 'l', 'e').LPart('u', 'n').String())
-	s.Equal(predict, fdbx.Key(nil).
+	s.Equal(unpredictable, fdbx.String2Key(predict).LPart('u', 'n').RPart('a', 'b', 'l', 'e').String())
+	s.Equal(unpredictable, fdbx.String2Key(predict).RPart('a', 'b', 'l', 'e').LPart('u', 'n').String())
+	s.Equal(predict, fdbx.Bytes2Key(nil).
 		LPart('d').
 		RPart('i').
 		LPart('e').
@@ -42,14 +41,14 @@ func (s *InterfaceSuite) TestKey() {
 	)
 
 	// read/write
-	s.Equal(unpredictable, fdbx.Key(unpredictable).
+	s.Equal(unpredictable, fdbx.String2Key(unpredictable).
 		LPart('u', 'n').
 		LSkip(2).
 		RPart('a', 'b', 'l', 'e').
 		RSkip(4).
 		String(),
 	)
-	s.Equal(unpredictable, fdbx.Key(unpredictable).
+	s.Equal(unpredictable, fdbx.String2Key(unpredictable).
 		RSkip(4).
 		RPart('a', 'b', 'l', 'e').
 		LSkip(2).
@@ -58,7 +57,7 @@ func (s *InterfaceSuite) TestKey() {
 	)
 
 	// empty
-	key := fdbx.Key(nil)
+	key := fdbx.Bytes2Key(nil)
 	s.Equal("", key.String())
 	s.Equal("", key.LSkip(3).RSkip(4).String())
 	s.Equal("", key.RSkip(4).LSkip(3).String())
@@ -75,88 +74,89 @@ func (s *InterfaceSuite) TestKey() {
 
 	// pointer
 	word := []byte("word")
-	s.Equal("or", fdbx.Key(word).LSkip(1).RSkip(1).String())
-	s.Equal("word", fdbx.Key(word).String())
-	s.Equal("word", string(fdbx.Key(word).Bytes()))
+	s.Equal("or", fdbx.Bytes2Key(word).LSkip(1).RSkip(1).String())
+	s.Equal("word", fdbx.Bytes2Key(word).String())
+	s.Equal("word", string(fdbx.Bytes2Key(word).Bytes()))
 	s.Equal("word", string(word))
 }
 
-func (s *InterfaceSuite) TestPair() {
+// func (s *InterfaceSuite) TestPair() {
 
-	kw1 := func(k fdbx.Key) (fdbx.Key, error) {
-		return k.LSkip(2), nil
-	}
+// 	kw1 := func(k fdbx.Key) (fdbx.Key, error) {
+// 		return k.LSkip(2), nil
+// 	}
 
-	kw2 := func(k fdbx.Key) (fdbx.Key, error) {
-		return k.RSkip(4), nil
-	}
+// 	kw2 := func(k fdbx.Key) (fdbx.Key, error) {
+// 		return k.RSkip(4), nil
+// 	}
 
-	vw1 := func(v []byte) ([]byte, error) {
-		return append([]byte{'u', 'n'}, v...), nil
-	}
+// 	vw1 := func(v []byte) ([]byte, error) {
+// 		return append([]byte{'u', 'n'}, v...), nil
+// 	}
 
-	vw2 := func(v []byte) ([]byte, error) {
-		return append(v, 'a', 'b', 'l', 'e'), nil
-	}
+// 	vw2 := func(v []byte) ([]byte, error) {
+// 		return append(v, 'a', 'b', 'l', 'e'), nil
+// 	}
 
-	pair := fdbx.NewPair(fdbx.Key(unpredictable), []byte(predict))
+// 	pair := fdbx.NewPair(fdbx.String2Key(unpredictable), []byte(predict))
 
-	if key, err := pair.Key(); s.NoError(err) {
-		s.Equal(unpredictable, key.String())
-	}
+// 	if key, err := pair.Key(); s.NoError(err) {
+// 		s.Equal(unpredictable, key.String())
+// 	}
 
-	if val, err := pair.Value(); s.NoError(err) {
-		s.Equal(predict, string(val))
-	}
+// 	if val, err := pair.Value(); s.NoError(err) {
+// 		s.Equal(predict, string(val))
+// 	}
 
-	pair = pair.WrapKey(kw1).WrapKey(kw2).WrapValue(vw1).WrapValue(vw2)
+// 	pair = pair.WrapKey(kw1).WrapKey(kw2).WrapValue(vw1).WrapValue(vw2)
 
-	if key, err := pair.Key(); s.NoError(err) {
-		s.Equal(predict, key.String())
-	}
+// 	if key, err := pair.Key(); s.NoError(err) {
+// 		s.Equal(predict, key.String())
+// 	}
 
-	if val, err := pair.Value(); s.NoError(err) {
-		s.Equal(unpredictable, string(val))
-	}
+// 	if val, err := pair.Value(); s.NoError(err) {
+// 		s.Equal(unpredictable, string(val))
+// 	}
 
-	ew1 := func(k fdbx.Key) (fdbx.Key, error) {
-		return k, errx.ErrForbidden
-	}
+// 	ew1 := func(k fdbx.Key) (fdbx.Key, error) {
+// 		return k, errx.ErrForbidden
+// 	}
 
-	ew2 := func(v []byte) ([]byte, error) {
-		return v, errx.ErrNotFound
-	}
+// 	ew2 := func(v []byte) ([]byte, error) {
+// 		return v, errx.ErrNotFound
+// 	}
 
-	if key, err := pair.WrapKey(ew1).Key(); s.Error(err) {
-		s.True(errx.Is(err, errx.ErrForbidden))
-		s.Nil(key)
-	}
+// 	if key, err := pair.WrapKey(ew1).Key(); s.Error(err) {
+// 		s.True(errx.Is(err, errx.ErrForbidden))
+// 		s.Nil(key)
+// 	}
 
-	if val, err := pair.WrapValue(ew2).Value(); s.Error(err) {
-		s.True(errx.Is(err, errx.ErrNotFound))
-		s.Nil(val)
-	}
-}
+// 	if val, err := pair.WrapValue(ew2).Value(); s.Error(err) {
+// 		s.True(errx.Is(err, errx.ErrNotFound))
+// 		s.Nil(val)
+// 	}
+// }
 
 func BenchmarkKey(b *testing.B) {
 	b.Run("read-only", func(br *testing.B) {
-		buf := []byte(unpredictable)
 		for i := 0; i < br.N; i++ {
-			require.Equal(br, predict, fdbx.Key(buf).LSkip(2).RSkip(4).String())
+			require.Equal(br, predict, fdbx.String2Key(unpredictable).LSkip(2).RSkip(4).String())
 		}
 	})
 
 	b.Run("write-only", func(bw *testing.B) {
-		buf := []byte(predict)
 		for i := 0; i < bw.N; i++ {
-			require.Equal(bw, unpredictable, fdbx.Key(buf).LPart('u', 'n').RPart('a', 'b', 'l', 'e').String())
+			require.Equal(bw, unpredictable, fdbx.String2Key(predict).
+				LPart('u', 'n').
+				RPart('a', 'b', 'l', 'e').
+				String(),
+			)
 		}
 	})
 
 	b.Run("read-write", func(bwr *testing.B) {
-		buf := []byte(unpredictable)
 		for i := 0; i < bwr.N; i++ {
-			require.Equal(bwr, unpredictable, fdbx.Key(buf).
+			require.Equal(bwr, unpredictable, fdbx.String2Key(unpredictable).
 				LPart('u', 'n').
 				LSkip(2).
 				RPart('a', 'b', 'l', 'e').
@@ -168,7 +168,7 @@ func BenchmarkKey(b *testing.B) {
 
 	b.Run("many-write", func(mw *testing.B) {
 		for i := 0; i < mw.N; i++ {
-			require.Equal(mw, predict, fdbx.Key(nil).
+			require.Equal(mw, predict, fdbx.Bytes2Key(nil).
 				LPart('d').
 				RPart('i').
 				LPart('e').

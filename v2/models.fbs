@@ -23,7 +23,6 @@ table Row {
 
 table Value {
     Blob:bool;
-    GZip:bool;
     Size:uint32;
     Hash:uint64;
     Data:[uint8];

@@ -13,56 +13,41 @@ type v610Writer struct {
 }
 
 func (w v610Writer) Delete(key fdbx.Key) {
-	w.tx.Clear(w.usrWrap(key).Bytes())
+	w.tx.Clear(w.usrWrap(key).Raw())
 }
 
-func (w v610Writer) Upsert(pair fdbx.Pair) (err error) {
-	var val []byte
-	var key fdbx.Key
-
-	if key, err = pair.Key(); err != nil {
-		return
+func (w v610Writer) Upsert(pairs ...fdbx.Pair) {
+	for i := range pairs {
+		w.tx.Set(w.usrWrap(pairs[i].Key()).Raw(), pairs[i].Value())
 	}
-
-	if val, err = pair.Value(); err != nil {
-		return
-	}
-
-	w.tx.Set(w.usrWrap(key).Bytes(), val)
-	return nil
 }
 
 func (w v610Writer) Version() fdb.FutureKey {
 	return w.tx.GetVersionstamp()
 }
 
-func (w v610Writer) Versioned(key fdbx.Key) {
-	var data [14]byte
-	w.tx.SetVersionstampedValue(w.usrWrap(key).Bytes(), data[:])
-}
-
 func (w v610Writer) Increment(key fdbx.Key, delta int64) {
 	var data [8]byte
 	binary.LittleEndian.PutUint64(data[:], uint64(delta))
-	w.tx.Add(w.usrWrap(key).Bytes(), data[:])
+	w.tx.Add(w.usrWrap(key).Raw(), data[:])
 }
 
 func (w v610Writer) Erase(from, to fdbx.Key) {
 	w.tx.ClearRange(fdb.KeyRange{
-		Begin: w.usrWrap(from).Bytes(),
-		End:   w.endWrap(to).Bytes(),
+		Begin: w.usrWrap(from).Raw(),
+		End:   w.endWrap(to).Raw(),
 	})
 }
 
 func (w v610Writer) Watch(key fdbx.Key) fdbx.Waiter {
 	return &v610Waiter{
-		FutureNil: w.tx.Watch(w.usrWrap(key).Bytes()),
+		FutureNil: w.tx.Watch(w.usrWrap(key).Raw()),
 	}
 }
 
 func (w v610Writer) Lock(from, to fdbx.Key) {
 	w.tx.AddWriteConflictRange(fdb.KeyRange{
-		Begin: w.usrWrap(from).Bytes(),
-		End:   w.endWrap(to).Bytes(),
+		Begin: w.usrWrap(from).Raw(),
+		End:   w.endWrap(to).Raw(),
 	})
 }

@@ -16,7 +16,7 @@ type v610Reader struct {
 
 func (r v610Reader) usrWrap(key fdbx.Key) fdbx.Key {
 	if key == nil {
-		return r.sk
+		return fdbx.Bytes2Key(r.sk)
 	}
 
 	return key.LPart(r.sk...)
@@ -24,7 +24,7 @@ func (r v610Reader) usrWrap(key fdbx.Key) fdbx.Key {
 
 func (r v610Reader) endWrap(key fdbx.Key) fdbx.Key {
 	if key == nil {
-		return r.ek
+		return fdbx.Bytes2Key(r.ek)
 	}
 
 	return key.LPart(r.DB()).RPart(tail...)
@@ -32,11 +32,8 @@ func (r v610Reader) endWrap(key fdbx.Key) fdbx.Key {
 
 // Получение объекта ожидания конкретного значения
 func (r v610Reader) Data(key fdbx.Key) fdbx.Pair {
-	wrk := r.usrWrap(key).Bytes()
-	return fdbx.NewPair(
-		fdbx.Key(wrk),
-		r.tx.Get(wrk).MustGet(),
-	)
+	wrk := r.usrWrap(key)
+	return fdbx.NewPair(wrk, r.tx.Get(wrk.Raw()).MustGet())
 }
 
 func (r v610Reader) List(from, to fdbx.Key, limit uint64, reverse bool) fdbx.ListGetter {
@@ -45,8 +42,8 @@ func (r v610Reader) List(from, to fdbx.Key, limit uint64, reverse bool) fdbx.Lis
 	// Если вызывать Iterator, то по-умолчанию будет последовательный режим StreamingModeIterator
 	return &listGetter{
 		r.tx.GetRange(&fdb.KeyRange{
-			Begin: r.usrWrap(from).Bytes(),
-			End:   r.endWrap(to).Bytes(),
+			Begin: r.usrWrap(from).Raw(),
+			End:   r.endWrap(to).Raw(),
 		}, fdb.RangeOptions{
 			Limit:   int(limit),
 			Reverse: reverse,
@@ -63,7 +60,10 @@ func (g listGetter) Resolve() []fdbx.Pair {
 	res := make([]fdbx.Pair, 0, len(list))
 
 	for i := range list {
-		res = append(res, fdbx.NewPair(fdbx.Key(list[i].Key).LSkip(1), list[i].Value))
+		res = append(res, fdbx.NewPair(
+			fdbx.Bytes2Key(list[i].Key[1:]),
+			list[i].Value,
+		))
 	}
 
 	return res

@@ -9,27 +9,37 @@ import (
 	"github.com/shestakovda/errx"
 )
 
-// Key - некоторый ключ в БД, может использоваться в разных контекстах
-type Key fdb.Key
+// Key - некоторый ключ в БД, может использоваться в разных контекстах, допускает преобразования
+type Key interface {
+	Raw() fdb.Key
+	Bytes() []byte
+	String() string
+	LSkip(uint16) Key
+	RSkip(uint16) Key
+	LPart(...byte) Key
+	RPart(...byte) Key
+	Clone() Key
+}
 
-// KeyWrapper - преобразователь ключа, может делать с ним любые трансформации
-type KeyWrapper func(Key) (Key, error)
+// Bytes2Key - формирование простого ключа
+func Bytes2Key(k []byte) Key { return fdbKey(k) }
 
-// ValueWrapper - преобразователь значения, может делать с ним любые трансформации
-type ValueWrapper func([]byte) ([]byte, error)
+// String2Key - формирование простого ключа из строки
+func String2Key(k string) Key { return fdbKey(k) }
 
-// Pair - пара ключ/значение, с возможностью трансформации
+// Pair - пара ключ/значение, без возможности трансформации
 type Pair interface {
-	Raw() []byte
+	Key() Key
+	Value() []byte
+	Unwrap() Pair
+}
 
-	Key() (Key, error)
-	Value() ([]byte, error)
-
-	Clone() Pair
-	Apply() error
-
-	WrapKey(KeyWrapper) Pair
-	WrapValue(ValueWrapper) Pair
+// NewPair - новая простая пара, без всяких выкрутасов
+func NewPair(k Key, v []byte) Pair {
+	return &simplePair{
+		k: k,
+		v: v,
+	}
 }
 
 // ListGetter - метод для отложенного получения списка значений
@@ -40,15 +50,6 @@ type ListGetter interface {
 // Waiter - объект ожидания изменения ключа
 type Waiter interface {
 	Resolve(context.Context) error
-}
-
-// KeyManager - интерфейс управления ключами
-type KeyManager interface {
-	Wrap(Key) Key
-	Unwrap(Key) Key
-
-	Wrapper(Key) (Key, error)
-	Unwrapper(Key) (Key, error)
 }
 
 // FlatPacker - интерфейс для упаковки flatbuffers

@@ -20,12 +20,12 @@ const (
 // Table - универсальный интерфейс коллекции, чтобы работать с запросами
 type Table interface {
 	ID() uint16
-	Mgr() fdbx.KeyManager
 
 	Select(mvcc.Tx) Query
 	Cursor(mvcc.Tx, string) (Query, error)
 	Delete(mvcc.Tx, ...fdbx.Key) error
 	Upsert(mvcc.Tx, ...fdbx.Pair) error
+	Insert(mvcc.Tx, ...fdbx.Pair) error
 
 	Autovacuum(context.Context, db.Connection, ...Option)
 }
@@ -70,23 +70,27 @@ type Filter func(fdbx.Pair) (ok bool, err error)
 
 // Query - универсальный интерфейс объекта запроса данных, основная логика
 type Query interface {
+	// Критерии выбора (селекторы)
 	ByID(ids ...fdbx.Key) Query
 	PossibleByID(ids ...fdbx.Key) Query
 	ByIndex(idx uint16, query fdbx.Key) Query
+	BySelector(Selector) Query
 
+	// Модификаторы селекторов
 	Reverse() Query
 	Limit(int) Query
 	Where(Filter) Query
 
+	// Обработка результатов
+	Agg(...Aggregator) error
 	All() ([]fdbx.Pair, error)
 	First() (fdbx.Pair, error)
+	Sequence(context.Context) (<-chan fdbx.Pair, <-chan error)
 	Delete() error
 
-	Agg(...Aggregator) error
-
-	Drop() error
+	// Сохранение запроса (курсор)
 	Save() (string, error)
-	Sequence(context.Context) (<-chan fdbx.Pair, <-chan error)
+	Drop() error
 }
 
 // Selector - поставщик сырых данных для запроса
@@ -95,11 +99,102 @@ type Selector interface {
 	Select(context.Context, Table, ...Option) (<-chan fdbx.Pair, <-chan error)
 }
 
-// IndexKey - для получения ключа при индексации коллекций
+// IndexKey - для получения ключей при индексации коллекций
 type IndexKey func([]byte) fdbx.Key
+
+// IndexMultiKey - для получения ключей при индексации коллекций
+type IndexMultiKey func([]byte) []fdbx.Key
 
 // Option - доп.аргумент для инициализации коллекций
 type Option func(*options)
+
+// WrapTableKey - обертка для получения системного ключа из пользовательского, при сохранении
+func WrapTableKey(tbid uint16, key fdbx.Key) fdbx.Key {
+	if key == nil {
+		key = fdbx.Bytes2Key(nil)
+	}
+	return key.LPart(byte(tbid>>8), byte(tbid), nsData)
+}
+
+// UnwrapTableKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
+func UnwrapTableKey(key fdbx.Key) fdbx.Key {
+	if key != nil {
+		return key.LSkip(3)
+	}
+	return nil
+}
+
+// WrapBlobKey - обертка для получения системного ключа из пользовательского, при сохранении
+func WrapBlobKey(tbid uint16, key fdbx.Key) fdbx.Key {
+	if key == nil {
+		key = fdbx.Bytes2Key(nil)
+	}
+	return key.LPart(byte(tbid>>8), byte(tbid), nsBLOB)
+}
+
+// UnwrapBlobKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
+func UnwrapBlobKey(key fdbx.Key) fdbx.Key {
+	if key != nil {
+		return key.LSkip(3)
+	}
+	return nil
+}
+
+// WrapIndexKey - обертка для получения системного ключа из пользовательского, при сохранении
+func WrapIndexKey(tbid, idxid uint16, key fdbx.Key) fdbx.Key {
+	if key == nil {
+		key = fdbx.Bytes2Key(nil)
+	}
+	return key.LPart(byte(tbid>>8), byte(tbid), nsIndex, byte(idxid>>8), byte(idxid))
+}
+
+// UnwrapIndexKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
+func UnwrapIndexKey(key fdbx.Key) fdbx.Key {
+	if key != nil {
+		return key.LSkip(5)
+	}
+	return nil
+}
+
+// WrapQueueKey - обертка для получения системного ключа из пользовательского, при сохранении
+func WrapQueueKey(tbid, qid uint16, pref []byte, flag byte, key fdbx.Key) fdbx.Key {
+	if key == nil {
+		key = fdbx.Bytes2Key(nil)
+	}
+
+	key = key.LPart(flag)
+
+	if len(pref) > 0 {
+		key = key.LPart(pref...)
+	}
+
+	return key.LPart(byte(tbid>>8), byte(tbid), nsQueue, byte(qid>>8), byte(qid))
+}
+
+// UnwrapQueueKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
+func UnwrapQueueKey(pref []byte, key fdbx.Key) fdbx.Key {
+	if key != nil {
+		// основные байты (5) + префикс + флаг (1) + метка времени (8)
+		return key.LSkip(5 + uint16(len(pref)) + 1 + 8)
+	}
+	return nil
+}
+
+// WrapQueryKey - обертка для получения системного ключа из пользовательского, при сохранении
+func WrapQueryKey(tbid uint16, key fdbx.Key) fdbx.Key {
+	if key == nil {
+		key = fdbx.Bytes2Key(nil)
+	}
+	return key.LPart(byte(tbid>>8), byte(tbid), nsQuery)
+}
+
+// UnwrapQueryKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
+func UnwrapQueryKey(key fdbx.Key) fdbx.Key {
+	if key != nil {
+		return key.LSkip(3)
+	}
+	return nil
+}
 
 // Ошибки модуля
 var (
@@ -127,4 +222,5 @@ var (
 	ErrLoadQuery = errx.New("Ошибка загрузки курсора запроса")
 	ErrDropQuery = errx.New("Ошибка удаления курсора запроса")
 	ErrSaveQuery = errx.New("Ошибка сохранения курсора запроса")
+	ErrDuplicate = errx.New("Нарушение уникальности коллекции")
 )

@@ -1,45 +1,47 @@
-TESTARGS=-run . -failfast -race -gcflags=all=-d=checkptr=0 -count=1 -cover
+.PHONY: fdbx db mvcc orm
+
+TESTARGS=-run . -timeout 60s -failfast -race -gcflags=all=-d=checkptr=0 -count=1 -cover
+BENCHARGS=-bench . -benchtime=3s -benchmem
 
 all: test
 
-fbs:
+clean:
 	@rm -rf ./models
-	@flatc --go --gen-mutable --gen-object-api ./models.fbs
+	@rm -rf ./bin
 
-fmt: fbs
+fmt: clean
+	@mkdir -p ./bin
+	@flatc --go --gen-mutable --gen-object-api ./models.fbs
 	@goimports -w .
 	@go mod tidy
 
-test: test-fdbx test-db test-mvcc test-orm test-rpc
+test: fdbx db mvcc orm
 
-test-fdbx: fmt
-	@go test -timeout 10s -coverprofile=./bin/fdbx.cover .
+fdbx: fmt
+	@go test $(TESTARGS) -o=./bin/fdbx.test -coverprofile=./bin/fdbx.cover .
 
-test-db: fmt
-	@go test -timeout 10s -coverprofile=./bin/db.cover ./db
+db: fmt
+	@go test $(TESTARGS) -o=./bin/db.test -coverprofile=./bin/db.cover ./db
 
-test-mvcc: fmt
-	@go test -timeout 30s -coverprofile=./bin/mvcc.cover ./mvcc
+mvcc: fmt
+	@go test $(TESTARGS) -o=./bin/mvcc.test -coverprofile=./bin/mvcc.cover ./mvcc
 
-test-orm: fmt
-	@go test -timeout 30s -coverprofile=./bin/orm.cover ./orm
-
-test-rpc: fmt
-	@go test -timeout 10s -coverprofile=./bin/rpc.cover ./rpc
+orm: fmt
+	@go test $(TESTARGS) -o=./bin/orm.test -coverprofile=./bin/orm.cover ./orm
 
 bench: bench-fdbx bench-mvcc bench-orm
 
 bench-fdbx:
-	@go test -bench . -benchtime=3s -benchmem -memprofile=./bin/fdbx.mem .
+	@go test $(BENCHARGS) -o=./bin/fdbx.test -memprofile=./bin/fdbx.mem .
 
 bench-mvcc:
-	@go test -bench . -benchtime=3s -benchmem -memprofile=./bin/mvcc.mem ./mvcc
+	@go test $(BENCHARGS) -o=./bin/mvcc.test -memprofile=./bin/mvcc.mem ./mvcc
 
 bench-orm:
-	@go test -bench . -benchtime=3s -benchmem -memprofile=./bin/orm.mem ./orm
+	@go test $(BENCHARGS) -o=./bin/orm.test -memprofile=./bin/orm.mem ./orm
 
 cover: test-orm
-# 	@go tool cover -html=./bin/fdbx.cover
-# 	@go tool cover -html=./bin/db.cover
-# 	@go tool cover -html=./bin/mvcc.cover
+	@go tool cover -html=./bin/fdbx.cover
+	@go tool cover -html=./bin/db.cover
+	@go tool cover -html=./bin/mvcc.cover
 	@go tool cover -html=./bin/orm.cover

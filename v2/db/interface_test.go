@@ -37,7 +37,6 @@ func (s *InterfaceSuite) TestConnection() {
 	s.Require().NoError(cn.Clear())
 	s.Equal(TestDB, cn.DB())
 
-	var val []byte
 	var buf [8]byte
 	var waiter fdbx.Waiter
 	var waiter2 fdbx.Waiter
@@ -46,31 +45,21 @@ func (s *InterfaceSuite) TestConnection() {
 	const add int64 = -100
 	binary.LittleEndian.PutUint64(buf[:], uint64(num))
 
-	key1 := fdbx.Key("key1")
-	key2 := fdbx.Key("key2")
-	key3 := fdbx.Key("key3")
+	key1 := fdbx.String2Key("key1")
+	key2 := fdbx.String2Key("key2")
+	key3 := fdbx.String2Key("key3")
 
-	s.Require().NoError(cn.Write(func(w db.Writer) (exp error) {
-		if val, exp = w.Data(key1).Value(); exp != nil {
-			return
-		}
-		s.Empty(val)
+	s.Require().NoError(cn.Write(func(w db.Writer) error {
+		s.Empty(w.Data(key1).Value())
 
-		if exp = w.Upsert(fdbx.NewPair(key1, []byte("val1"))); exp != nil {
-			return
-		}
+		w.Upsert(fdbx.NewPair(key1, []byte("val1")))
+		w.Upsert(fdbx.NewPair(key2, buf[:]))
+		w.Increment(key3, num)
 
-		if exp = w.Upsert(fdbx.NewPair(key2, buf[:])); exp != nil {
-			return
-		}
-		w.Versioned(key3)
 		waiter = w.Watch(key2)
 		waiter2 = w.Watch(key3)
 
-		if val, exp = w.Data(key1).Value(); exp != nil {
-			return
-		}
-		s.Equal("val1", string(val))
+		s.Equal("val1", string(w.Data(key1).Value()))
 		return nil
 	}))
 
@@ -101,19 +90,9 @@ func (s *InterfaceSuite) TestConnection() {
 
 		// Проверяем, что к этому моменту уже всё изменилось
 		s.Require().NoError(cn.Read(func(r db.Reader) error {
-
-			if val, err = r.Data(key1).Value(); s.NoError(err) {
-				s.Equal("val2", string(val))
-			}
-
-			if val, err = r.Data(key2).Value(); s.NoError(err) {
-				s.Equal(num+add, int64(binary.LittleEndian.Uint64(val)))
-			}
-
-			if val, err = r.Data(key3).Value(); s.NoError(err) {
-				s.Empty(val)
-			}
-
+			s.Equal("val2", string(r.Data(key1).Value()))
+			s.Equal(num+add, int64(binary.LittleEndian.Uint64(r.Data(key2).Value())))
+			s.Empty(r.Data(key3).Value())
 			s.Len(r.List(nil, nil, 0, false).Resolve(), 2)
 			return nil
 		}))
@@ -121,19 +100,9 @@ func (s *InterfaceSuite) TestConnection() {
 	}()
 
 	s.Require().NoError(cn.Read(func(r db.Reader) error {
-
-		if val, err = r.Data(key1).Value(); s.NoError(err) {
-			s.Equal("val1", string(val))
-		}
-
-		if val, err = r.Data(key2).Value(); s.NoError(err) {
-			s.Equal(num, int64(binary.LittleEndian.Uint64(val)))
-		}
-
-		if val, err = r.Data(key3).Value(); s.NoError(err) {
-			s.Len(val, 10)
-		}
-
+		s.Equal("val1", string(r.Data(key1).Value()))
+		s.Equal(num, int64(binary.LittleEndian.Uint64(r.Data(key2).Value())))
+		s.Equal(num, int64(binary.LittleEndian.Uint64(r.Data(key3).Value())))
 		return nil
 	}))
 

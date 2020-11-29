@@ -52,16 +52,14 @@ type Reader interface {
 type Writer interface {
 	Reader
 
+	// Version - получение полной версии транзакции на запись
 	Version() fdb.FutureKey
 
 	// Удаление конкретного значения. Не расстраивается, если его нет
 	Delete(fdbx.Key)
 
 	// Вставка или обновление значения по ключу
-	Upsert(fdbx.Pair) error
-
-	// Вставка или обновление кода версии транзакции в качестве значения для ключа
-	Versioned(fdbx.Key)
+	Upsert(...fdbx.Pair)
 
 	// Атомарный инкремент (или декремент) LittleEndian-значения по ключу
 	Increment(fdbx.Key, int64)

@@ -9,9 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/shestakovda/errx"
-
 	fbs "github.com/google/flatbuffers/go"
+	"github.com/shestakovda/errx"
 )
 
 var fbsPool = sync.Pool{New: func() interface{} { return fbs.NewBuilder(128) }}

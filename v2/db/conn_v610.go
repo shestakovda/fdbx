@@ -1,9 +1,6 @@
 package db
 
-import (
-	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/shestakovda/fdbx/v2"
-)
+import "github.com/apple/foundationdb/bindings/go/src/fdb"
 
 func newConnV610(id byte, opts ...Option) (cn *v610Conn, err error) {
 	const verID = 610
@@ -19,7 +16,7 @@ func newConnV610(id byte, opts ...Option) (cn *v610Conn, err error) {
 
 	cn = &v610Conn{
 		id: id,
-		sk: fdbx.Key{id},
+		sk: []byte{id},
 	}
 	cn.ek = append(cn.sk, tail...)
 
@@ -45,8 +42,8 @@ func newConnV610(id byte, opts ...Option) (cn *v610Conn, err error) {
 type v610Conn struct {
 	options
 	id byte
-	sk fdbx.Key
-	ek fdbx.Key
+	sk []byte
+	ek []byte
 	db fdb.Database
 }
 

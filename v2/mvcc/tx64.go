@@ -1,8 +1,10 @@
 package mvcc
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -41,7 +43,7 @@ func newTx64(conn db.Connection) (*tx64, error) {
 
 	if len(ver) < 10 {
 		return nil, ErrBegin.WithDebug(errx.Debug{
-			"version": fdbx.Key(ver).String(),
+			"version": fdbx.Bytes2Key(ver).String(),
 		})
 	}
 
@@ -59,11 +61,12 @@ type tx64 struct {
 	opid   uint32
 	txid   uint64
 	start  uint64
+	locks  locks
 	status byte
 	oncomm []CommitHandler
 }
 
-func (t tx64) Conn() db.Connection { return t.conn }
+func (t *tx64) Conn() db.Connection { return t.conn }
 
 func (t *tx64) OnCommit(hdl CommitHandler) {
 	t.oncomm = append(t.oncomm, hdl)
@@ -119,18 +122,17 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
 	hdlr := func(w db.Writer) (exp error) {
+		var row fdbx.Pair
+
 		lc := makeCache()
-		cp := make([]fdbx.Key, len(keys))
 		lg := make([]fdbx.ListGetter, len(keys))
 
 		for i := range keys {
-			cp[i] = keyMgr.Wrap(keys[i])
-			lg[i] = w.List(cp[i], cp[i], 0, true)
+			ukey := WrapKey(keys[i])
+			lg[i] = w.List(ukey, ukey, 0, true)
 		}
 
-		var row fdbx.Pair
-
-		for i := range cp {
+		for i := range lg {
 			if row, exp = t.fetchRow(w, lc, opid, lg[i]); exp != nil {
 				return
 			}
@@ -166,102 +168,46 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 	Важно, чтобы выборка и обновление шли строго в одной внутренней FDB транзакции.
 */
 func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
-	if len(pairs) == 1 {
-		return t.upsertOne(pairs[0], args)
-	}
-
 	atomic.AddUint32(&t.mods, 1)
 
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
-	wrap := t.packWrapper(opid)
 	hdlr := func(w db.Writer) (exp error) {
-		var ukey fdbx.Key
 		var row fdbx.Pair
 
 		lc := makeCache()
-		cp := make([]fdbx.Pair, len(pairs))
 		lg := make([]fdbx.ListGetter, len(pairs))
 
 		for i := range pairs {
-			cp[i] = pairs[i].Clone().WrapKey(keyMgr.Wrapper)
-
-			if ukey, exp = cp[i].Key(); exp != nil {
-				return
-			}
-
+			ukey := WrapKey(pairs[i].Key())
 			lg[i] = w.List(ukey, ukey, 0, true)
 		}
 
-		for i := range cp {
+		for i := range pairs {
 			if row, exp = t.fetchRow(w, lc, opid, lg[i]); exp != nil {
 				return
+			}
+
+			if row == nil && opts.onInsert != nil {
+				if exp = opts.onInsert(t, pairs[i].Unwrap()); exp != nil {
+					return
+				}
 			}
 
 			if exp = t.dropRow(w, opid, row, opts.onDelete); exp != nil {
 				return
 			}
 
-			if exp = w.Upsert(cp[i].WrapKey(t.txWrapper).WrapValue(wrap)); exp != nil {
-				return
-			}
+			w.Upsert(&sysPair{
+				opid: opid,
+				txid: t.txid,
+				orig: pairs[i],
+			})
 
-			if opts.onInsert == nil {
-				continue
-			}
-
-			if exp = opts.onInsert(t, pairs[i]); exp != nil {
-				return
-			}
-		}
-
-		return nil
-	}
-
-	if opts.writer != nil {
-		err = hdlr(opts.writer)
-	} else {
-		err = t.conn.Write(hdlr)
-	}
-
-	if err != nil {
-		return ErrUpsert.WithReason(err)
-	}
-
-	return nil
-}
-
-func (t *tx64) upsertOne(pair fdbx.Pair, args []Option) (err error) {
-	atomic.AddUint32(&t.mods, 1)
-
-	opts := getOpts(args)
-	opid := atomic.AddUint32(&t.opid, 1)
-	wrap := t.packWrapper(opid)
-	hdlr := func(w db.Writer) (exp error) {
-		var ukey fdbx.Key
-		var row fdbx.Pair
-
-		cp := pair.Clone().WrapKey(keyMgr.Wrapper)
-
-		if ukey, exp = cp.Key(); exp != nil {
-			return
-		}
-
-		if row, exp = t.fetchRow(w, nil, opid, w.List(ukey, ukey, 0, true)); exp != nil {
-			return
-		}
-
-		if exp = t.dropRow(w, opid, row, opts.onDelete); exp != nil {
-			return
-		}
-
-		if exp = w.Upsert(cp.WrapKey(t.txWrapper).WrapValue(wrap)); exp != nil {
-			return
-		}
-
-		if opts.onInsert != nil {
-			if exp = opts.onInsert(t, pair); exp != nil {
-				return
+			if opts.onUpdate != nil {
+				if exp = opts.onUpdate(t, pairs[i].Unwrap()); exp != nil {
+					return
+				}
 			}
 		}
 
@@ -285,7 +231,7 @@ func (t *tx64) upsertOne(pair fdbx.Pair, args []Option) (err error) {
 	Select - выборка актуального в данной транзакции значения ключа.
 */
 func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
-	ukey := keyMgr.Wrap(key)
+	ukey := WrapKey(key)
 	opid := atomic.AddUint32(&t.opid, 1)
 
 	if err = t.conn.Read(func(r db.Reader) (exp error) {
@@ -296,7 +242,9 @@ func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
 		}
 
 		if row != nil {
-			res = row.WrapKey(keyMgr.Unwrapper).WrapValue(valWrapper)
+			res = &usrPair{
+				orig: row,
+			}
 			return nil
 		}
 
@@ -375,8 +323,8 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 
 		size := 0
 		opts := getOpts(args)
-		from := keyMgr.Wrap(opts.from)
-		last := keyMgr.Wrap(opts.to)
+		from := WrapKey(opts.from)
+		last := WrapKey(opts.to)
 		opid := atomic.AddUint32(&t.opid, 1)
 		hdlr := func(r db.Reader) (exp error) {
 			if opts.reverse {
@@ -384,7 +332,6 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 			} else {
 				part, from, exp = t.selectPart(r, from, last, size, opid, &opts)
 			}
-			size += len(part)
 			return exp
 		}
 
@@ -434,7 +381,6 @@ func (t *tx64) selectPart(
 ) (part []fdbx.Pair, last fdbx.Key, err error) {
 	var ok bool
 	var w db.Writer
-	var key fdbx.Key
 
 	if part, err = t.fetchAll(r, nil, opid, r.List(from, to, MaxRowCount, opts.reverse)); err != nil {
 		return
@@ -460,25 +406,19 @@ func (t *tx64) selectPart(
 	part = part[:cnt]
 
 	if opts.reverse {
-		if key, err = part[0].Key(); err != nil {
-			return
-		}
-		last = key
+		last = part[0].Key()
 	} else {
-		if key, err = part[cnt-1].Key(); err != nil {
-			return
-		}
-		last = key.RPart(0x01)
+		last = part[cnt-1].Key().RPart(0x01)
 	}
 
 	for i := range part {
-		part[i] = part[i].WrapKey(keyMgr.Unwrapper).WrapValue(valWrapper)
+		part[i] = &usrPair{orig: part[i]}
 
 		if opts.onLock != nil {
 			// Раз какой-то обработчик в записи, значит модификация - увеличиваем счетчик
 			atomic.AddUint32(&t.mods, 1)
 
-			if err = opts.onLock(t, part[i].Clone(), w); err != nil {
+			if err = opts.onLock(t, part[i], w); err != nil {
 				return
 			}
 		}
@@ -494,29 +434,19 @@ func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte, args ...Option) (err error) {
 	tmp := blob
 	num := uint16(0)
 	prs := make([]fdbx.Pair, 0, MaxRowMem/MaxRowSize+1)
-	wrp := func(k fdbx.Key) (fdbx.Key, error) {
-		return k.RPart(byte(num>>8), byte(num)), nil
-	}
-
-	set := func(w db.Writer) (exp error) {
-		for i := range prs {
-			if exp = w.Upsert(prs[i].WrapKey(keyMgr.Wrapper).WrapKey(wrp)); exp != nil {
-				return
-			}
-			num++
-		}
-		return nil
-	}
+	set := func(w db.Writer) error { w.Upsert(prs...); return nil }
 
 	// Разбиваем на элементарные значения, пишем пачками по 10 мб
 	for {
 		if len(tmp) > MaxRowSize {
-			prs = append(prs, fdbx.NewPair(key, tmp[:MaxRowSize]))
+			prs = append(prs, fdbx.NewPair(WrapKey(key).RPart(byte(num>>8), byte(num)), tmp[:MaxRowSize]))
 			tmp = tmp[MaxRowSize:]
 			sum += MaxRowSize
+			num++
 		} else {
-			prs = append(prs, fdbx.NewPair(key, tmp))
+			prs = append(prs, fdbx.NewPair(WrapKey(key).RPart(byte(num>>8), byte(num)), tmp))
 			sum += len(tmp)
+			num++
 			break
 		}
 
@@ -539,18 +469,20 @@ func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte, args ...Option) (err error) {
 }
 
 func (t *tx64) LoadBLOB(key fdbx.Key, size int, args ...Option) (_ []byte, err error) {
-	var val []byte
+	const pack = 100
+
 	var rows []fdbx.Pair
 
-	ukey := keyMgr.Wrap(key)
+	ukey := WrapKey(key)
 	end := ukey.RPart(0xFF, 0xFF)
-	res := make([]byte, 0, size)
+	res := make([][]byte, 0, pack)
+	fnc := func(r db.Reader) (exp error) {
+		rows = r.List(ukey, end, pack, false).Resolve()
+		return nil
+	}
 
 	for {
-		if err = t.conn.Read(func(r db.Reader) (exp error) {
-			rows = r.List(ukey, end, 10, false).Resolve()
-			return nil
-		}); err != nil {
+		if err = t.conn.Read(fnc); err != nil {
 			return nil, ErrBLOBLoad.WithReason(err)
 		}
 
@@ -559,31 +491,21 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size int, args ...Option) (_ []byte, err e
 		}
 
 		for i := range rows {
-			if val, err = rows[i].Value(); err != nil {
-				return nil, ErrBLOBLoad.WithReason(err)
-			}
-
-			res = append(res, val...)
+			res = append(res, rows[i].Value())
 		}
 
-		if ukey, err = rows[len(rows)-1].Key(); err != nil {
-			return nil, ErrBLOBLoad.WithReason(err)
-		}
-		ukey = ukey.RPart(0x01)
+		ukey = rows[len(rows)-1].Key().RPart(0x01)
 	}
 
-	return res, nil
+	return bytes.Join(res, nil), nil
 }
 
 func (t *tx64) DropBLOB(key fdbx.Key, args ...Option) (err error) {
 	atomic.AddUint32(&t.mods, 1)
 
 	opts := getOpts(args)
-	ukey := keyMgr.Wrap(key)
-	hdlr := func(w db.Writer) error {
-		w.Erase(ukey, ukey)
-		return nil
-	}
+	ukey := WrapKey(key)
+	hdlr := func(w db.Writer) error { w.Erase(ukey, ukey); return nil }
 
 	if opts.writer == nil {
 		err = t.conn.Write(hdlr)
@@ -596,6 +518,57 @@ func (t *tx64) DropBLOB(key fdbx.Key, args ...Option) (err error) {
 	}
 
 	return nil
+}
+
+func (t *tx64) SharedLock(key fdbx.Key, wait time.Duration) (err error) {
+	var lock fdbx.Waiter
+
+	ukey := WrapLockKey(key)
+	pair := fdbx.NewPair(ukey, fdbx.Time2Byte(time.Now()))
+	hdlr := func(w db.Writer) (exp error) {
+		// Если есть значение ключа, значит блокировка занята, придется ждать
+		if len(w.Data(ukey).Value()) > 0 {
+			lock = w.Watch(ukey)
+			return nil
+		}
+
+		// Если нам все-таки удается поставить значение - значит блокировка наша
+		w.Upsert(pair)
+		lock = nil
+		return nil
+	}
+
+	// Если мы в этой транзакции уже взяли такую блокировку, то нечего и ждать, все ок
+	if t.locks.Append(ukey) {
+		return nil
+	}
+
+	// Ставим контекст с таймаутом. Если он прервется - значит схватили дедлок
+	wctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+
+	// Стараемся получить блокировку, если занято - ожидаем
+	for {
+		// Словили дедлок, выходим
+		if err = wctx.Err(); err != nil {
+			return ErrSharedLock.WithReason(ErrDeadlock.WithReason(err))
+		}
+
+		// Попытка поставить блокировку
+		if err = t.conn.Write(hdlr); err != nil {
+			return ErrSharedLock.WithReason(err)
+		}
+
+		// Блокировка наша, можно ехать дальше
+		if lock == nil {
+			return nil
+		}
+
+		// Значение уже стоит, ждем освобождения, если ошибка - то это скорее всего дедлок
+		if err = lock.Resolve(wctx); err != nil {
+			return ErrSharedLock.WithReason(ErrDeadlock.WithReason(err))
+		}
+	}
 }
 
 func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) (_ bool, err error) {
@@ -630,11 +603,7 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, x uint64) (status byte, err
 	}
 
 	// Придется слазать в БД за статусом и положить в кеш
-	var val []byte
-
-	if val, err = r.Data(txKey(x)).Value(); err != nil {
-		return
-	}
+	val := r.Data(txKey(x)).Value()
 
 	// Если в БД нет записи, то либо транзакция еще открыта, либо это был откат
 	// Поскольку нет определенности, в кеш ничего не складываем
@@ -663,19 +632,6 @@ func (t *tx64) pack() []byte {
 	})
 }
 
-func (t *tx64) packWrapper(opid uint32) fdbx.ValueWrapper {
-	state := &models.RowStateT{
-		XMin: t.txid,
-		CMin: opid,
-	}
-	return func(v []byte) ([]byte, error) {
-		return fdbx.FlatPack(&models.RowT{
-			State: state,
-			Data:  v,
-		}), nil
-	}
-}
-
 /*
 	close - закрывает транзакцию и применяет или откатывает изменения.
 
@@ -690,6 +646,10 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	// Если статус транзакции уже определен, менять его нельзя
 	if t.status == txStatusCommitted || t.status == txStatusAborted {
 		return nil
+	}
+
+	if err = t.locks.Release(t, w); err != nil {
+		return ErrClose.WithReason(err)
 	}
 
 	// Получаем ключ транзакции и устанавливаем статус
@@ -707,7 +667,7 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 
 	// Cохраняем в БД объект с обновленным статусом
 	pair := fdbx.NewPair(txid, t.pack())
-	hdlr := func(w db.Writer) error { return w.Upsert(pair) }
+	hdlr := func(w db.Writer) error { w.Upsert(pair); return nil }
 
 	// Выполняем обработчик в физической транзакции - указанной или новой
 	if w == nil {
@@ -760,7 +720,6 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 */
 func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGetter) (_ fdbx.Pair, err error) {
 	var comm bool
-	var val []byte
 	var buf models.RowState
 	var row models.RowStateT
 
@@ -773,9 +732,7 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
-		if val, err = list[i].Value(); err != nil {
-			return
-		}
+		val := list[i].Value()
 
 		if len(val) == 0 {
 			continue
@@ -842,7 +799,6 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 // Аналогично fetchRow, но все актуальные версии всех ключей по диапазону
 func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGetter) (res []fdbx.Pair, err error) {
 	var comm bool
-	var val []byte
 	var buf models.RowState
 	var row models.RowStateT
 
@@ -855,9 +811,7 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
-		if val, err = list[i].Value(); err != nil {
-			return
-		}
+		val := list[i].Value()
 
 		if len(val) == 0 {
 			continue
@@ -933,63 +887,48 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handle
 		return nil
 	}
 
-	var key fdbx.Key
-	var data []byte
-
 	atomic.AddUint32(&t.mods, 1)
 
-	w.Upsert(pair.WrapValue(func(v []byte) ([]byte, error) {
-		if len(v) > 0 {
-			var state models.RowState
+	buf := pair.Value()
 
-			row := models.GetRootAsRow(v, 0)
+	if len(buf) > 0 {
+		row := models.GetRootAsRow(buf, 0)
 
-			if onDelete != nil {
-				data = row.DataBytes()
-			}
-
-			row.State(&state)
-
-			// В модели состояния поля указаны как required
-			// Обновление должно произойти 100%, если только это не косяк модели или баг библиотеки
-			if !(state.MutateXMax(t.txid) && state.MutateCMax(opid)) {
-				return nil, ErrUpsert.WithStack()
+		// Обработчик имеет возможность предотвратить удаление/обновление, выбросив ошибку
+		if onDelete != nil {
+			if err = onDelete(t, fdbx.NewPair(UnwrapKey(pair.Key()), row.DataBytes())); err != nil {
+				return ErrDelete.WithReason(err)
 			}
 		}
 
-		return v, nil
-	}))
-
-	if onDelete == nil {
-		return nil
+		// В модели состояния поля указаны как required
+		// Обновление должно произойти 100%, если только это не косяк модели или баг библиотеки
+		if state := row.State(nil); !(state.MutateXMax(t.txid) && state.MutateCMax(opid)) {
+			return ErrDelete.WithStack()
+		}
+	} else {
+		// По идее сюда никогда не должны попасть, но на всякий случай - элемент автовосстановления стабильности
+		buf = fdbx.FlatPack(&models.RowT{
+			State: &models.RowStateT{
+				XMin: t.txid,
+				XMax: t.txid,
+				CMin: 0,
+				CMax: opid,
+			},
+			Data: nil,
+		})
 	}
 
-	if key, err = pair.Key(); err != nil {
-		return
-	}
-
-	if err = onDelete(t, fdbx.NewPair(key, data).WrapKey(keyMgr.Unwrapper)); err != nil {
-		return ErrDelete.WithReason(err)
-	}
-
+	// Обновляем данные в БД по ключу
+	w.Upsert(fdbx.NewPair(pair.Key(), buf))
 	return nil
-}
-
-func (t *tx64) txWrapper(key fdbx.Key) (fdbx.Key, error) {
-	if key == nil {
-		return nil, nil
-	}
-
-	var txid [8]byte
-	binary.BigEndian.PutUint64(txid[:], t.txid)
-	return key.RPart(txid[:]...), nil
 }
 
 func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 	atomic.AddUint32(&t.mods, 1)
 
 	opts := getOpts(args)
-	from := keyMgr.Wrap(prefix)
+	from := WrapKey(prefix)
 	to := from.Clone()
 
 	for {
@@ -1016,7 +955,6 @@ func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) (_ fdbx.Key, err error) {
 	var ok bool
 	var val []byte
-	var key fdbx.Key
 	var buf models.RowState
 	var row models.RowStateT
 
@@ -1034,9 +972,7 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 
 	// Проверяем все пары ключ/значение, удаляя все, что может помешать
 	for i := range list {
-		if val, err = list[i].Value(); err != nil {
-			return
-		}
+		val = list[i].Value()
 
 		// Могут попадаться не только значения mvcc, но и произвольные счетчики
 		func() {
@@ -1090,22 +1026,60 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 	// Теперь можем грохнуть все, что нашли
 	for i := range drop {
 		if onVacuum != nil {
-			if err = onVacuum(t, drop[i].Clone().WrapKey(keyMgr.Unwrapper).WrapValue(valWrapper), w); err != nil {
+			if err = onVacuum(t, &usrPair{orig: drop[i]}, w); err != nil {
 				return
 			}
 		}
 
-		if key, err = drop[i].Key(); err != nil {
-			return
-		}
-
-		w.Delete(key)
+		w.Delete(drop[i].Key())
 	}
 
 	// Возвращаем последний проверенный ключ, с которого надо начать след. цикл
-	if key, err = list[len(list)-1].Key(); err != nil {
-		return
+	return list[len(list)-1].Key().RPart(0x01), nil
+}
+
+type locks struct {
+	sync.Mutex
+	acks map[string]fdbx.Key
+}
+
+func (l *locks) Append(key fdbx.Key) (exists bool) {
+	l.Lock()
+	defer l.Unlock()
+
+	if l.acks == nil {
+		l.acks = make(map[string]fdbx.Key, 1)
 	}
 
-	return key.RPart(0x01), nil
+	if l.acks[key.String()] != nil {
+		return true
+	}
+
+	l.acks[key.String()] = key
+	return false
+}
+
+func (l *locks) Release(t *tx64, w db.Writer) (err error) {
+	l.Lock()
+	defer l.Unlock()
+
+	if len(l.acks) == 0 {
+		return nil
+	}
+
+	// Если передается Writer, значит могут быть модификации
+	atomic.AddUint32(&t.mods, 1)
+
+	hdlr := func(w db.Writer) (exp error) {
+		for _, k := range l.acks {
+			w.Delete(k)
+		}
+		return nil
+	}
+
+	if w == nil {
+		return t.conn.Write(hdlr)
+	}
+
+	return hdlr(w)
 }

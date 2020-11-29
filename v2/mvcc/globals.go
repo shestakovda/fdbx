@@ -1,8 +1,9 @@
 package mvcc
 
 import (
+	"encoding/binary"
+
 	"github.com/shestakovda/fdbx/v2"
-	"github.com/shestakovda/fdbx/v2/models"
 )
 
 // Переменные модуля, менять которые не рекомендуется
@@ -16,15 +17,15 @@ var (
 )
 
 var globCache = makeCache()
-var keyMgr = NewTxKeyManager()
 
 const (
 	nsUser   byte = 0
 	nsTx     byte = 1
 	nsTxFlag byte = 2
+	nsLock   byte = 3
 )
 
-var counterKey = fdbx.Key("counter").LPart(nsTxFlag)
+var counterKey = fdbx.String2Key("counter").LPart(nsTxFlag)
 
 const (
 	txStatusUnknown   byte = 0
@@ -33,9 +34,9 @@ const (
 	txStatusCommitted byte = 3
 )
 
-func valWrapper(v []byte) ([]byte, error) {
-	if len(v) == 0 {
-		return nil, nil
-	}
-	return models.GetRootAsRow(v, 0).DataBytes(), nil
+func txKey(x uint64) fdbx.Key {
+	var txid [9]byte
+	txid[0] = nsTx
+	binary.BigEndian.PutUint64(txid[1:], x)
+	return fdbx.Bytes2Key(txid[:])
 }

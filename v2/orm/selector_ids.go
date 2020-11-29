@@ -9,13 +9,12 @@ import (
 )
 
 func NewIDsSelector(tx mvcc.Tx, ids []fdbx.Key, strict bool) Selector {
-	s := idsSelector{
+	return &idsSelector{
 		ids:    ids,
 		strict: strict,
 
 		baseSelector: newBaseSelector(tx),
 	}
-	return &s
 }
 
 type idsSelector struct {
@@ -37,11 +36,10 @@ func (s *idsSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-
 		defer close(errs)
 
 		opts := getOpts(args)
-		kwrp := tbl.Mgr().Wrap
 		rids := s.reversed(s.ids, opts.reverse)
 
 		for i := range rids {
-			if pair, err = s.tx.Select(kwrp(rids[i])); err != nil {
+			if pair, err = s.tx.Select(WrapTableKey(tbl.ID(), rids[i])); err != nil {
 				if errx.Is(err, mvcc.ErrNotFound) {
 					if !s.strict {
 						continue

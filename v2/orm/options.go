@@ -30,6 +30,7 @@ type options struct {
 	task    *models.TaskT
 	headers map[string]string
 	indexes map[uint16]IndexKey
+	multidx map[uint16]IndexMultiKey
 }
 
 func Index(id uint16, f IndexKey) Option {
@@ -38,6 +39,15 @@ func Index(id uint16, f IndexKey) Option {
 			o.indexes = make(map[uint16]IndexKey, 8)
 		}
 		o.indexes[id] = f
+	}
+}
+
+func MultiIndex(id uint16, f IndexMultiKey) Option {
+	return func(o *options) {
+		if o.multidx == nil {
+			o.multidx = make(map[uint16]IndexMultiKey, 8)
+		}
+		o.multidx[id] = f
 	}
 }
 

@@ -8,13 +8,12 @@ import (
 )
 
 func NewIndexSelector(tx mvcc.Tx, idx uint16, prefix fdbx.Key) Selector {
-	s := indexSelector{
+	return &indexSelector{
 		idx:    idx,
 		prefix: prefix,
 
 		baseSelector: newBaseSelector(tx),
 	}
-	return &s
 }
 
 type indexSelector struct {
@@ -30,23 +29,26 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 
 	go func() {
 		var err error
-		var val []byte
 		var pair fdbx.Pair
 
 		defer close(list)
 		defer close(errs)
 
+		skip := false
 		opts := getOpts(args)
-		kwrp := tbl.Mgr().Wrap
-		imgr := newIndexKeyManager(tbl.ID(), s.idx)
-		lkey := imgr.Wrap(opts.lastkey)
+		nkey := WrapIndexKey(tbl.ID(), s.idx, s.prefix)
+		lkey := WrapIndexKey(tbl.ID(), s.idx, s.prefix)
 		reqs := make([]mvcc.Option, 0, 3)
-		skip := opts.lastkey != nil
+
+		if len(opts.lastkey.Bytes()) > 0 {
+			skip = true
+			lkey = WrapIndexKey(tbl.ID(), s.idx, opts.lastkey)
+		}
 
 		if opts.reverse {
-			reqs = append(reqs, mvcc.Reverse(), mvcc.From(imgr.Wrap(nil)), mvcc.To(lkey))
+			reqs = append(reqs, mvcc.From(nkey), mvcc.To(lkey), mvcc.Reverse())
 		} else {
-			reqs = append(reqs, mvcc.From(lkey), mvcc.To(imgr.Wrap(nil)))
+			reqs = append(reqs, mvcc.From(lkey), mvcc.To(nkey))
 		}
 
 		wctx, exit := context.WithCancel(ctx)
@@ -61,12 +63,7 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 				continue
 			}
 
-			if val, err = item.Value(); err != nil {
-				errs <- ErrSelect.WithReason(err)
-				return
-			}
-
-			if pair, err = s.tx.Select(kwrp(fdbx.Key(val))); err != nil {
+			if pair, err = s.tx.Select(WrapTableKey(tbl.ID(), fdbx.Bytes2Key(item.Value()))); err != nil {
 				errs <- ErrSelect.WithReason(err)
 				return
 			}
@@ -76,10 +73,7 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 				return
 			}
 
-			if s.lk, err = item.WrapKey(imgr.Unwrapper).Key(); err != nil {
-				errs <- ErrSelect.WithReason(err)
-				return
-			}
+			s.setKey(UnwrapIndexKey(item.Key()))
 		}
 
 		for err := range errc {

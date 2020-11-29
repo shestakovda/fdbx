@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
@@ -51,8 +52,7 @@ func (s *MVCCSuite) TearDownTest() {
 func (s *MVCCSuite) TestUpsertIsolationSameKeys() {
 	// test pairs
 	var sel fdbx.Pair
-	var val []byte
-	key := fdbx.Key("key1")
+	key := fdbx.String2Key("key1")
 	val1 := []byte("val1")
 	val2 := []byte("val2")
 
@@ -65,26 +65,20 @@ func (s *MVCCSuite) TestUpsertIsolationSameKeys() {
 	// insert and check inside tx1
 	if err = tx1.Upsert([]fdbx.Pair{fdbx.NewPair(key, val1)}); s.NoError(err) {
 		if sel, err = tx1.Select(key); s.NoError(err) {
-			if val, err = sel.Value(); s.NoError(err) {
-				s.Equal(string(val1), string(val))
-			}
+			s.Equal(string(val1), string(sel.Value()))
 		}
 	}
 
 	// insert and check inside tx2
 	if err = tx2.Upsert([]fdbx.Pair{fdbx.NewPair(key, val2)}); s.NoError(err) {
 		if sel, err = tx2.Select(key); s.NoError(err) {
-			if val, err = sel.Value(); s.NoError(err) {
-				s.Equal(string(val2), string(val))
-			}
+			s.Equal(string(val2), string(sel.Value()))
 		}
 	}
 
 	// check no value change inside tx1
 	if sel, err = tx1.Select(key); s.NoError(err) {
-		if val, err = sel.Value(); s.NoError(err) {
-			s.Equal(string(val1), string(val))
-		}
+		s.Equal(string(val1), string(sel.Value()))
 	}
 
 	// commit tx2
@@ -92,18 +86,15 @@ func (s *MVCCSuite) TestUpsertIsolationSameKeys() {
 
 	// check there are key change inside tx1
 	if sel, err = tx1.Select(key); s.NoError(err) {
-		if val, err = sel.Value(); s.NoError(err) {
-			s.Equal(string(val2), string(val))
-		}
+		s.Equal(string(val2), string(sel.Value()))
 	}
 }
 
 func (s *MVCCSuite) TestUpsertIsolationDiffKeys() {
 	// test pairs
 	var sel fdbx.Pair
-	var val []byte
-	key1 := fdbx.Key("key1")
-	key2 := fdbx.Key("key2")
+	key1 := fdbx.String2Key("key1")
+	key2 := fdbx.String2Key("key2")
 	val1 := []byte("val1")
 	val2 := []byte("val2")
 
@@ -116,18 +107,14 @@ func (s *MVCCSuite) TestUpsertIsolationDiffKeys() {
 	// insert and check inside tx1
 	if err = tx1.Upsert([]fdbx.Pair{fdbx.NewPair(key1, val1)}); s.NoError(err) {
 		if sel, err = tx1.Select(key1); s.NoError(err) {
-			if val, err = sel.Value(); s.NoError(err) {
-				s.Equal(string(val1), string(val))
-			}
+			s.Equal(string(val1), string(sel.Value()))
 		}
 	}
 
 	// insert and check inside tx2
 	if err = tx2.Upsert([]fdbx.Pair{fdbx.NewPair(key2, val2)}); s.NoError(err) {
 		if sel, err = tx2.Select(key2); s.NoError(err) {
-			if val, err = sel.Value(); s.NoError(err) {
-				s.Equal(string(val2), string(val))
-			}
+			s.Equal(string(val2), string(sel.Value()))
 		}
 	}
 
@@ -148,9 +135,7 @@ func (s *MVCCSuite) TestUpsertIsolationDiffKeys() {
 
 	// check there are key2 inside tx1
 	if sel, err = tx1.Select(key2); s.NoError(err) {
-		if val, err = sel.Value(); s.NoError(err) {
-			s.Equal(string(val2), string(val))
-		}
+		s.Equal(string(val2), string(sel.Value()))
 	}
 }
 
@@ -158,18 +143,15 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 	// test pairs
 	var err error
 	var sel fdbx.Pair
-	var val []byte
-	key1 := fdbx.Key("key1")
-	key2 := fdbx.Key("key2")
+	key1 := fdbx.String2Key("key1")
+	key2 := fdbx.String2Key("key2")
 	val1 := []byte("val1")
 	val2 := []byte("val2")
 
 	// insert and check val1
 	if err = s.tx.Upsert([]fdbx.Pair{fdbx.NewPair(key1, val1)}); s.NoError(err) {
 		if sel, err = s.tx.Select(key1); s.NoError(err) {
-			if val, err = sel.Value(); s.NoError(err) {
-				s.Equal(string(val1), string(val))
-			}
+			s.Equal(string(val1), string(sel.Value()))
 		}
 	}
 
@@ -180,25 +162,19 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 	}
 
 	hdlr := func(tx mvcc.Tx, p fdbx.Pair) error {
-		if key, err := p.Key(); s.NoError(err) {
-			s.Equal(key2.String(), key.String())
-		}
+		s.Nil(p)
 		return nil
 	}
 
 	// insert and check val2
 	if err = s.tx.Upsert([]fdbx.Pair{fdbx.NewPair(key2, val2)}, mvcc.OnInsert(hdlr)); s.NoError(err) {
 		if sel, err = s.tx.Select(key2); s.NoError(err) {
-			if val, err = sel.Value(); s.NoError(err) {
-				s.Equal(string(val2), string(val))
-			}
+			s.Equal(string(val2), string(sel.Value()))
 		}
 	}
 
 	hdlr = func(tx mvcc.Tx, p fdbx.Pair) error {
-		if key, err := p.Key(); s.NoError(err) {
-			s.Equal(key1.String(), key.String())
-		}
+		s.Equal(key1.String(), p.Key().String())
 		return nil
 	}
 
@@ -218,7 +194,7 @@ func (s *MVCCSuite) TestConcurrentInsideTx() {
 		defer wg.Done()
 
 		for i := 0; i < 100; i++ {
-			pair := fdbx.NewPair([]byte(fmt.Sprintf("key%d", i%9)), []byte(strconv.Itoa(i)))
+			pair := fdbx.NewPair(fdbx.String2Key(fmt.Sprintf("key%d", i%9)), []byte(strconv.Itoa(i)))
 			s.Require().NoError(s.tx.Upsert([]fdbx.Pair{pair}))
 		}
 	}
@@ -242,7 +218,7 @@ func (s *MVCCSuite) TestConcurrentBetweenTx() {
 		for i := 0; i < 100; i++ {
 			tx, err := mvcc.Begin(s.cn)
 			s.Require().NoError(err)
-			pair := fdbx.NewPair([]byte(fmt.Sprintf("key%d", i%9)), []byte(strconv.Itoa(i)))
+			pair := fdbx.NewPair(fdbx.String2Key(fmt.Sprintf("key%d", i%9)), []byte(strconv.Itoa(i)))
 			s.Require().NoError(tx.Upsert([]fdbx.Pair{pair}))
 
 			if i%n == 0 {
@@ -280,7 +256,7 @@ func (s *MVCCSuite) TestOnCommit() {
 	s.Require().NoError(err)
 
 	var num int64 = 123
-	var key = fdbx.Key("key")
+	var key = fdbx.String2Key("key")
 
 	tx.OnCommit(func(w db.Writer) error {
 		w.Increment(key, num)
@@ -289,15 +265,13 @@ func (s *MVCCSuite) TestOnCommit() {
 
 	s.Require().NoError(s.cn.Write(func(w db.Writer) error {
 		s.Require().NoError(tx.Commit(mvcc.Writer(w)))
-		if val, err := w.Data(key).Value(); s.NoError(err) {
-			s.Equal(num, int64(binary.LittleEndian.Uint64(val)))
-		}
+		s.Equal(num, int64(binary.LittleEndian.Uint64(w.Data(key).Value())))
 		return nil
 	}))
 }
 
 func (s *MVCCSuite) TestBLOB() {
-	key := fdbx.Key("test blob")
+	key := fdbx.String2Key("test blob")
 
 	msg := make([]byte, 20<<20)
 	_, err := rand.Read(msg)
@@ -318,13 +292,13 @@ func (s *MVCCSuite) TestBLOB() {
 }
 
 func (s *MVCCSuite) TestListAll() {
-	key1 := fdbx.Key("key1")
-	key2 := fdbx.Key("key2")
-	key3 := fdbx.Key("key3")
-	key4 := fdbx.Key("key4")
-	key5 := fdbx.Key("key5")
-	key6 := fdbx.Key("key6")
-	key7 := fdbx.Key("key7")
+	key1 := fdbx.String2Key("key1")
+	key2 := fdbx.String2Key("key2")
+	key3 := fdbx.String2Key("key3")
+	key4 := fdbx.String2Key("key4")
+	key5 := fdbx.String2Key("key5")
+	key6 := fdbx.String2Key("key6")
+	key7 := fdbx.String2Key("key7")
 	val1 := []byte("val1")
 	val2 := []byte("val2")
 	val3 := []byte("val3")
@@ -369,9 +343,7 @@ func (s *MVCCSuite) TestListAll() {
 
 	vals := make([]string, 0, 2)
 	hdlr := func(tx mvcc.Tx, p fdbx.Pair, w db.Writer) error {
-		if val, err := p.Value(); s.NoError(err) {
-			vals = append(vals, string(val))
-		}
+		vals = append(vals, string(p.Value()))
 		return nil
 	}
 
@@ -407,6 +379,65 @@ func (s *MVCCSuite) TestListAll() {
 	s.Require().NoError(tx2.Cancel())
 }
 
+func (s *MVCCSuite) TestSharedLock() {
+	key := fdbx.String2Key("key")
+	lock := fdbx.String2Key("lock")
+
+	wg := new(sync.WaitGroup)
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+
+		tx, err := mvcc.Begin(s.cn)
+		s.Require().NoError(err)
+		defer tx.Cancel()
+
+		// В первой транзакции забираем блокировку
+		s.Require().NoError(tx.SharedLock(lock, time.Second))
+
+		// Ждем минутку, типа чот делаем
+		time.Sleep(100 * time.Millisecond)
+
+		// Пытаемся получить блокировку повторно, это должно работать
+		s.Require().NoError(tx.SharedLock(lock, time.Second))
+
+		// Обновляем значение
+		s.Require().NoError(tx.Upsert([]fdbx.Pair{fdbx.NewPair(key, []byte("val1"))}))
+		s.Require().NoError(tx.Commit())
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		tx, err := mvcc.Begin(s.cn)
+		s.Require().NoError(err)
+		defer tx.Cancel()
+
+		// Во второй транзакции сначала чуть ждем, чтобы первая точно успела взять блокировку
+		time.Sleep(20 * time.Millisecond)
+
+		// Пытаемся получить блокировку
+		s.Require().NoError(tx.SharedLock(lock, time.Second))
+
+		// Теперь читаем значение. Если блокировка работает, то будет ждать освобождения и прочитаем val1
+		// Если не работает, то прочитает сразу же, там будет пустое значение
+		if sel, err := tx.Select(key); s.NoError(err) {
+			s.Equal("val1", string(sel.Value()))
+		}
+
+		// Специально не коммитим, чтобы проверить снятие блокировки по отмене
+	}()
+
+	wg.Wait()
+
+	// После двух транзакций не должно быть никакой проблемы с блокировкой, т.к. она должна быть снята
+	tx, err := mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+	defer tx.Cancel()
+	s.Require().NoError(tx.SharedLock(lock, time.Second))
+}
+
 func BenchmarkSequenceWorkflowDiffTx(b *testing.B) {
 	cn, err := db.ConnectV610(TestDB)
 	require.NoError(b, err)
@@ -418,7 +449,7 @@ func BenchmarkSequenceWorkflowDiffTx(b *testing.B) {
 	var pairs [1]fdbx.Pair
 
 	for i := 0; i < b.N; i++ {
-		key := fdbx.Key(typex.NewUUID())
+		key := fdbx.Bytes2Key(typex.NewUUID())
 		val := []byte(typex.NewUUID().String())
 		val2 := []byte(typex.NewUUID().String())
 
@@ -441,20 +472,18 @@ func BenchmarkSequenceWorkflowDiffTx(b *testing.B) {
 		require.NoError(b, err)
 		sl, err := tx.Select(key)
 		require.NoError(b, err)
-		vv, err := sl.Value()
-		require.NoError(b, err)
-		require.Equal(b, val2, vv)
+		require.Equal(b, val2, sl.Value())
 		keys[0] = key
 		require.NoError(b, tx.Delete(keys[:]))
 		require.NoError(b, tx.Commit())
 
 		// SELECT EMPTY
-		// tx, err = mvcc.Begin(cn)
-		// require.NoError(b, err)
-		// sl, err = tx.Select(key)
-		// require.Error(b, err)
-		// require.True(b, errx.Is(err, mvcc.ErrNotFound))
-		// require.NoError(b, tx.Cancel())
+		tx, err = mvcc.Begin(cn)
+		require.NoError(b, err)
+		sl, err = tx.Select(key)
+		require.Error(b, err)
+		require.True(b, errx.Is(err, mvcc.ErrNotFound))
+		require.NoError(b, tx.Cancel())
 	}
 }
 
@@ -466,7 +495,7 @@ func BenchmarkSequenceWorkflowSameTx(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		key := fdbx.Key(typex.NewUUID())
+		key := fdbx.Bytes2Key(typex.NewUUID())
 		val := []byte(typex.NewUUID().String())
 		val2 := []byte(typex.NewUUID().String())
 
@@ -481,9 +510,7 @@ func BenchmarkSequenceWorkflowSameTx(b *testing.B) {
 		// SELECT / DELETE
 		sl, err := tx.Select(key)
 		require.NoError(b, err)
-		vv, err := sl.Value()
-		require.NoError(b, err)
-		require.Equal(b, string(val2), string(vv))
+		require.Equal(b, string(val2), string(sl.Value()))
 		require.NoError(b, tx.Delete([]fdbx.Key{key}))
 
 		// SELECT EMPTY
@@ -500,19 +527,19 @@ func BenchmarkOperationsSameTx(b *testing.B) {
 	require.NoError(b, cn.Clear())
 
 	uid := []byte(typex.NewUUID())
-	key := fdbx.Key(uid)
+	key := fdbx.Bytes2Key(uid)
 	val := uid
 
 	tx, err := mvcc.Begin(cn)
 	require.NoError(b, err)
-	require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(uid, uid)}))
+	require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(key, uid)}))
 
 	b.ResetTimer()
 
 	b.Run("UPSERT", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			uid := []byte(typex.NewUUID())
-			require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(uid, uid)}))
+			require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(fdbx.Bytes2Key(uid), uid)}))
 		}
 	})
 
@@ -520,17 +547,15 @@ func BenchmarkOperationsSameTx(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			sl, err := tx.Select(key)
 			require.NoError(b, err)
-			vv, err := sl.Value()
-			require.NoError(b, err)
-			require.Equal(b, string(val), string(vv))
+			require.Equal(b, string(val), string(sl.Value()))
 		}
 	})
 
 	b.Run("DELETE", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			uid := []byte(typex.NewUUID())
-			require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(uid, uid)}))
-			require.NoError(b, tx.Delete([]fdbx.Key{uid}))
+			require.NoError(b, tx.Upsert([]fdbx.Pair{fdbx.NewPair(fdbx.Bytes2Key(uid), uid)}))
+			require.NoError(b, tx.Delete([]fdbx.Key{fdbx.Bytes2Key(uid)}))
 		}
 	})
 }

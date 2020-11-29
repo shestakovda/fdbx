@@ -10,18 +10,13 @@ import (
 )
 
 func NewQuery(tb Table, tx mvcc.Tx) Query {
-	q := v1Query{
+	return &v1Query{
 		tx: tx,
 		tb: tb,
-
-		queryid: typex.NewUUID(),
-		filters: make([]Filter, 0, 8),
 	}
-	return &q
 }
 
 func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
-	var val []byte
 	var uid typex.UUID
 	var pair fdbx.Pair
 
@@ -34,16 +29,13 @@ func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
 		tb: tb,
 
 		queryid: uid,
-		filters: make([]Filter, 0, 8),
 	}
 
-	if pair, err = tx.Select(NewQueryKeyManager(q.tb.ID()).Wrap(fdbx.Key(uid))); err != nil {
+	if pair, err = tx.Select(WrapQueryKey(tb.ID(), fdbx.Bytes2Key(uid))); err != nil {
 		return nil, ErrLoadQuery.WithReason(err)
 	}
 
-	if val, err = pair.Value(); err != nil {
-		return nil, ErrLoadQuery.WithReason(err)
-	}
+	val := pair.Value()
 
 	if len(val) == 0 {
 		return nil, ErrLoadQuery.WithReason(err)
@@ -57,7 +49,7 @@ func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
 	q.lastkey = cur.LastKey
 
 	if q.idxtype > 0 {
-		q.selector = NewIndexSelector(tx, q.idxtype, q.iprefix)
+		q.selector = NewIndexSelector(tx, q.idxtype, fdbx.Bytes2Key(q.iprefix))
 	} else {
 		q.selector = NewFullSelector(tx)
 	}
@@ -72,8 +64,8 @@ type v1Query struct {
 	// Сохраняемые значения (курсор)
 	reverse bool
 	idxtype uint16
-	iprefix fdbx.Key
-	lastkey fdbx.Key
+	iprefix []byte
+	lastkey []byte
 	queryid typex.UUID
 
 	// Текущие значения
@@ -163,9 +155,7 @@ func (q *v1Query) Delete() (err error) {
 	keys := make([]fdbx.Key, len(list))
 
 	for i := range list {
-		if keys[i], err = list[i].Key(); err != nil {
-			return ErrDelete.WithReason(err)
-		}
+		keys[i] = list[i].Key()
 	}
 
 	if err = q.tb.Delete(q.tx, keys...); err != nil {
@@ -175,21 +165,23 @@ func (q *v1Query) Delete() (err error) {
 	return nil
 }
 
-func (q *v1Query) ByID(ids ...fdbx.Key) Query {
-	q.selector = NewIDsSelector(q.tx, ids, true)
+func (q *v1Query) BySelector(sel Selector) Query {
+	q.selector = sel
 	return q
 }
 
+func (q *v1Query) ByID(ids ...fdbx.Key) Query {
+	return q.BySelector(NewIDsSelector(q.tx, ids, true))
+}
+
 func (q *v1Query) PossibleByID(ids ...fdbx.Key) Query {
-	q.selector = NewIDsSelector(q.tx, ids, false)
-	return q
+	return q.BySelector(NewIDsSelector(q.tx, ids, false))
 }
 
 func (q *v1Query) ByIndex(idx uint16, prefix fdbx.Key) Query {
 	q.idxtype = idx
-	q.iprefix = prefix
-	q.selector = NewIndexSelector(q.tx, idx, prefix)
-	return q
+	q.iprefix = prefix.Bytes()
+	return q.BySelector(NewIndexSelector(q.tx, idx, prefix))
 }
 
 func (q *v1Query) Where(hdl Filter) Query {
@@ -210,19 +202,21 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 	go func() {
 		var err error
 		var need bool
+		var pair fdbx.Pair
 
 		defer close(list)
 		defer close(errs)
 
 		size := 0
-		kwrp := q.tb.Mgr().Unwrapper
-		vwrp := sysValWrapper(q.tx, q.tb.ID())
 		wctx, exit := context.WithCancel(ctx)
-		pairs, errc := q.selector.Select(wctx, q.tb, LastKey(q.lastkey), Reverse(q.reverse))
+		pairs, errc := q.selector.Select(wctx, q.tb, LastKey(fdbx.Bytes2Key(q.lastkey)), Reverse(q.reverse))
 		defer exit()
 
-		for pair := range pairs {
-			pair = pair.WrapKey(kwrp).WrapValue(vwrp)
+		for orig := range pairs {
+			if pair, err = newUsrPair(q.tx, q.tb.ID(), orig); err != nil {
+				errs <- ErrSequence.WithReason(err)
+				return
+			}
 
 			if need, err = q.applyFilters(pair); err != nil {
 				errs <- ErrSequence.WithReason(err)
@@ -262,7 +256,11 @@ func (q *v1Query) Save() (cid string, err error) {
 		q.selector = NewFullSelector(q.tx)
 	}
 
-	q.lastkey = q.selector.LastKey()
+	q.lastkey = q.selector.LastKey().Bytes()
+
+	if q.queryid == nil {
+		q.queryid = typex.NewUUID()
+	}
 
 	cur := &models.CursorT{
 		Reverse: q.reverse,
@@ -273,7 +271,7 @@ func (q *v1Query) Save() (cid string, err error) {
 	}
 
 	pairs := []fdbx.Pair{
-		fdbx.NewPair(NewQueryKeyManager(q.tb.ID()).Wrap(fdbx.Key(q.queryid)), fdbx.FlatPack(cur)),
+		fdbx.NewPair(WrapQueryKey(q.tb.ID(), fdbx.Bytes2Key(q.queryid)), fdbx.FlatPack(cur)),
 	}
 
 	if err = q.tx.Upsert(pairs); err != nil {
@@ -284,8 +282,12 @@ func (q *v1Query) Save() (cid string, err error) {
 }
 
 func (q *v1Query) Drop() (err error) {
+	if q.queryid == nil {
+		return nil
+	}
+
 	keys := []fdbx.Key{
-		NewQueryKeyManager(q.tb.ID()).Wrap(fdbx.Key(q.queryid)),
+		WrapQueryKey(q.tb.ID(), fdbx.Bytes2Key(q.queryid)),
 	}
 
 	if err = q.tx.Delete(keys); err != nil {

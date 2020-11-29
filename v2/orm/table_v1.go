@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -13,61 +12,29 @@ import (
 )
 
 func NewTable(id uint16, args ...Option) Table {
-	t := v1Table{
+	return &v1Table{
 		id:      id,
-		mgr:     newTableKeyManager(id),
 		options: getOpts(args),
 	}
-
-	t.idx = make(map[uint16]fdbx.KeyManager, len(t.options.indexes))
-	for idx := range t.options.indexes {
-		t.idx[idx] = newIndexKeyManager(id, idx)
-	}
-
-	return &t
 }
 
 type v1Table struct {
 	options
-	id  uint16
-	mgr fdbx.KeyManager
-	idx map[uint16]fdbx.KeyManager
+	id uint16
 }
 
 func (t v1Table) ID() uint16 { return t.id }
-
-func (t v1Table) Mgr() fdbx.KeyManager { return t.mgr }
 
 func (t v1Table) Select(tx mvcc.Tx) Query { return NewQuery(&t, tx) }
 
 func (t v1Table) Cursor(tx mvcc.Tx, id string) (Query, error) { return loadQuery(&t, tx, id) }
 
+func (t v1Table) Insert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
+	return t.upsert(tx, t.onInsert, pairs...)
+}
+
 func (t v1Table) Upsert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
-	if len(pairs) == 0 {
-		return nil
-	}
-
-	valWrapper := usrValWrapper(tx, t.id)
-
-	cp := make([]fdbx.Pair, len(pairs))
-	for i := range pairs {
-		// Для гарантии того, что мы "не тронем" исходные данные, делаем копию
-		cp[i] = pairs[i].Clone()
-
-		// Для того, чтобы избавиться от врапперов и получить целевое значение, применяем их
-		if err = cp[i].Apply(); err != nil {
-			ErrUpsert.WithReason(err)
-		}
-
-		// Оборачиваем местными врапперами работы с ключами и BLOB
-		cp[i] = cp[i].WrapKey(t.mgr.Wrapper).WrapValue(valWrapper)
-	}
-
-	if err = tx.Upsert(cp, mvcc.OnInsert(t.onInsert), mvcc.OnDelete(t.onUpdate)); err != nil {
-		return ErrUpsert.WithReason(err)
-	}
-
-	return nil
+	return t.upsert(tx, t.onUpdate, pairs...)
 }
 
 func (t v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
@@ -77,8 +44,7 @@ func (t v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
 
 	cp := make([]fdbx.Key, len(keys))
 	for i := range keys {
-		// Оборачиваем исходный ключ и делаем копию, чтобы не задеть исходные данные
-		cp[i] = t.mgr.Wrap(keys[i])
+		cp[i] = WrapTableKey(t.id, keys[i])
 	}
 
 	if err = tx.Delete(cp, mvcc.OnDelete(t.onDelete)); err != nil {
@@ -88,59 +54,70 @@ func (t v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
 	return nil
 }
 
-func (t v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
-	if len(t.options.indexes) == 0 {
+func (t v1Table) upsert(tx mvcc.Tx, hdl mvcc.Handler, pairs ...fdbx.Pair) (err error) {
+	if len(pairs) == 0 {
 		return nil
 	}
 
+	cp := make([]fdbx.Pair, len(pairs))
+	for i := range pairs {
+		if cp[i], err = newSysPair(tx, t.id, pairs[i]); err != nil {
+			return ErrUpsert.WithReason(err)
+		}
+	}
+
+	if err = tx.Upsert(cp, mvcc.OnUpdate(hdl), mvcc.OnDelete(t.onDelete)); err != nil {
+		return ErrUpsert.WithReason(err)
+	}
+
+	return nil
+}
+
+func (t v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+	if len(pair.Value()) > 0 {
+		return ErrDuplicate.WithDebug(errx.Debug{
+			"key": pair.Key().String(),
+		})
+	}
+
+	return t.onUpdate(tx, pair)
+}
+
+func (t v1Table) onUpdate(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+	if len(t.options.indexes) == 0 && len(t.options.multidx) == 0 {
+		return nil
+	}
+
+	pkey := pair.Key().Bytes()
+
 	var ups [1]fdbx.Pair
-	var key, tmp fdbx.Key
-
-	// Здесь берем сырое значение по двум причинам:
-	// 1. Вызов Upsert гарантирует Apply, т.е. в Raw будет исходное значение, даже если выше по стеку были врапперы
-	// 2. Нельзя использовать Value, т.к. врапперы работы с blob будут дублировать значения
-	raw := pair.Raw()
-
 	for idx, fnc := range t.options.indexes {
-		if tmp = fnc(raw); tmp == nil {
+		tmp := fnc(pair.Value())
+
+		if tmp == nil || len(tmp.Bytes()) == 0 {
 			continue
 		}
 
-		if key, err = pair.Key(); err != nil {
-			return ErrIdxUpsert.WithReason(err)
-		}
-
-		ups[0] = fdbx.NewPair(t.idx[idx].Wrap(tmp), t.mgr.Unwrap(key))
+		ups[0] = fdbx.NewPair(WrapIndexKey(t.id, idx, tmp).RPart(pkey...), pkey)
 		if err = tx.Upsert(ups[:]); err != nil {
 			return ErrIdxUpsert.WithReason(err).WithDebug(errx.Debug{"idx": idx})
 		}
 	}
 
-	return nil
+	for idx, fnc := range t.options.multidx {
+		keys := fnc(pair.Value())
 
-}
-
-func (t v1Table) onUpdate(tx mvcc.Tx, pair fdbx.Pair) (err error) {
-	if len(t.options.indexes) == 0 {
-		return nil
-	}
-
-	var ups [1]fdbx.Key
-
-	// Здесь берем сырое значение по двум причинам:
-	// 1. Вызов Upsert гарантируют Apply, т.е. в Raw будет исходное значение, даже если выше по стеку были врапперы
-	// 2. Нельзя использовать Value, т.к. врапперы работы с blob будут дублировать значения
-	raw := pair.Raw()
-
-	for idx, fnc := range t.options.indexes {
-		if ups[0] = fnc(raw); ups[0] == nil {
+		if len(keys) == 0 {
 			continue
 		}
 
-		ups[0] = t.idx[idx].Wrap(ups[0])
+		pairs := make([]fdbx.Pair, 0, len(keys))
+		for i := range keys {
+			pairs = append(pairs, fdbx.NewPair(WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...), pkey))
+		}
 
-		if err = tx.Delete(ups[:]); err != nil {
-			return ErrIdxDelete.WithReason(err).WithDebug(errx.Debug{"idx": idx})
+		if err = tx.Upsert(pairs); err != nil {
+			return ErrIdxUpsert.WithReason(err).WithDebug(errx.Debug{"idx": idx})
 		}
 	}
 
@@ -148,26 +125,44 @@ func (t v1Table) onUpdate(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 }
 
 func (t v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
-	if len(t.options.indexes) == 0 {
+	if len(t.options.indexes) == 0 && len(t.options.multidx) == 0 {
 		return nil
 	}
 
-	var raw []byte
+	var usr fdbx.Pair
 	var ups [1]fdbx.Key
 
+	pkey := UnwrapTableKey(pair.Key()).Bytes()
+
 	// Здесь нам придется обернуть еще значение, которое возвращается, потому что оно не обработано уровнем ниже
-	if raw, err = pair.WrapValue(sysValWrapper(tx, t.id)).Value(); err != nil {
+	if usr, err = newUsrPair(tx, t.id, pair); err != nil {
 		return ErrIdxDelete.WithReason(err)
 	}
 
 	for idx, fnc := range t.options.indexes {
-		if ups[0] = fnc(raw); ups[0] == nil {
+		if ups[0] = fnc(usr.Value()); ups[0] == nil || len(ups[0].Bytes()) == 0 {
 			continue
 		}
 
-		ups[0] = t.idx[idx].Wrap(ups[0])
+		ups[0] = WrapIndexKey(t.id, idx, ups[0]).RPart(pkey...)
 
 		if err = tx.Delete(ups[:]); err != nil {
+			return ErrIdxDelete.WithReason(err).WithDebug(errx.Debug{"idx": idx})
+		}
+	}
+
+	for idx, fnc := range t.options.multidx {
+		keys := fnc(usr.Value())
+
+		if len(keys) == 0 {
+			continue
+		}
+
+		for i := range keys {
+			keys[i] = WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...)
+		}
+
+		if err = tx.Delete(keys); err != nil {
 			return ErrIdxDelete.WithReason(err).WithDebug(errx.Debug{"idx": idx})
 		}
 	}
@@ -185,7 +180,6 @@ func (t v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Optio
 	defer func() {
 		// Перезапуск только в случае ошибки
 		if err != nil {
-			glog.Errorf("%+v", err)
 			time.Sleep(time.Second)
 
 			// И только если мы вообще можем еще запускать
@@ -231,27 +225,27 @@ func (t v1Table) vacuumStep(cn db.Connection) (err error) {
 	defer tx.Cancel()
 
 	// Этот запрос очищает только данные. Для них должен быть обработчик очистки BLOB
-	if err = tx.Vacuum(t.mgr.Wrap(nil), mvcc.OnVacuum(t.onVacuum)); err != nil {
+	if err = tx.Vacuum(WrapTableKey(t.id, nil), mvcc.OnVacuum(t.onVacuum)); err != nil {
 		return ErrVacuum.WithReason(err)
 	}
 
 	// Отдельно очистка всех индексов
-	if err = tx.Vacuum(newIndexKeyManager(t.id, 0).Wrap(nil).RSkip(2)); err != nil {
+	if err = tx.Vacuum(WrapIndexKey(t.id, 0, nil).RSkip(2)); err != nil {
 		return ErrVacuum.WithReason(err)
 	}
 
 	// Отдельно очистка всех очередей
-	if err = tx.Vacuum(newQueueKeyManager(t.id, 0, nil).Wrap(nil).RSkip(2)); err != nil {
+	if err = tx.Vacuum(WrapQueueKey(t.id, 0, nil, 0, nil).RSkip(3)); err != nil {
 		return ErrVacuum.WithReason(err)
 	}
 
 	// Отдельно очистка всех блобов
-	if err = tx.Vacuum(newBLOBKeyManager(t.id).Wrap(nil)); err != nil {
+	if err = tx.Vacuum(WrapBlobKey(t.id, nil)); err != nil {
 		return ErrVacuum.WithReason(err)
 	}
 
 	// Отдельно очистка всех курсоров
-	if err = tx.Vacuum(NewQueryKeyManager(t.id).Wrap(nil)); err != nil {
+	if err = tx.Vacuum(WrapQueryKey(t.id, nil)); err != nil {
 		return ErrVacuum.WithReason(err)
 	}
 
@@ -259,12 +253,9 @@ func (t v1Table) vacuumStep(cn db.Connection) (err error) {
 }
 
 func (t v1Table) onVacuum(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
-	var val []byte
 	var mod models.ValueT
 
-	if val, err = p.Value(); err != nil {
-		return ErrVacuum.WithReason(err)
-	}
+	val := p.Value()
 
 	if len(val) == 0 {
 		return nil
@@ -274,7 +265,7 @@ func (t v1Table) onVacuum(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
 
 	// Если значение лежит в BLOB, надо удалить
 	if mod.Blob {
-		if err = tx.DropBLOB(newBLOBKeyManager(t.id).Wrap(fdbx.Key(mod.Data)), mvcc.Writer(w)); err != nil {
+		if err = tx.DropBLOB(WrapBlobKey(t.id, fdbx.Bytes2Key(mod.Data)), mvcc.Writer(w)); err != nil {
 			return ErrVacuum.WithReason(err)
 		}
 	}

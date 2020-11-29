@@ -2,6 +2,7 @@ package mvcc
 
 import (
 	"context"
+	"time"
 
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
@@ -57,7 +58,10 @@ type Tx interface {
 	// Сохранение бинарных данных по ключу
 	SaveBLOB(fdbx.Key, []byte, ...Option) error
 
-	// Регистрация хука для выполнения при завершении транзакции
+	// Блокировка записи с доступом на чтение по сигнальному ключу
+	SharedLock(fdbx.Key, time.Duration) error
+
+	// Регистрация хука для выполнения при удачном завершении транзакции
 	OnCommit(CommitHandler)
 
 	// Запуск очистки устаревших записей ключей по указанному префиксу
@@ -76,19 +80,45 @@ type RowHandler func(Tx, fdbx.Pair, db.Writer) error
 // CommitHandler - обработчик события завершения логической транзакции
 type CommitHandler func(db.Writer) error
 
+// WrapKey - обертка для получения системного ключа из пользовательского, при сохранении
+func WrapKey(key fdbx.Key) fdbx.Key {
+	if key == nil {
+		key = fdbx.Bytes2Key(nil)
+	}
+	return key.LPart(nsUser)
+}
+
+// UnwrapKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
+func UnwrapKey(key fdbx.Key) fdbx.Key {
+	if key != nil {
+		return key.LSkip(1).RSkip(8)
+	}
+	return nil
+}
+
+// WrapLockKey - обертка для получения системного ключа из пользовательского, при сохранении
+func WrapLockKey(key fdbx.Key) fdbx.Key {
+	if key == nil {
+		key = fdbx.Bytes2Key(nil)
+	}
+	return key.LPart(nsLock)
+}
+
 // Ошибки модуля
 var (
-	ErrWrite    = errx.New("Модифицикация в транзакции только для чтения")
-	ErrBegin    = errx.New("Ошибка старта транзакции")
-	ErrClose    = errx.New("Ошибка завершения транзакции")
-	ErrSelect   = errx.New("Ошибка получения данных")
-	ErrUpsert   = errx.New("Ошибка обновления данных")
-	ErrDelete   = errx.New("Ошибка удаления данных")
-	ErrSeqScan  = errx.New("Ошибка полной выборки данных")
-	ErrNotFound = errx.New("Отсутствует значение")
-	ErrBLOBLoad = errx.New("Ошибка загрузки BLOB")
-	ErrBLOBDrop = errx.New("Ошибка удаления BLOB")
-	ErrBLOBSave = errx.New("Ошибка сохранения BLOB")
-	ErrWatch    = errx.New("Ошибка отслеживания значения")
-	ErrVacuum   = errx.New("Ошибка автоочистки значений")
+	ErrWrite      = errx.New("Модифицикация в транзакции только для чтения")
+	ErrBegin      = errx.New("Ошибка старта транзакции")
+	ErrClose      = errx.New("Ошибка завершения транзакции")
+	ErrSelect     = errx.New("Ошибка получения данных")
+	ErrUpsert     = errx.New("Ошибка обновления данных")
+	ErrDelete     = errx.New("Ошибка удаления данных")
+	ErrSeqScan    = errx.New("Ошибка полной выборки данных")
+	ErrNotFound   = errx.New("Отсутствует значение")
+	ErrBLOBLoad   = errx.New("Ошибка загрузки BLOB")
+	ErrBLOBDrop   = errx.New("Ошибка удаления BLOB")
+	ErrBLOBSave   = errx.New("Ошибка сохранения BLOB")
+	ErrSharedLock = errx.New("Ошибка получения блокировки")
+	ErrDeadlock   = errx.New("Ошибка ожидания освобождения блокировки")
+	ErrWatch      = errx.New("Ошибка отслеживания значения")
+	ErrVacuum     = errx.New("Ошибка автоочистки значений")
 )
