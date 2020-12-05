@@ -2,8 +2,10 @@ package mvcc
 
 import (
 	"encoding/binary"
+	"time"
 
 	"github.com/shestakovda/fdbx/v2"
+	"github.com/sony/sonyflake"
 )
 
 // Переменные модуля, менять которые не рекомендуется
@@ -13,19 +15,16 @@ var (
 	// Максимальное кол-во байт, которое может занимать "чистое" значение ключа, с запасом на накладные расходы
 	MaxRowSize = 90000
 	// Максимальное число "грязных" строк, выбираемых в одной физической транзакции
-	MaxRowCount = uint64(100000)
+	MaxRowCount = 100
 )
 
 var globCache = makeCache()
 
 const (
-	nsUser   byte = 0
-	nsTx     byte = 1
-	nsTxFlag byte = 2
-	nsLock   byte = 3
+	nsUser byte = 0
+	nsTx   byte = 1
+	nsLock byte = 2
 )
-
-var counterKey = fdbx.String2Key("counter").LPart(nsTxFlag)
 
 const (
 	txStatusUnknown   byte = 0
@@ -40,3 +39,7 @@ func txKey(x uint64) fdbx.Key {
 	binary.BigEndian.PutUint64(txid[1:], x)
 	return fdbx.Bytes2Key(txid[:])
 }
+
+var sflake = sonyflake.NewSonyflake(sonyflake.Settings{
+	StartTime: time.Now(),
+})

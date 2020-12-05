@@ -3,12 +3,10 @@ package mvcc
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -28,31 +26,18 @@ import (
 	* Получить монотонно возрастающий идентификатор транзакции, синхронизированный между всеми инстансами
 	* Не создать ни одного конфликта записи/чтения между параллельно стартующими транзакциями
 */
-func newTx64(conn db.Connection) (*tx64, error) {
-	var waiter fdb.FutureKey
-
-	if err := conn.Write(func(w db.Writer) error {
-		w.Increment(counterKey, 1)
-		waiter = w.Version()
-		return nil
-	}); err != nil {
-		return nil, ErrBegin.WithReason(err)
-	}
-
-	ver := waiter.MustGet()
-
-	if len(ver) < 10 {
-		return nil, ErrBegin.WithDebug(errx.Debug{
-			"version": fdbx.Bytes2Key(ver).String(),
-		})
-	}
-
-	return &tx64{
-		txid:   binary.BigEndian.Uint64(ver[:8]) + uint64(binary.BigEndian.Uint16(ver[8:10])),
+func newTx64(conn db.Connection) (t *tx64, err error) {
+	t = &tx64{
 		conn:   conn,
 		start:  uint64(time.Now().UTC().UnixNano()),
 		status: txStatusRunning,
-	}, nil
+	}
+
+	if t.txid, err = sflake.NextID(); err != nil {
+		return
+	}
+
+	return t, nil
 }
 
 type tx64 struct {
@@ -322,15 +307,16 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 		defer close(errs)
 
 		size := 0
+		rows := 0
 		opts := getOpts(args)
 		from := WrapKey(opts.from)
 		last := WrapKey(opts.to)
 		opid := atomic.AddUint32(&t.opid, 1)
 		hdlr := func(r db.Reader) (exp error) {
 			if opts.reverse {
-				part, last, exp = t.selectPart(r, from, last, size, opid, &opts)
+				rows, part, last, exp = t.selectPart(r, from, last, size, opid, &opts)
 			} else {
-				part, from, exp = t.selectPart(r, from, last, size, opid, &opts)
+				rows, part, from, exp = t.selectPart(r, from, last, size, opid, &opts)
 			}
 			return exp
 		}
@@ -352,7 +338,11 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 			}
 
 			if len(part) == 0 {
-				return
+				if rows < MaxRowCount {
+					return
+				} else {
+					continue
+				}
 			}
 
 			select {
@@ -378,16 +368,20 @@ func (t *tx64) selectPart(
 	size int,
 	opid uint32,
 	opts *options,
-) (part []fdbx.Pair, last fdbx.Key, err error) {
+) (rows int, part []fdbx.Pair, last fdbx.Key, err error) {
 	var ok bool
 	var w db.Writer
 
-	if part, err = t.fetchAll(r, nil, opid, r.List(from, to, MaxRowCount, opts.reverse)); err != nil {
+	if rows, part, err = t.fetchAll(r, nil, opid, r.List(from, to, uint64(MaxRowCount), opts.reverse)); err != nil {
 		return
 	}
 
 	if len(part) == 0 {
-		return nil, from, nil
+		if opts.reverse {
+			return rows, nil, from, nil
+		} else {
+			return rows, nil, to, nil
+		}
 	}
 
 	if opts.lock {
@@ -424,7 +418,7 @@ func (t *tx64) selectPart(
 		}
 	}
 
-	return part, last, nil
+	return rows, part, last, nil
 }
 
 func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte, args ...Option) (err error) {
@@ -606,9 +600,10 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, x uint64) (status byte, err
 	val := r.Data(txKey(x)).Value()
 
 	// Если в БД нет записи, то либо транзакция еще открыта, либо это был откат
-	// Поскольку нет определенности, в кеш ничего не складываем
+	// Поскольку нет определенности, в глобальный кеш ничего не складываем
 	if len(val) == 0 {
-		return txStatusAborted, nil
+		local.set(x, txStatusRunning)
+		return txStatusRunning, nil
 	}
 
 	// Получаем значение статуса как часть модели
@@ -797,7 +792,7 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 }
 
 // Аналогично fetchRow, но все актуальные версии всех ключей по диапазону
-func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGetter) (res []fdbx.Pair, err error) {
+func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGetter) (cnt int, res []fdbx.Pair, err error) {
 	var comm bool
 	var buf models.RowState
 	var row models.RowStateT
@@ -808,6 +803,7 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 
 	list := lg.Resolve()
 	res = list[:0]
+	cnt = len(list)
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
@@ -879,7 +875,7 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 		list[i] = nil
 	}
 
-	return res, nil
+	return cnt, res, nil
 }
 
 func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handler) (err error) {
@@ -951,7 +947,7 @@ func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 	}
 }
 
-// vacuumPart - функция обратная fetchAll, в том смысле, что она удаляет все ключи, которые больше не нужны в БД
+// vacuumPart - функция обратная fetchRow, в том смысле, что она удаляет все ключи, которые больше не нужны в БД
 func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) (_ fdbx.Key, err error) {
 	var ok bool
 	var val []byte

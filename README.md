@@ -4,176 +4,52 @@
 [![Codebeat](https://codebeat.co/badges/6909b169-393c-4c2b-aa9c-b9b1c3ff5708)](https://codebeat.co/projects/github-com-shestakovda-fdbx-master)
 [![Go Report Card](https://goreportcard.com/badge/github.com/shestakovda/fdbx)](https://goreportcard.com/report/github.com/shestakovda/fdbx)
 
-FoundationDB **object storage** and **queue manager** for golang projects
-
-**Project in active development! Production-fatality**
+FoundationDB **object storage** and **queue manager** for Golang projects
 
 ### About
 
-This project aims to help you use FoundationDB in your project by providing high-level interfaces for storing objects. 
+This project aims to help you use FoundationDB in your project by providing high-level interfaces for transactions, tables, indexes and queues. 
 
-With `Record` interface you can store any data in collections. 
+Current version is **unstable** [v2.0.0-prerelease.*](https://github.com/shestakovda/fdbx/tree/master/v2)
 
-With `Cursor` interface you can select it back. 
+You can carefully use it for local tests, experiments or startups, but we strongly recommend not to use it for production purposes. 
 
-With `Queue` interface you can organize async processes between different workers.
+### Basic principles
 
-With `DB` interface you can rely on transactions.
+* MVCC logical transactions above the standard fdb "physical" transactions
+* All data is stored as key-value Pairs in Tables (collections with key prefix)
+* Queries is an orm-style set of simple data operators for Table manipulations
+* Indexes is a subcollection of Table with value-id rows 
+* Queues is a special indexes with time-series data and exclusive reads
 
-With `Conn` interface you can do all of this magic together.
+### Features
 
-## Usage
+* You can store **objects of *(almost)* any size**: we overcome size limitations!
+    - Standard fdb values [has 100Kb limit](https://apple.github.io/foundationdb/known-limitations.html#large-keys-and-values), but our Pairs has not
+    - Standard fdb transaction [has 10Mb limit](https://apple.github.io/foundationdb/known-limitations.html#large-transactions), but our logical transactions has not
+* You can **process data as long as you need**: we overcome time limitations!
+    - Standard fdb transaction [has 5 sec limit](https://apple.github.io/foundationdb/known-limitations.html#long-running-transactions), but our logical transactions has not
+* You can **use transactional queues**: synchronize it with your data
+    - Pub, Ack and Repeat changes are applying at a commit time
+    - If you cancel a transaction, no tasks would be published or acknowledged
+* You can **store any data you want**: any value is just a byte slice
+    - Table and Queue interfaces are schemaless
+    - Indexes are optional and schemaless
+    - You can use raw data, JSON, XML, FlatBuffers, Protobuf or anything else you want
 
-### Minimal requirements
+### Disadvantages
 
-We should implement Record interface:
-
-```golang
-
-// we use collection number instead string names
-const MyFirstCollection = uint16(1)
-
-type myRecord struct {
-    ID      []byte   `json:"-"`
-    Name    string   `json:"name"`
-}
-
-func (r *myRecord) FdbxID() []byte               { return r.ID }
-func (r *myRecord) FdbxType() uint16             { return MyFirstCollection }
-func (r *myRecord) FdbxMarshal() ([]byte, error) { return json.Marshal(r) }
-func (r *myRecord) FdbxUnmarshal(b []byte) error { return json.Unmarshal(b, r) }
-```
-
-### Create connection and drop database
-
-```golang
-
-// we use database number instead of string name 
-const MyFirstDatabase = uint16(1)
-
-// Create connection to your database
-conn, err := fdbx.NewConn(MyFirstDatabase, 0)
-if err != nil {
-    return err
-}
-
-// Clear all database data
-if err = conn.ClearDB(); err != nil {
-    return err
-}
-```
-
-### Save and load models
-
-```golang
-
-// Create some test object
-recordToSave := &myRecord{
-    ID: []byte("myID"), 
-    Name: "my first record",
-}
-
-// Create transaction and save record
-if err = conn.Tx(func(db fdbx.DB) (e error) { 
-    return db.Save(recordToSave)
-}); err != nil {
-    return err
-}
-
-// .... many hours later ...
-
-// Create another object
-recordToLoad := &myRecord{ID: []byte("myID")}
-
-// Fill it back
-if err = conn.Tx(func(db fdbx.DB) (e error) { 
-    return db.Load(recordToLoad)
-}); err != nil {
-    return err
-}
-
-// now, recordToSave.Name == recordToLoad.Name
-```
-
-### Select all collection
-
-```golang
-// we must specify Record Fabric to allow Cursor create objects
-func recordFabric(id []byte) (fdbx.Record, error) { return &testRecord{ID: id}, nil }
-
-// Create cursor for seq scan in batches of 10 records
-cur, err := conn.Cursor(MyFirstCollection, recordFabric, nil, 10)
-if err != nil {
-    return err
-}
-defer cur.Close()
-
-// return record and error channels
-recChan, errChan := cur.Select(ctx, filter)
-
-for record := range recChan {
-    // some processing ...
-}
-
-for err := range errChan {
-    if err != nil {
-        return err
-    }
-}
-
-```
-
-### Publish record to queue and subscribe for it
-
-```golang
-
-queue, err := conn.Queue(MyQueueType, recordFabric, nil)
-if err != nil {
-    return err
-}
-
-conn.Tx(func(db fdbx.DB) (err error) {
-    // Save record to database
-    if err = db.Save(record); err != nil {
-        return err
-    }
-
-    // Publish record in queue MyQueueType
-    // This task processing will be delayed for 1 minute
-    return queue.Pub(db, record.ID, time.Now().Add(time.Minute))
-})
-
-```
-
-At another machine:
-
-```golang
-
-queue, err := conn.Queue(MyQueueType, recordFabric, nil)
-if err != nil {
-    return err
-}
-
-// return record and error channels
-recChan, errChan := queue.Sub(ctx)
-
-for record := range recChan {
-    // some processing of queue items...
-
-    // we chould ack processed task  
-    conn.Tx(func(db fdbx.DB) (err error) {
-        return queue.Ack(db, record.ID)
-    })
-
-}
-
-for err := range errChan {
-    if err != nil {
-        return err
-    }
-}
-
-```
+* Standard fdb **serializable** isolation level is downgraded to **read committed** because of MVCC
+    - You can use `SharedLock` function to avoid concurrent writes
+    - We can support *repeateable read* in the future, if needed
+* Big values (over 100Kb data) reads has some overhead, and they are significant when the data is over 100Mb
+    - Overhead is significant compared with raw file reads
+    - You can use gzip or smth else to compress data before saving
+* Total read/write throughput (objects/sec) are downgraded because of transactions and replication overhead
+    - It less then other MVCC systems, like PostgreSQL, but we can better scale because of FoundationDB replication
+    - It less then other key-value systems, like Redis or MongoDB, but we can use a transactions (almost) without a limitations
+* Total queue throughput (tasks/sec) are downgraded because of transactions and replication overhead
+    - It less then other queue managers, like a RabbitMQ or NATS, but we has a transaction-reliable delayable ordered tasks without duplicates
 
 ## Contributing
 
@@ -191,12 +67,6 @@ Remember that you should make some tests before commit:
 
 ```sh
 > make test
-```
-
-You can help this project to improve code style:
-
-```sh
-> make lint
 ```
 
 ## Thanks

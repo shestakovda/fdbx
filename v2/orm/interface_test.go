@@ -220,14 +220,18 @@ func (s *ORMSuite) TestQueue() {
 	id3 := fdbx.String2Key("id3")
 	id4 := fdbx.String2Key("id4")
 
+	q := orm.NewQueue(TestQueue, s.tbl, orm.Refresh(10*time.Millisecond), orm.Prefix([]byte("lox")))
+
 	s.Require().NoError(s.tbl.Upsert(s.tx,
 		fdbx.NewPair(id1, []byte("msg1")),
 		fdbx.NewPair(id2, []byte("msg2")),
 		fdbx.NewPair(id3, []byte("msg3")),
 	))
+	if wait, work, err := q.Stat(s.tx); s.NoError(err) {
+		s.Equal(int64(0), wait)
+		s.Equal(int64(0), work)
+	}
 	s.Require().NoError(s.tx.Commit())
-
-	q := orm.NewQueue(TestQueue, s.tbl, orm.Refresh(10*time.Millisecond), orm.Prefix([]byte("lox")))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -264,15 +268,10 @@ func (s *ORMSuite) TestQueue() {
 	s.Require().NoError(q.Pub(tx, id4, orm.Delay(5*time.Millisecond)))
 	s.Require().NoError(tx.Commit())
 
-	// Публикация задач по очереди
+	// Публикация задач по очереди (и нарочно одну и ту же два раза)
 	tx, err = mvcc.Begin(s.cn)
 	s.Require().NoError(err)
-	s.Require().NoError(q.Pub(tx, id1, orm.Delay(time.Millisecond)))
-	s.Require().NoError(tx.Commit())
-
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
-	s.Require().NoError(q.Pub(tx, id2, orm.Delay(50*time.Millisecond)))
+	s.Require().NoError(q.PubList(tx, []fdbx.Key{id1, id2, id2}, orm.Delay(time.Millisecond)))
 	s.Require().NoError(tx.Commit())
 
 	tx, err = mvcc.Begin(s.cn)
@@ -288,12 +287,12 @@ func (s *ORMSuite) TestQueue() {
 	s.Require().NoError(err)
 
 	if lost, err := q.Lost(tx, 100); s.NoError(err) {
-		s.Len(lost, 3)
+		s.Len(lost, 2)
 	}
 
 	if wait, work, err := q.Stat(tx); s.NoError(err) {
-		s.Equal(int64(1), wait)
-		s.Equal(int64(2), work)
+		s.Equal(int64(1), wait) // id3
+		s.Equal(int64(2), work) // id1 id2
 	}
 
 	if err := q.Ack(tx, id2); s.NoError(err) {
@@ -310,11 +309,11 @@ func (s *ORMSuite) TestQueue() {
 		}
 
 		if task, err := q.Task(tx, id4); s.NoError(err) {
-			s.Equal(orm.StatusUnconfirmed, task.Status())
+			s.Equal(orm.StatusConfirmed, task.Status())
 		}
 
 		if lost, err := q.Lost(tx, 100); s.NoError(err) {
-			s.Len(lost, 2)
+			s.Len(lost, 1)
 		}
 	}
 
@@ -338,6 +337,11 @@ func (s *ORMSuite) TestQueue() {
 		if lost, err := q.Lost(tx, 100); s.NoError(err) {
 			s.Len(lost, 0)
 		}
+	}
+
+	if wait, work, err := q.Stat(tx); s.NoError(err) {
+		s.Equal(int64(1), wait) // id3
+		s.Equal(int64(2), work) // id1 id2
 	}
 	s.Require().NoError(tx.Commit())
 

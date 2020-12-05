@@ -40,7 +40,7 @@ bench-mvcc:
 bench-orm:
 	@go test $(BENCHARGS) -o=./bin/orm.test -memprofile=./bin/orm.mem ./orm
 
-cover: test-orm
+cover: test
 	@go tool cover -html=./bin/fdbx.cover
 	@go tool cover -html=./bin/db.cover
 	@go tool cover -html=./bin/mvcc.cover
