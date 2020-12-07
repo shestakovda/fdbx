@@ -81,6 +81,39 @@ func (cur *idscursor) Select(ctx context.Context) (<-chan string, <-chan error) 
 	return recs, errs
 }
 
+func (cur *idscursor) ApplyOpts(opts ...Option) (err error) {
+	opt := new(options)
+
+	for i := range opts {
+		if err = opts[i](opt); err != nil {
+			return
+		}
+	}
+
+	if len(opt.from) > 0 {
+		cur.From = opt.from
+	}
+
+	if len(opt.to) > 0 {
+		cur.To = append(opt.to, tail...)
+	}
+
+	if opt.page > 0 {
+		cur.Page = opt.page
+	}
+
+	if opt.limit > 0 {
+		cur.Limit = opt.limit
+	}
+
+	if opt.reverse != nil {
+		cur.Reverse = true
+	}
+
+	cur.IsEmpty = false
+	return nil
+}
+
 // ********************** Private **********************
 
 func (cur *idscursor) getPage(db DB, skip uint8, next bool) (list []string, err error) {

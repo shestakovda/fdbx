@@ -160,6 +160,9 @@ type CursorID interface {
 	Next(db DB, skip uint8) ([]string, error)
 	Prev(db DB, skip uint8) ([]string, error)
 
+	// change options in runtime
+	ApplyOpts(opts ...Option) (err error)
+
 	// select all records from current position to the end of collection
 	Select(ctx context.Context) (<-chan string, <-chan error)
 }
