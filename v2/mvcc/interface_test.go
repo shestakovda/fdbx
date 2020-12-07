@@ -162,7 +162,8 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 	}
 
 	hdlr := func(tx mvcc.Tx, p fdbx.Pair) error {
-		s.Nil(p)
+		s.NotNil(p)
+		s.Nil(p.Unwrap())
 		return nil
 	}
 

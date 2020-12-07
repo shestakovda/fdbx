@@ -173,8 +173,8 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 				return
 			}
 
-			if row == nil && opts.onInsert != nil {
-				if exp = opts.onInsert(t, pairs[i].Unwrap()); exp != nil {
+			if opts.onInsert != nil {
+				if exp = opts.onInsert(t, &usrPair{orig: row}); exp != nil {
 					return
 				}
 			}

@@ -30,11 +30,11 @@ func (t v1Table) Select(tx mvcc.Tx) Query { return NewQuery(&t, tx) }
 func (t v1Table) Cursor(tx mvcc.Tx, id string) (Query, error) { return loadQuery(&t, tx, id) }
 
 func (t v1Table) Insert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
-	return t.upsert(tx, t.onInsert, pairs...)
+	return t.upsert(tx, true, pairs...)
 }
 
 func (t v1Table) Upsert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
-	return t.upsert(tx, t.onUpdate, pairs...)
+	return t.upsert(tx, false, pairs...)
 }
 
 func (t v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
@@ -54,7 +54,7 @@ func (t v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
 	return nil
 }
 
-func (t v1Table) upsert(tx mvcc.Tx, hdl mvcc.Handler, pairs ...fdbx.Pair) (err error) {
+func (t v1Table) upsert(tx mvcc.Tx, ins bool, pairs ...fdbx.Pair) (err error) {
 	if len(pairs) == 0 {
 		return nil
 	}
@@ -66,7 +66,16 @@ func (t v1Table) upsert(tx mvcc.Tx, hdl mvcc.Handler, pairs ...fdbx.Pair) (err e
 		}
 	}
 
-	if err = tx.Upsert(cp, mvcc.OnUpdate(hdl), mvcc.OnDelete(t.onDelete)); err != nil {
+	opts := []mvcc.Option{
+		mvcc.OnUpdate(t.onUpdate),
+		mvcc.OnDelete(t.onDelete),
+	}
+
+	if ins {
+		opts = append(opts, mvcc.OnInsert(t.onInsert))
+	}
+
+	if err = tx.Upsert(cp, opts...); err != nil {
 		return ErrUpsert.WithReason(err)
 	}
 
@@ -80,7 +89,7 @@ func (t v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 		})
 	}
 
-	return t.onUpdate(tx, pair)
+	return nil
 }
 
 func (t v1Table) onUpdate(tx mvcc.Tx, pair fdbx.Pair) (err error) {
