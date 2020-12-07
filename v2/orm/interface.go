@@ -74,16 +74,19 @@ type Query interface {
 	ByID(ids ...fdbx.Key) Query
 	PossibleByID(ids ...fdbx.Key) Query
 	ByIndex(idx uint16, query fdbx.Key) Query
+	ByIndexRange(idx uint16, from, last fdbx.Key) Query
 	BySelector(Selector) Query
 
 	// Модификаторы селекторов
 	Reverse() Query
+	Page(int) Query
 	Limit(int) Query
 	Where(Filter) Query
 
 	// Обработка результатов
 	Agg(...Aggregator) error
 	All() ([]fdbx.Pair, error)
+	Next() ([]fdbx.Pair, error)
 	First() (fdbx.Pair, error)
 	Sequence(context.Context) (<-chan fdbx.Pair, <-chan error)
 	Delete() error
@@ -95,7 +98,6 @@ type Query interface {
 
 // Selector - поставщик сырых данных для запроса
 type Selector interface {
-	LastKey() fdbx.Key
 	Select(context.Context, Table, ...Option) (<-chan fdbx.Pair, <-chan error)
 }
 
@@ -217,6 +219,7 @@ var (
 	ErrValUnpack = errx.New("Ошибка распаковки значения")
 	ErrVacuum    = errx.New("Ошибка автоочистки значений")
 	ErrAll       = errx.New("Ошибка загрузки всех значений")
+	ErrNext      = errx.New("Ошибка загрузки страницы значений")
 	ErrFirst     = errx.New("Ошибка загрузки первого значения")
 	ErrSequence  = errx.New("Ошибка загрузки коллекции")
 	ErrLoadQuery = errx.New("Ошибка загрузки курсора запроса")

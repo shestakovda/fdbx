@@ -10,16 +10,14 @@ import (
 
 func NewIDsSelector(tx mvcc.Tx, ids []fdbx.Key, strict bool) Selector {
 	return &idsSelector{
+		tx:     tx,
 		ids:    ids,
 		strict: strict,
-
-		baseSelector: newBaseSelector(tx),
 	}
 }
 
 type idsSelector struct {
-	*baseSelector
-
+	tx     mvcc.Tx
 	ids    []fdbx.Key
 	strict bool
 }
@@ -54,8 +52,9 @@ func (s *idsSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-
 				return
 			}
 
-			if err = s.sendPair(ctx, list, pair); err != nil {
-				errs <- err
+			select {
+			case list <- fdbx.WrapPair(rids[i], pair):
+			case <-ctx.Done():
 				return
 			}
 		}

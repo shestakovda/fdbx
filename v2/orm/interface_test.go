@@ -456,7 +456,7 @@ func (s *ORMSuite) TestCursor() {
 
 	query := s.tbl.Select(tx).ByIndex(TestIndex, fdbx.String2Key("msg"))
 
-	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+	if list, err := query.Page(2).Next(); s.NoError(err) && s.Len(list, 2) {
 		s.Equal("id1", list[0].Key().String())
 		s.Equal("msg1", string(list[0].Value()))
 
@@ -474,7 +474,7 @@ func (s *ORMSuite) TestCursor() {
 	query, err = s.tbl.Cursor(tx, qid)
 	s.Require().NoError(err)
 
-	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+	if list, err := query.Next(); s.NoError(err) && s.Len(list, 2) {
 		s.Equal("id5", list[0].Key().String())
 		s.Equal("msg5", string(list[0].Value()))
 
@@ -486,7 +486,7 @@ func (s *ORMSuite) TestCursor() {
 
 	query = s.tbl.Select(tx).ByIndex(TestIndex, fdbx.String2Key("msg")).Reverse()
 
-	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+	if list, err := query.Page(2).Next(); s.NoError(err) && s.Len(list, 2) {
 		s.Equal("id6", list[0].Key().String())
 		s.Equal("msg6", string(list[0].Value()))
 
@@ -504,7 +504,7 @@ func (s *ORMSuite) TestCursor() {
 	query, err = s.tbl.Cursor(tx, qid)
 	s.Require().NoError(err)
 
-	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+	if list, err := query.Next(); s.NoError(err) && s.Len(list, 2) {
 		s.Equal("id3", list[0].Key().String())
 		s.Equal("msg3", string(list[0].Value()))
 
@@ -519,7 +519,7 @@ func (s *ORMSuite) TestCursor() {
 
 	query = s.tbl.Select(tx)
 
-	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+	if list, err := query.Page(2).Next(); s.NoError(err) && s.Len(list, 2) {
 		s.Equal("id1", list[0].Key().String())
 		s.Equal("msg1", string(list[0].Value()))
 
@@ -537,7 +537,7 @@ func (s *ORMSuite) TestCursor() {
 	query, err = s.tbl.Cursor(tx, qid)
 	s.Require().NoError(err)
 
-	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+	if list, err := query.Next(); s.NoError(err) && s.Len(list, 2) {
 		s.Equal("id3", list[0].Key().String())
 		s.Equal("msg3", string(list[0].Value()))
 
@@ -548,7 +548,7 @@ func (s *ORMSuite) TestCursor() {
 	// Проверка курсора по коллекции с реверсом
 	query = s.tbl.Select(tx).Reverse()
 
-	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+	if list, err := query.Page(2).Next(); s.NoError(err) && s.Len(list, 2) {
 		s.Equal("id6", list[0].Key().String())
 		s.Equal("msg6", string(list[0].Value()))
 
@@ -566,7 +566,7 @@ func (s *ORMSuite) TestCursor() {
 	query, err = s.tbl.Cursor(tx, qid)
 	s.Require().NoError(err)
 
-	if list, err := query.Limit(2).All(); s.NoError(err) && s.Len(list, 2) {
+	if list, err := query.Next(); s.NoError(err) && s.Len(list, 2) {
 		s.Equal("id4", list[0].Key().String())
 		s.Equal("txt4", string(list[0].Value()))
 

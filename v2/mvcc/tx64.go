@@ -278,7 +278,6 @@ func (t *tx64) SeqScan(ctx context.Context, args ...Option) (<-chan fdbx.Pair, <
 				select {
 				case list <- part[i]:
 				case <-ctx.Done():
-					errs <- ErrSeqScan.WithReason(ctx.Err())
 					return
 				}
 			}
@@ -322,6 +321,10 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 		}
 
 		for {
+			if ctx.Err() != nil {
+				return
+			}
+
 			if opts.lock {
 				if opts.writer == nil {
 					err = t.conn.Write(func(w db.Writer) error { return hdlr(w) })
@@ -347,13 +350,10 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 
 			select {
 			case list <- part:
-				size += len(part)
+				if size += len(part); opts.limit > 0 && size >= opts.limit {
+					return
+				}
 			case <-ctx.Done():
-				errs <- ErrSeqScan.WithReason(ctx.Err())
-				return
-			}
-
-			if opts.limit > 0 && size >= opts.limit {
 				return
 			}
 		}

@@ -29,10 +29,14 @@ table Value {
 }
 
 table Cursor {
+    Size:uint32;
+    Page:uint32;
+    Limit:uint32;
     Reverse:bool;
     IdxType:uint16;
     LastKey:[uint8];
-    IPrefix:[uint8];
+    IdxFrom:[uint8];
+    IdxLast:[uint8];
     QueryID:[uint8];
 }
 

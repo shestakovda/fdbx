@@ -42,6 +42,14 @@ func NewPair(k Key, v []byte) Pair {
 	}
 }
 
+// WrapPair - новая простая пара, без всяких выкрутасов
+func WrapPair(k Key, p Pair) Pair {
+	return &wrapPair{
+		k: k,
+		p: p,
+	}
+}
+
 // ListGetter - метод для отложенного получения списка значений
 type ListGetter interface {
 	Resolve() []Pair

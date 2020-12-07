@@ -9,12 +9,12 @@ import (
 
 func NewFullSelector(tx mvcc.Tx) Selector {
 	return &fullSelector{
-		baseSelector: newBaseSelector(tx),
+		tx: tx,
 	}
 }
 
 type fullSelector struct {
-	*baseSelector
+	tx mvcc.Tx
 }
 
 func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-chan fdbx.Pair, <-chan error) {
@@ -22,8 +22,6 @@ func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<
 	errs := make(chan error, 1)
 
 	go func() {
-		var err error
-
 		defer close(list)
 		defer close(errs)
 
@@ -51,12 +49,11 @@ func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<
 				continue
 			}
 
-			if err = s.sendPair(wctx, list, pair); err != nil {
-				errs <- err
+			select {
+			case list <- fdbx.WrapPair(UnwrapTableKey(pair.Key()), pair):
+			case <-wctx.Done():
 				return
 			}
-
-			s.setKey(UnwrapTableKey(pair.Key()))
 		}
 
 		for err := range errc {

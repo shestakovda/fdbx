@@ -2,6 +2,7 @@ package orm
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/models"
@@ -10,10 +11,13 @@ import (
 )
 
 func NewQuery(tb Table, tx mvcc.Tx) Query {
-	return &v1Query{
+	q := &v1Query{
 		tx: tx,
 		tb: tb,
 	}
+
+	q.lastkey.Store(fdbx.Bytes2Key(nil))
+	return q
 }
 
 func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
@@ -43,13 +47,17 @@ func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
 
 	cur := models.GetRootAsCursor(val, 0).UnPack()
 
+	q.size = cur.Size
+	q.page = cur.Page
+	q.limit = cur.Limit
 	q.reverse = cur.Reverse
 	q.idxtype = cur.IdxType
-	q.iprefix = cur.IPrefix
-	q.lastkey = cur.LastKey
+	q.idxfrom = cur.IdxFrom
+	q.idxlast = cur.IdxLast
+	q.lastkey.Store(fdbx.Bytes2Key(cur.LastKey))
 
 	if q.idxtype > 0 {
-		q.selector = NewIndexSelector(tx, q.idxtype, fdbx.Bytes2Key(q.iprefix))
+		q.selector = NewIndexRangeSelector(tx, q.idxtype, fdbx.Bytes2Key(q.idxfrom), fdbx.Bytes2Key(q.idxlast))
 	} else {
 		q.selector = NewFullSelector(tx)
 	}
@@ -62,14 +70,17 @@ type v1Query struct {
 	tb Table
 
 	// Сохраняемые значения (курсор)
+	size    uint32
+	page    uint32
+	limit   uint32
 	reverse bool
 	idxtype uint16
-	iprefix []byte
-	lastkey []byte
+	idxfrom []byte
+	idxlast []byte
 	queryid typex.UUID
+	lastkey atomic.Value
 
 	// Текущие значения
-	limit    int
 	filters  []Filter
 	selector Selector
 }
@@ -81,7 +92,14 @@ func (q *v1Query) Reverse() Query {
 
 func (q *v1Query) Limit(lim int) Query {
 	if lim > 0 {
-		q.limit = lim
+		q.limit = uint32(lim)
+	}
+	return q
+}
+
+func (q *v1Query) Page(size int) Query {
+	if size > 0 {
+		q.page = uint32(size)
 	}
 	return q
 }
@@ -97,6 +115,34 @@ func (q *v1Query) All() ([]fdbx.Pair, error) {
 	for err := range errs {
 		if err != nil {
 			return nil, ErrAll.WithReason(err)
+		}
+	}
+
+	return list, nil
+}
+
+func (q *v1Query) Next() ([]fdbx.Pair, error) {
+	if q.page == 0 {
+		q.page = 1
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	size := uint32(0)
+	list := make([]fdbx.Pair, 0, q.page)
+	pairs, errs := q.Sequence(ctx)
+
+	for pair := range pairs {
+		list = append(list, pair)
+		if size++; size >= q.page {
+			return list, nil
+		}
+	}
+
+	for err := range errs {
+		if err != nil {
+			return nil, ErrNext.WithReason(err)
 		}
 	}
 
@@ -180,8 +226,16 @@ func (q *v1Query) PossibleByID(ids ...fdbx.Key) Query {
 
 func (q *v1Query) ByIndex(idx uint16, prefix fdbx.Key) Query {
 	q.idxtype = idx
-	q.iprefix = prefix.Bytes()
+	q.idxfrom = prefix.Bytes()
+	q.idxlast = prefix.Bytes()
 	return q.BySelector(NewIndexSelector(q.tx, idx, prefix))
+}
+
+func (q *v1Query) ByIndexRange(idx uint16, from, last fdbx.Key) Query {
+	q.idxtype = idx
+	q.idxfrom = from.Bytes()
+	q.idxlast = last.Bytes()
+	return q.BySelector(NewIndexRangeSelector(q.tx, idx, from, last))
 }
 
 func (q *v1Query) Where(hdl Filter) Query {
@@ -202,18 +256,22 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 	go func() {
 		var err error
 		var need bool
+		var size uint32
 		var pair fdbx.Pair
 
 		defer close(list)
 		defer close(errs)
 
-		size := 0
+		if size = atomic.LoadUint32(&q.size); q.limit > 0 && size >= q.limit {
+			return
+		}
+
 		wctx, exit := context.WithCancel(ctx)
-		pairs, errc := q.selector.Select(wctx, q.tb, LastKey(fdbx.Bytes2Key(q.lastkey)), Reverse(q.reverse))
+		pairs, errc := q.selector.Select(wctx, q.tb, LastKey(q.lastkey.Load().(fdbx.Key)), Reverse(q.reverse))
 		defer exit()
 
 		for orig := range pairs {
-			if pair, err = newUsrPair(q.tx, q.tb.ID(), orig); err != nil {
+			if pair, err = newUsrPair(q.tx, q.tb.ID(), orig.Unwrap()); err != nil {
 				errs <- ErrSequence.WithReason(err)
 				return
 			}
@@ -229,9 +287,9 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 
 			select {
 			case list <- pair:
-				size++
-			case <-ctx.Done():
-				errs <- ErrSequence.WithReason(ctx.Err())
+				size = atomic.AddUint32(&q.size, 1)
+				q.lastkey.Store(orig.Key())
+			case <-wctx.Done():
 				return
 			}
 
@@ -256,18 +314,20 @@ func (q *v1Query) Save() (cid string, err error) {
 		q.selector = NewFullSelector(q.tx)
 	}
 
-	q.lastkey = q.selector.LastKey().Bytes()
-
 	if q.queryid == nil {
 		q.queryid = typex.NewUUID()
 	}
 
 	cur := &models.CursorT{
+		Size:    atomic.LoadUint32(&q.size),
+		Page:    q.page,
+		Limit:   q.limit,
 		Reverse: q.reverse,
 		IdxType: q.idxtype,
-		LastKey: q.lastkey,
-		IPrefix: q.iprefix,
+		IdxFrom: q.idxfrom,
+		IdxLast: q.idxlast,
 		QueryID: q.queryid,
+		LastKey: q.lastkey.Load().(fdbx.Key).Bytes(),
 	}
 
 	pairs := []fdbx.Pair{
