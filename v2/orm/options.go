@@ -67,7 +67,7 @@ func MultiIndex(id uint16, f IndexMultiKey) Option {
 
 func BatchIndex(f IndexBatchKey) Option {
 	return func(o *options) {
-		if f == nil {
+		if f != nil {
 			o.batchidx = append(o.batchidx, f)
 		}
 	}
