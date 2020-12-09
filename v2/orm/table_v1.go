@@ -23,21 +23,21 @@ type v1Table struct {
 	id uint16
 }
 
-func (t v1Table) ID() uint16 { return t.id }
+func (t *v1Table) ID() uint16 { return t.id }
 
-func (t v1Table) Select(tx mvcc.Tx) Query { return NewQuery(&t, tx) }
+func (t *v1Table) Select(tx mvcc.Tx) Query { return NewQuery(t, tx) }
 
-func (t v1Table) Cursor(tx mvcc.Tx, id string) (Query, error) { return loadQuery(&t, tx, id) }
+func (t *v1Table) Cursor(tx mvcc.Tx, id string) (Query, error) { return loadQuery(t, tx, id) }
 
-func (t v1Table) Insert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
+func (t *v1Table) Insert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
 	return t.upsert(tx, true, pairs...)
 }
 
-func (t v1Table) Upsert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
+func (t *v1Table) Upsert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
 	return t.upsert(tx, false, pairs...)
 }
 
-func (t v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
+func (t *v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -54,7 +54,7 @@ func (t v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
 	return nil
 }
 
-func (t v1Table) upsert(tx mvcc.Tx, ins bool, pairs ...fdbx.Pair) (err error) {
+func (t *v1Table) upsert(tx mvcc.Tx, ins bool, pairs ...fdbx.Pair) (err error) {
 	if len(pairs) == 0 {
 		return nil
 	}
@@ -82,7 +82,7 @@ func (t v1Table) upsert(tx mvcc.Tx, ins bool, pairs ...fdbx.Pair) (err error) {
 	return nil
 }
 
-func (t v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+func (t *v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 	if len(pair.Value()) > 0 {
 		return ErrDuplicate.WithDebug(errx.Debug{
 			"key": pair.Key().String(),
@@ -92,94 +92,87 @@ func (t v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 	return nil
 }
 
-func (t v1Table) onUpdate(tx mvcc.Tx, pair fdbx.Pair) (err error) {
-	if len(t.options.indexes) == 0 && len(t.options.multidx) == 0 {
+func (t *v1Table) onUpdate(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+
+	if len(t.options.batchidx) == 0 {
 		return nil
 	}
 
+	pval := pair.Value()
 	pkey := pair.Key().Bytes()
+	rows := make([]fdbx.Pair, 0, 32)
+	var dict map[uint16][]fdbx.Key
 
-	var ups [1]fdbx.Pair
-	for idx, fnc := range t.options.indexes {
-		tmp := fnc(pair.Value())
+	for k := range t.options.batchidx {
+		if dict, err = t.options.batchidx[k](pval); err != nil {
+			return
+		}
 
-		if tmp == nil || len(tmp.Bytes()) == 0 {
+		if len(dict) == 0 {
 			continue
 		}
 
-		ups[0] = fdbx.NewPair(WrapIndexKey(t.id, idx, tmp).RPart(pkey...), pkey)
-		if err = tx.Upsert(ups[:]); err != nil {
-			return ErrIdxUpsert.WithReason(err).WithDebug(errx.Debug{"idx": idx})
+		for idx, keys := range dict {
+			for i := range keys {
+				if keys[i] == nil || len(keys[i].Bytes()) == 0 {
+					continue
+				}
+				rows = append(rows, fdbx.NewPair(WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...), pkey))
+			}
 		}
 	}
 
-	for idx, fnc := range t.options.multidx {
-		keys := fnc(pair.Value())
-
-		if len(keys) == 0 {
-			continue
-		}
-
-		pairs := make([]fdbx.Pair, 0, len(keys))
-		for i := range keys {
-			pairs = append(pairs, fdbx.NewPair(WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...), pkey))
-		}
-
-		if err = tx.Upsert(pairs); err != nil {
-			return ErrIdxUpsert.WithReason(err).WithDebug(errx.Debug{"idx": idx})
-		}
+	if err = tx.Upsert(rows); err != nil {
+		return ErrIdxUpsert.WithReason(err)
 	}
 
 	return nil
 }
 
-func (t v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
-	if len(t.options.indexes) == 0 && len(t.options.multidx) == 0 {
+func (t *v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+	var usr fdbx.Pair
+
+	if len(t.options.batchidx) == 0 {
 		return nil
 	}
-
-	var usr fdbx.Pair
-	var ups [1]fdbx.Key
-
-	pkey := UnwrapTableKey(pair.Key()).Bytes()
 
 	// Здесь нам придется обернуть еще значение, которое возвращается, потому что оно не обработано уровнем ниже
 	if usr, err = newUsrPair(tx, t.id, pair); err != nil {
 		return ErrIdxDelete.WithReason(err)
 	}
 
-	for idx, fnc := range t.options.indexes {
-		if ups[0] = fnc(usr.Value()); ups[0] == nil || len(ups[0].Bytes()) == 0 {
+	uval := usr.Value()
+	rows := make([]fdbx.Key, 0, 32)
+	pkey := UnwrapTableKey(pair.Key()).Bytes()
+	var dict map[uint16][]fdbx.Key
+
+	for k := range t.options.batchidx {
+		if dict, err = t.options.batchidx[k](uval); err != nil {
+			return
+		}
+
+		if len(dict) == 0 {
 			continue
 		}
 
-		ups[0] = WrapIndexKey(t.id, idx, ups[0]).RPart(pkey...)
-
-		if err = tx.Delete(ups[:]); err != nil {
-			return ErrIdxDelete.WithReason(err).WithDebug(errx.Debug{"idx": idx})
+		for idx, keys := range dict {
+			for i := range keys {
+				if keys[i] == nil || len(keys[i].Bytes()) == 0 {
+					continue
+				}
+				rows = append(rows, WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...))
+			}
 		}
 	}
 
-	for idx, fnc := range t.options.multidx {
-		keys := fnc(usr.Value())
-
-		if len(keys) == 0 {
-			continue
-		}
-
-		for i := range keys {
-			keys[i] = WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...)
-		}
-
-		if err = tx.Delete(keys); err != nil {
-			return ErrIdxDelete.WithReason(err).WithDebug(errx.Debug{"idx": idx})
-		}
+	if err = tx.Delete(rows); err != nil {
+		return ErrIdxDelete.WithReason(err)
 	}
 
 	return nil
 }
 
-func (t v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Option) {
+func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Option) {
 	var err error
 
 	opts := getOpts(args)
@@ -225,7 +218,7 @@ func (t v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Optio
 	}
 }
 
-func (t v1Table) vacuumStep(cn db.Connection) (err error) {
+func (t *v1Table) vacuumStep(cn db.Connection) (err error) {
 	var tx mvcc.Tx
 
 	if tx, err = mvcc.Begin(cn); err != nil {
@@ -261,7 +254,7 @@ func (t v1Table) vacuumStep(cn db.Connection) (err error) {
 	return nil
 }
 
-func (t v1Table) onVacuum(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
+func (t *v1Table) onVacuum(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
 	var mod models.ValueT
 
 	val := p.Value()

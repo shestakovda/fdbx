@@ -52,24 +52,24 @@ func (s *ORMSuite) SetupTest() {
 	s.idx = make([]string, 0, 8)
 	s.tbl = orm.NewTable(
 		TestTable,
-		orm.Index(TestIndex, func(v []byte) (k fdbx.Key) {
+		orm.Index(TestIndex, func(v []byte) (k fdbx.Key, e error) {
 			if len(v) < 4 {
-				return nil
+				return nil, nil
 			}
 
 			k = fdbx.Bytes2Key(v[:4])
 			s.idx = append(s.idx, k.String())
-			return k
+			return k, nil
 		}),
-		orm.MultiIndex(TestIndex2, func(v []byte) []fdbx.Key {
+		orm.MultiIndex(TestIndex2, func(v []byte) ([]fdbx.Key, error) {
 			if len(v) < 4 {
-				return nil
+				return nil, nil
 			}
 
 			return []fdbx.Key{
 				fdbx.Bytes2Key(v[0:2]),
 				fdbx.Bytes2Key(v[2:4]),
-			}
+			}, nil
 		}),
 	)
 }

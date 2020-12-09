@@ -102,10 +102,13 @@ type Selector interface {
 }
 
 // IndexKey - для получения ключей при индексации коллекций
-type IndexKey func([]byte) fdbx.Key
+type IndexKey func([]byte) (fdbx.Key, error)
 
 // IndexMultiKey - для получения ключей при индексации коллекций
-type IndexMultiKey func([]byte) []fdbx.Key
+type IndexMultiKey func([]byte) ([]fdbx.Key, error)
+
+// IndexBatchKey - для получения ключей при индексации коллекций
+type IndexBatchKey func([]byte) (map[uint16][]fdbx.Key, error)
 
 // Option - доп.аргумент для инициализации коллекций
 type Option func(*options)
