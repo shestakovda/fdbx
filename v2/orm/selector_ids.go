@@ -44,7 +44,7 @@ func (s *idsSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-
 					}
 
 					err = ErrNotFound.WithReason(err).WithDebug(errx.Debug{
-						"id": rids[i].String(),
+						"id": rids[i].Printable(),
 					})
 				}
 

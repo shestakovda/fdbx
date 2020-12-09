@@ -50,7 +50,7 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 	nope := make(map[string]struct{}, len(ids))
 
 	for i := range ids {
-		diff[ids[i].String()] = struct{}{}
+		diff[ids[i].Printable()] = struct{}{}
 
 		// Помечаем к удалению из неподтвержденных
 		keys = append(keys, q.wrapFlagKey(qWork, ids[i]))
@@ -63,7 +63,7 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 			// Если задача еще висит и в ней указано плановое время, можем грохнуть из плана
 			if plan := tsk.Planned(); !plan.IsZero() {
 				if tsk.Status() == StatusPublished {
-					nope[ids[i].String()] = struct{}{}
+					nope[ids[i].Printable()] = struct{}{}
 				}
 				keys = append(keys, q.wrapItemKey(plan, ids[i]))
 			}
@@ -102,7 +102,7 @@ func (q v1Queue) PubList(tx mvcc.Tx, ids []fdbx.Key, args ...Option) (err error)
 	pairs := make([]fdbx.Pair, 0, 2*len(ids))
 	for i := range ids {
 		task := q.newTask(ids[i], plan, &opts)
-		diff[task.Key().String()] = struct{}{}
+		diff[task.Key().Printable()] = struct{}{}
 
 		pairs = append(pairs,
 			// Основная запись таски (только айдишка, на которую триггеримся)

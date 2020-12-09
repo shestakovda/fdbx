@@ -4,9 +4,10 @@ import "github.com/apple/foundationdb/bindings/go/src/fdb"
 
 type fdbKey fdb.Key
 
-func (k fdbKey) Raw() fdb.Key   { return fdb.Key(k) }
-func (k fdbKey) Bytes() []byte  { return []byte(k) }
-func (k fdbKey) String() string { return fdb.Key(k).String() }
+func (k fdbKey) Raw() fdb.Key      { return fdb.Key(k) }
+func (k fdbKey) Bytes() []byte     { return []byte(k) }
+func (k fdbKey) String() string    { return string(k) }
+func (k fdbKey) Printable() string { return fdb.Key(k).String() }
 
 func (k fdbKey) LSkip(i uint16) Key {
 	if i >= uint16(len(k)) {

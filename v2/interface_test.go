@@ -61,12 +61,14 @@ func (s *InterfaceSuite) TestKey() {
 	s.Equal("", key.String())
 	s.Equal("", key.LSkip(3).RSkip(4).String())
 	s.Equal("", key.RSkip(4).LSkip(3).String())
-	s.Equal("\\xab\\xcd", key.LPart(0xAB).RPart(0xCD).String())
-	s.Equal("\\xab\\xcd", key.RPart(0xCD).LPart(0xAB).String())
-	s.Equal("\\xef", key.LSkip(0).RPart(0xEF).String())
-	s.Equal("\\xef", key.RPart(0xEF).LSkip(0).String())
-	s.Equal("\\xef", key.RSkip(0).LPart(0xEF).String())
-	s.Equal("\\xef", key.LPart(0xEF).RSkip(0).String())
+	s.Equal("\\xab\\xcd", key.LPart(0xAB).RPart(0xCD).Printable())
+	s.Equal("\\xab\\xcd", key.RPart(0xCD).LPart(0xAB).Printable())
+	s.Equal("\xab\xcd", key.LPart(0xAB).RPart(0xCD).String())
+	s.Equal("\xab\xcd", key.RPart(0xCD).LPart(0xAB).String())
+	s.Equal("\xef", key.LSkip(0).RPart(0xEF).String())
+	s.Equal("\xef", key.RPart(0xEF).LSkip(0).String())
+	s.Equal("\xef", key.RSkip(0).LPart(0xEF).String())
+	s.Equal("\xef", key.LPart(0xEF).RSkip(0).String())
 	s.Equal("", key.LPart(0xEF).RSkip(3).String())
 	s.Equal("", key.RPart(0xEF).LSkip(3).String())
 	s.Equal("", key.LPart(0xAB).RPart(0xCD).LSkip(2).RSkip(1).String())
@@ -78,6 +80,11 @@ func (s *InterfaceSuite) TestKey() {
 	s.Equal("word", fdbx.Bytes2Key(word).String())
 	s.Equal("word", string(fdbx.Bytes2Key(word).Bytes()))
 	s.Equal("word", string(word))
+
+	// Prints
+	key = fdbx.String2Key("пекарь")
+	s.Equal("пекарь", key.String())
+	s.Equal("\\xd0\\xbf\\xd0\\xb5\\xd0\\xba\\xd0\\xb0\\xd1\\x80\\xd1\\x8c", key.Printable())
 }
 
 // func (s *InterfaceSuite) TestPair() {

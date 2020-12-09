@@ -14,6 +14,7 @@ type Key interface {
 	Raw() fdb.Key
 	Bytes() []byte
 	String() string
+	Printable() string
 	LSkip(uint16) Key
 	RSkip(uint16) Key
 	LPart(...byte) Key

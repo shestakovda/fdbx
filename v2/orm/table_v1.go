@@ -85,7 +85,7 @@ func (t *v1Table) upsert(tx mvcc.Tx, ins bool, pairs ...fdbx.Pair) (err error) {
 func (t *v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 	if len(pair.Value()) > 0 {
 		return ErrDuplicate.WithDebug(errx.Debug{
-			"key": pair.Key().String(),
+			"key": pair.Key().Printable(),
 		})
 	}
 

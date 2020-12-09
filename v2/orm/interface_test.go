@@ -91,7 +91,7 @@ func (s *ORMSuite) checkVacuum(ignore map[string]bool) {
 		list := r.List(nkey, nkey, 1000, false, false).Resolve()
 
 		for i := range list {
-			if !ignore[list[i].Key().String()] {
+			if !ignore[list[i].Key().Printable()] {
 				glog.Errorf(">> %s", list[i].Key())
 				fail = true
 			}

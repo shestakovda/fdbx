@@ -234,7 +234,7 @@ func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
 		}
 
 		return ErrNotFound.WithDebug(errx.Debug{
-			"key": key.String(),
+			"key": key.Printable(),
 		})
 	}); err != nil {
 		return nil, ErrSelect.WithReason(err)
@@ -1051,11 +1051,11 @@ func (l *locks) Append(key fdbx.Key) (exists bool) {
 		l.acks = make(map[string]fdbx.Key, 1)
 	}
 
-	if l.acks[key.String()] != nil {
+	if l.acks[key.Printable()] != nil {
 		return true
 	}
 
-	l.acks[key.String()] = key
+	l.acks[key.Printable()] = key
 	return false
 }
 
