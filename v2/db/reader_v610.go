@@ -36,19 +36,32 @@ func (r v610Reader) Data(key fdbx.Key) fdbx.Pair {
 	return fdbx.NewPair(wrk, r.tx.Get(wrk.Raw()).MustGet())
 }
 
-func (r v610Reader) List(from, to fdbx.Key, limit uint64, reverse bool) fdbx.ListGetter {
+func (r v610Reader) List(from, last fdbx.Key, limit uint64, reverse, skip bool) fdbx.ListGetter {
+	rng := &fdb.SelectorRange{
+		Begin: fdb.FirstGreaterOrEqual(r.usrWrap(from).Raw()),
+		End:   fdb.FirstGreaterOrEqual(r.endWrap(last).Raw()),
+	}
+
+	if skip {
+		if reverse {
+			rng.End = &fdb.KeySelector{
+				Key:     r.usrWrap(last).Raw(),
+				OrEqual: true,
+				Offset:  -1,
+			}
+		} else {
+			rng.Begin = &fdb.KeySelector{
+				Key:     r.usrWrap(from).Raw(),
+				OrEqual: true,
+				Offset:  1,
+			}
+		}
+	}
+
 	// В данном случае не передаем режим запроса, т.к. не оставляем это на выбор потребителя
 	// Если вызывать GetSlice*, то будет StreamingModeWantAll или StreamingModeExact, зависит от наличия Limit
 	// Если вызывать Iterator, то по-умолчанию будет последовательный режим StreamingModeIterator
-	return &listGetter{
-		r.tx.GetRange(&fdb.KeyRange{
-			Begin: r.usrWrap(from).Raw(),
-			End:   r.endWrap(to).Raw(),
-		}, fdb.RangeOptions{
-			Limit:   int(limit),
-			Reverse: reverse,
-		}),
-	}
+	return &listGetter{r.tx.GetRange(rng, fdb.RangeOptions{Limit: int(limit), Reverse: reverse})}
 }
 
 type listGetter struct {

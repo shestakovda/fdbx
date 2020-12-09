@@ -88,7 +88,7 @@ func (s *ORMSuite) checkVacuum(ignore map[string]bool) {
 	s.Require().NoError(s.cn.Read(func(r db.Reader) error {
 		fail := false
 		nkey := fdbx.Bytes2Key([]byte{0x00})
-		list := r.List(nkey, nkey, 1000, false).Resolve()
+		list := r.List(nkey, nkey, 1000, false, false).Resolve()
 
 		for i := range list {
 			if !ignore[list[i].Key().String()] {

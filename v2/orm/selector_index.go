@@ -38,21 +38,26 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 		defer close(list)
 		defer close(errs)
 
-		skip := false
+		fkey := s.from
+		lkey := s.last
 		opts := getOpts(args)
-		fkey := WrapIndexKey(tbl.ID(), s.idx, s.from)
-		lkey := WrapIndexKey(tbl.ID(), s.idx, s.last)
-		reqs := make([]mvcc.Option, 0, 3)
+		skip := len(opts.lastkey.Bytes()) > 0
 
-		if len(opts.lastkey.Bytes()) > 0 {
-			skip = true
-			lkey = WrapIndexKey(tbl.ID(), s.idx, opts.lastkey)
+		if skip {
+			if opts.reverse {
+				lkey = opts.lastkey
+			} else {
+				fkey = opts.lastkey
+			}
+		}
+
+		reqs := []mvcc.Option{
+			mvcc.From(WrapIndexKey(tbl.ID(), s.idx, fkey)),
+			mvcc.Last(WrapIndexKey(tbl.ID(), s.idx, lkey)),
 		}
 
 		if opts.reverse {
-			reqs = append(reqs, mvcc.From(fkey), mvcc.To(lkey), mvcc.Reverse())
-		} else {
-			reqs = append(reqs, mvcc.From(lkey), mvcc.To(fkey))
+			reqs = append(reqs, mvcc.Reverse())
 		}
 
 		wctx, exit := context.WithCancel(ctx)

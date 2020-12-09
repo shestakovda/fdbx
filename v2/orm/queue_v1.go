@@ -202,7 +202,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 			defer tx.Cancel(mvcc.Writer(w))
 
 			if pairs, exp = tx.ListAll(
-				mvcc.To(q.wrapItemKey(time.Now(), nil)),
+				mvcc.Last(q.wrapItemKey(time.Now(), nil)),
 				mvcc.From(from),
 				mvcc.Limit(pack),
 				mvcc.Exclusive(q.onTaskWork),
@@ -219,7 +219,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 				// этим воспользоваться тут и выбрать время следующей задачи по плану.
 				var next []fdbx.Pair
 				if next, exp = tx.ListAll(
-					mvcc.To(from),
+					mvcc.Last(from),
 					mvcc.From(from),
 					mvcc.Limit(1),
 					mvcc.Writer(w),
@@ -330,7 +330,7 @@ func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []Task, err error) {
 	wkey := q.wrapFlagKey(qWork, nil)
 
 	if pairs, err = tx.ListAll(
-		mvcc.To(wkey),
+		mvcc.Last(wkey),
 		mvcc.From(wkey),
 		mvcc.Limit(pack),
 	); err != nil {

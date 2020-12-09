@@ -22,19 +22,20 @@ func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<
 	errs := make(chan error, 1)
 
 	go func() {
+		var reqs []mvcc.Option
+
 		defer close(list)
 		defer close(errs)
 
 		opts := getOpts(args)
-		nkey := WrapTableKey(tbl.ID(), nil)
-		lkey := WrapTableKey(tbl.ID(), opts.lastkey)
-		reqs := make([]mvcc.Option, 0, 3)
+		fkey := WrapTableKey(tbl.ID(), opts.lastkey)
+		lkey := WrapTableKey(tbl.ID(), nil)
 		skip := len(opts.lastkey.Bytes()) > 0
 
 		if opts.reverse {
-			reqs = append(reqs, mvcc.From(nkey), mvcc.To(lkey), mvcc.Reverse())
+			reqs = []mvcc.Option{mvcc.From(lkey), mvcc.Last(fkey), mvcc.Reverse()}
 		} else {
-			reqs = append(reqs, mvcc.From(lkey), mvcc.To(nkey))
+			reqs = []mvcc.Option{mvcc.From(fkey), mvcc.Last(lkey)}
 		}
 
 		wctx, exit := context.WithCancel(ctx)

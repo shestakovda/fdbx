@@ -322,7 +322,7 @@ func (s *MVCCSuite) TestListAll() {
 		s.Len(list, 7)
 	}
 
-	if list, err := s.tx.ListAll(mvcc.From(key2), mvcc.To(key6)); s.NoError(err) {
+	if list, err := s.tx.ListAll(mvcc.From(key2), mvcc.Last(key6)); s.NoError(err) {
 		s.Len(list, 5)
 	}
 	s.Require().NoError(s.tx.Commit())

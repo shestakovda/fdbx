@@ -19,7 +19,7 @@ type options struct {
 	limit    int
 	packSize int
 	from     fdbx.Key
-	to       fdbx.Key
+	last     fdbx.Key
 	onInsert Handler
 	onUpdate Handler
 	onDelete Handler
@@ -28,7 +28,7 @@ type options struct {
 	writer   db.Writer
 }
 
-func To(k fdbx.Key) Option            { return func(o *options) { o.to = k } }
+func Last(k fdbx.Key) Option          { return func(o *options) { o.last = k } }
 func From(k fdbx.Key) Option          { return func(o *options) { o.from = k } }
 func Limit(l int) Option              { return func(o *options) { o.limit = l } }
 func Writer(w db.Writer) Option       { return func(o *options) { o.writer = w } }

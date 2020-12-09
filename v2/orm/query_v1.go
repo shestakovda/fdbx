@@ -36,13 +36,13 @@ func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
 	}
 
 	if pair, err = tx.Select(WrapQueryKey(tb.ID(), fdbx.Bytes2Key(uid))); err != nil {
-		return nil, ErrLoadQuery.WithReason(err)
+		return nil, ErrLoadQuery.WithReason(ErrNotFound.WithReason(err))
 	}
 
 	val := pair.Value()
 
 	if len(val) == 0 {
-		return nil, ErrLoadQuery.WithReason(err)
+		return nil, ErrLoadQuery.WithReason(ErrValUnpack.WithReason(err))
 	}
 
 	cur := models.GetRootAsCursor(val, 0).UnPack()
@@ -121,10 +121,12 @@ func (q *v1Query) All() ([]fdbx.Pair, error) {
 	return list, nil
 }
 
-func (q *v1Query) Next() ([]fdbx.Pair, error) {
+func (q *v1Query) Next() (_ []fdbx.Pair, err error) {
 	if q.page == 0 {
 		q.page = 1
 	}
+
+	defer func() { _, err = q.Save() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -276,24 +278,25 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 				return
 			}
 
-			if need, err = q.applyFilters(pair); err != nil {
-				errs <- ErrSequence.WithReason(err)
-				return
-			}
+			if len(q.filters) > 0 {
+				if need, err = q.applyFilters(pair); err != nil {
+					errs <- ErrSequence.WithReason(err)
+					return
+				}
 
-			if !need {
-				continue
+				if !need {
+					continue
+				}
 			}
 
 			select {
 			case list <- pair:
-				size = atomic.AddUint32(&q.size, 1)
 				q.lastkey.Store(orig.Key())
-			case <-wctx.Done():
-				return
-			}
 
-			if q.limit > 0 && size >= q.limit {
+				if size = atomic.AddUint32(&q.size, 1); q.limit > 0 && size >= q.limit {
+					return
+				}
+			case <-wctx.Done():
 				return
 			}
 		}
@@ -310,10 +313,6 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 }
 
 func (q *v1Query) Save() (cid string, err error) {
-	if q.selector == nil {
-		q.selector = NewFullSelector(q.tx)
-	}
-
 	if q.queryid == nil {
 		q.queryid = typex.NewUUID()
 	}

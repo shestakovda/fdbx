@@ -114,7 +114,7 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 
 		for i := range keys {
 			ukey := WrapKey(keys[i])
-			lg[i] = w.List(ukey, ukey, 0, true)
+			lg[i] = w.List(ukey, ukey, 0, true, false)
 		}
 
 		for i := range lg {
@@ -165,7 +165,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 
 		for i := range pairs {
 			ukey := WrapKey(pairs[i].Key())
-			lg[i] = w.List(ukey, ukey, 0, true)
+			lg[i] = w.List(ukey, ukey, 0, true, false)
 		}
 
 		for i := range pairs {
@@ -222,7 +222,7 @@ func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
 	if err = t.conn.Read(func(r db.Reader) (exp error) {
 		var row fdbx.Pair
 
-		if row, exp = t.fetchRow(r, nil, opid, r.List(ukey, ukey, 0, true)); exp != nil {
+		if row, exp = t.fetchRow(r, nil, opid, r.List(ukey, ukey, 0, true, false)); exp != nil {
 			return
 		}
 
@@ -307,15 +307,16 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 
 		size := 0
 		rows := 0
+		skip := false
 		opts := getOpts(args)
 		from := WrapKey(opts.from)
-		last := WrapKey(opts.to)
+		last := WrapKey(opts.last)
 		opid := atomic.AddUint32(&t.opid, 1)
 		hdlr := func(r db.Reader) (exp error) {
 			if opts.reverse {
-				rows, part, last, exp = t.selectPart(r, from, last, size, opid, &opts)
+				rows, part, last, exp = t.selectPart(r, from, last, size, skip, opid, &opts)
 			} else {
-				rows, part, from, exp = t.selectPart(r, from, last, size, opid, &opts)
+				rows, part, from, exp = t.selectPart(r, from, last, size, skip, opid, &opts)
 			}
 			return exp
 		}
@@ -348,6 +349,7 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 				}
 			}
 
+			skip = true
 			select {
 			case list <- part:
 				if size += len(part); opts.limit > 0 && size >= opts.limit {
@@ -366,13 +368,16 @@ func (t *tx64) selectPart(
 	r db.Reader,
 	from, to fdbx.Key,
 	size int,
+	skip bool,
 	opid uint32,
 	opts *options,
 ) (rows int, part []fdbx.Pair, last fdbx.Key, err error) {
 	var ok bool
 	var w db.Writer
 
-	if rows, part, err = t.fetchAll(r, nil, opid, r.List(from, to, uint64(MaxRowCount), opts.reverse)); err != nil {
+	lg := r.List(from, to, uint64(MaxRowCount), opts.reverse, skip)
+
+	if rows, part, err = t.fetchAll(r, nil, opid, lg); err != nil {
 		return
 	}
 
@@ -398,12 +403,7 @@ func (t *tx64) selectPart(
 	}
 
 	part = part[:cnt]
-
-	if opts.reverse {
-		last = part[0].Key()
-	} else {
-		last = part[cnt-1].Key().RPart(0x01)
-	}
+	last = part[cnt-1].Key()
 
 	for i := range part {
 		part[i] = &usrPair{orig: part[i]}
@@ -467,11 +467,12 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size int, args ...Option) (_ []byte, err e
 
 	var rows []fdbx.Pair
 
+	skip := false
 	ukey := WrapKey(key)
 	end := ukey.RPart(0xFF, 0xFF)
 	res := make([][]byte, 0, pack)
 	fnc := func(r db.Reader) (exp error) {
-		rows = r.List(ukey, end, pack, false).Resolve()
+		rows = r.List(ukey, end, pack, false, skip).Resolve()
 		return nil
 	}
 
@@ -488,7 +489,8 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size int, args ...Option) (_ []byte, err e
 			res = append(res, rows[i].Value())
 		}
 
-		ukey = rows[len(rows)-1].Key().RPart(0x01)
+		ukey = rows[len(rows)-1].Key()
+		skip = true
 	}
 
 	return bytes.Join(res, nil), nil
@@ -923,13 +925,14 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handle
 func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 	atomic.AddUint32(&t.mods, 1)
 
+	skip := false
 	opts := getOpts(args)
 	from := WrapKey(prefix)
 	to := from.Clone()
 
 	for {
 		if err = t.conn.Write(func(w db.Writer) (exp error) {
-			lg := w.List(from, to, uint64(opts.packSize), false)
+			lg := w.List(from, to, uint64(opts.packSize), false, skip)
 
 			if from, exp = t.vacuumPart(w, lg, opts.onVacuum); exp != nil {
 				return
@@ -944,6 +947,7 @@ func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 		if from == nil {
 			return nil
 		}
+		skip = true
 	}
 }
 
@@ -1031,7 +1035,7 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 	}
 
 	// Возвращаем последний проверенный ключ, с которого надо начать след. цикл
-	return list[len(list)-1].Key().RPart(0x01), nil
+	return list[len(list)-1].Key(), nil
 }
 
 type locks struct {
