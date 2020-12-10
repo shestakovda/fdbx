@@ -65,7 +65,14 @@ type Tx interface {
 	OnCommit(CommitHandler)
 
 	// Запуск очистки устаревших записей ключей по указанному префиксу
-	Vacuum(fdbx.Key, ...Option) (err error)
+	Vacuum(fdbx.Key, ...Option) error
+
+	// Изменение сигнального ключа, чтобы сработали Watch
+	// По сути, выставляет хук OnCommit с правильным содержимым
+	Touch(fdbx.Key)
+
+	// Ожидание изменения сигнального ключа в Touch
+	Watch(fdbx.Key) (fdbx.Waiter, error)
 }
 
 // Option - дополнительный аргумент при выполнении команды
@@ -102,6 +109,14 @@ func WrapLockKey(key fdbx.Key) fdbx.Key {
 		key = fdbx.Bytes2Key(nil)
 	}
 	return key.LPart(nsLock)
+}
+
+// WrapWatchKey - обертка для получения системного ключа из пользовательского, при сохранении
+func WrapWatchKey(key fdbx.Key) fdbx.Key {
+	if key == nil {
+		key = fdbx.Bytes2Key(nil)
+	}
+	return key.LPart(nsWatch)
 }
 
 // Ошибки модуля

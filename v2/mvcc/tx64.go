@@ -922,6 +922,20 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handle
 	return nil
 }
 
+func (t *tx64) Touch(key fdbx.Key) {
+	t.OnCommit(func(w db.Writer) error {
+		w.Upsert(fdbx.NewPair(WrapWatchKey(key), fdbx.Time2Byte(time.Now())))
+		return nil
+	})
+}
+
+func (t *tx64) Watch(key fdbx.Key) (wait fdbx.Waiter, err error) {
+	return wait, t.conn.Write(func(w db.Writer) error {
+		wait = w.Watch(WrapWatchKey(key))
+		return nil
+	})
+}
+
 func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 	atomic.AddUint32(&t.mods, 1)
 

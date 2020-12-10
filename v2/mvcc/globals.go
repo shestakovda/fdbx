@@ -21,9 +21,10 @@ var (
 var globCache = makeCache()
 
 const (
-	nsUser byte = 0
-	nsTx   byte = 1
-	nsLock byte = 2
+	nsUser  byte = 0
+	nsTx    byte = 1
+	nsLock  byte = 2
+	nsWatch byte = 3
 )
 
 const (
