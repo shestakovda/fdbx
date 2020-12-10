@@ -195,14 +195,14 @@ func (s *ORMSuite) TestByID() {
 		s.True(errx.Is(err, orm.ErrNotFound))
 	}
 
-	if list, err := s.tbl.Select(s.tx).PossibleByID(id2, id4).All(); s.NoError(err) {
+	if list, err := s.tbl.Select(s.tx).PossibleByID(id4, id2).All(); s.NoError(err) {
 		s.Len(list, 1)
 
 		s.Equal(id2.String(), list[0].Key().String())
 		s.Equal("msg2", string(list[0].Value()))
 	}
 
-	if pair, err := s.tbl.Select(s.tx).PossibleByID(id2, id3).First(); s.NoError(err) {
+	if pair, err := s.tbl.Select(s.tx).PossibleByID(id4, id2, id3).First(); s.NoError(err) {
 		s.Equal(id2.String(), pair.Key().String())
 		s.Equal("msg2", string(pair.Value()))
 	}

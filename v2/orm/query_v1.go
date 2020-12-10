@@ -167,7 +167,7 @@ func (q *v1Query) First() (fdbx.Pair, error) {
 		}
 	}
 
-	return nil, nil
+	return nil, ErrNotFound.WithStack()
 }
 
 func (q *v1Query) Agg(funcs ...Aggregator) (err error) {

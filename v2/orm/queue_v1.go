@@ -459,11 +459,7 @@ func (q v1Queue) loadTask(tx mvcc.Tx, key fdbx.Key) (tsk *v1Task, err error) {
 	tsk = &v1Task{q: q, m: models.GetRootAsTask(buf, 0).UnPack()}
 
 	// Так мы достаем объект коллекции. Потенциально удаленный
-	if sel, err = q.tb.Select(tx).PossibleByID(key).First(); err != nil {
-		return
-	}
-
-	if sel != nil {
+	if sel, err = q.tb.Select(tx).PossibleByID(key).First(); err == nil {
 		tsk.b = sel.Value()
 	}
 
