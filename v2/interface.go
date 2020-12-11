@@ -23,7 +23,11 @@ type Key interface {
 }
 
 // Bytes2Key - формирование простого ключа
-func Bytes2Key(k []byte) Key { return fdbKey(k) }
+func Bytes2Key(k []byte) Key {
+	key := make(fdbKey, len(k))
+	copy(key, k)
+	return key
+}
 
 // String2Key - формирование простого ключа из строки
 func String2Key(k string) Key { return fdbKey(k) }

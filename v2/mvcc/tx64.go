@@ -657,7 +657,7 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	// Если это откат - то сохраняем данные только в случае, если
 	// в рамках транзакции могли быть какие-то изменения (счетчик mods > 0)
 	// В остальных случаях можем спокойно установить локальный кеш и выйти
-	if t.status == txStatusAborted && mods == 0 {
+	if mods == 0 {
 		globCache.set(t.txid, t.status)
 		return nil
 	}
