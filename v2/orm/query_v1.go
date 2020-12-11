@@ -73,6 +73,7 @@ type v1Query struct {
 	size    uint32
 	page    uint32
 	limit   uint32
+	empty   bool
 	reverse bool
 	idxtype uint16
 	idxfrom []byte
@@ -84,6 +85,8 @@ type v1Query struct {
 	filters  []Filter
 	selector Selector
 }
+
+func (q *v1Query) Empty() bool { return q.empty }
 
 func (q *v1Query) Reverse() Query {
 	q.reverse = true
@@ -122,10 +125,6 @@ func (q *v1Query) All() ([]fdbx.Pair, error) {
 }
 
 func (q *v1Query) Next() (_ []fdbx.Pair, err error) {
-	if q.page == 0 {
-		q.page = 1
-	}
-
 	defer func() { _, err = q.Save() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -137,7 +136,7 @@ func (q *v1Query) Next() (_ []fdbx.Pair, err error) {
 
 	for pair := range pairs {
 		list = append(list, pair)
-		if size++; size >= q.page {
+		if size++; q.page > 0 && size >= q.page {
 			return list, nil
 		}
 	}
@@ -148,6 +147,7 @@ func (q *v1Query) Next() (_ []fdbx.Pair, err error) {
 		}
 	}
 
+	q.empty = true
 	return list, nil
 }
 
@@ -251,6 +251,7 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 	list := make(chan fdbx.Pair)
 	errs := make(chan error, 1)
 
+	q.empty = false
 	if q.selector == nil {
 		q.selector = NewFullSelector(q.tx)
 	}

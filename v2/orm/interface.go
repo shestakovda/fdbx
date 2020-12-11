@@ -90,6 +90,7 @@ type Query interface {
 	First() (fdbx.Pair, error)
 	Sequence(context.Context) (<-chan fdbx.Pair, <-chan error)
 	Delete() error
+	Empty() bool
 
 	// Сохранение запроса (курсор)
 	Save() (string, error)
