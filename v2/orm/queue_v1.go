@@ -302,6 +302,77 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 	}
 }
 
+func (q v1Queue) Undo(tx mvcc.Tx, key fdbx.Key) (exp error) {
+	if exp = tx.Conn().Write(func(w db.Writer) (err error) {
+		var pair fdbx.Pair
+
+		// Загружаем задачу, если она есть
+		wkey := q.wrapFlagKey(qWork, key)
+		mkey := q.wrapFlagKey(qMeta, key)
+
+		// Выборка элемента из коллекции метаданных
+		if pair, err = tx.Select(mkey, mvcc.Writer(w), mvcc.Lock()); err != nil {
+			// Задачу уже грохнули, ну и ладно
+			if errx.Is(err, mvcc.ErrNotFound) {
+				return nil
+			}
+			return
+		}
+
+		// Получаем буфер метаданных
+		val := pair.Value()
+
+		defer func() {
+			if rec := recover(); rec != nil {
+				if e, ok := rec.(error); ok {
+					err = mvcc.ErrUpsert.WithReason(e)
+				} else {
+					err = mvcc.ErrUpsert.WithDebug(errx.Debug{"panic": rec})
+				}
+			}
+		}()
+
+		// Целиком распаковывать буфер нам нет смысла, меняем только кол-во попыток и статус
+		meta := models.GetRootAsTask(val, 0).State(nil)
+
+		// Если задача уже не висит или в ней не указано плановое время, то не можем грохнуть из плана
+		if meta.Planned() == 0 || meta.Status() != StatusPublished {
+			return nil
+		}
+
+		// Удаляем из списка плановых
+		plan := time.Unix(0, meta.Planned()).UTC()
+		if err = tx.Delete([]fdbx.Key{q.wrapItemKey(plan, key)}, mvcc.Writer(w)); err != nil {
+			return
+		}
+
+		// Меняем статус задачи
+		if !meta.MutateStatus(StatusUnconfirmed) {
+			return mvcc.ErrUpsert.WithStack()
+		}
+
+		// Сохраняем изменения
+		if err = tx.Upsert([]fdbx.Pair{
+			fdbx.NewPair(wkey, key.Bytes()), // Вставка в коллекцию задач "в работе"
+			fdbx.NewPair(mkey, val),         // Вставка в коллекцию метаданных измененного буфера
+		}, mvcc.Writer(w)); err != nil {
+			return
+		}
+
+		// Уменьшаем счетчик задач в ожидании
+		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWaitKey)), -1)
+
+		// Увеличиваем счетчик задач в работе
+		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWorkKey)), 1)
+		return nil
+	}); exp != nil {
+		return ErrUndo.WithReason(exp)
+	}
+
+	return nil
+
+}
+
 func (q v1Queue) Stat(tx mvcc.Tx) (wait, work int64, err error) {
 	if err = tx.Conn().Read(func(r db.Reader) (exp error) {
 

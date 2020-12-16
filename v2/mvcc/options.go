@@ -28,6 +28,7 @@ type options struct {
 	writer   db.Writer
 }
 
+func Lock() Option                    { return func(o *options) { o.lock = true } }
 func Last(k fdbx.Key) Option          { return func(o *options) { o.last = k } }
 func From(k fdbx.Key) Option          { return func(o *options) { o.from = k } }
 func Limit(l int) Option              { return func(o *options) { o.limit = l } }

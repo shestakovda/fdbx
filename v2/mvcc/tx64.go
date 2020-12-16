@@ -215,28 +215,56 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 /*
 	Select - выборка актуального в данной транзакции значения ключа.
 */
-func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
+func (t *tx64) Select(key fdbx.Key, args ...Option) (res fdbx.Pair, err error) {
 	ukey := WrapKey(key)
+	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
-
-	if err = t.conn.Read(func(r db.Reader) (exp error) {
+	hdlr := func(r db.Reader) (exp error) {
+		var ok bool
+		var w db.Writer
 		var row fdbx.Pair
+
+		if opts.lock {
+			// Блокировка не означает модификаций, поэтому mods не увеличиваем
+			if w, ok = r.(db.Writer); ok {
+				w.Lock(ukey, ukey)
+			}
+		}
 
 		if row, exp = t.fetchRow(r, nil, opid, r.List(ukey, ukey, 0, true, false)); exp != nil {
 			return
 		}
 
-		if row != nil {
-			res = &usrPair{
-				orig: row,
-			}
-			return nil
+		if row == nil {
+			return ErrNotFound.WithDebug(errx.Debug{
+				"key": key.Printable(),
+			})
 		}
 
-		return ErrNotFound.WithDebug(errx.Debug{
-			"key": key.Printable(),
-		})
-	}); err != nil {
+		res = &usrPair{
+			orig: row,
+		}
+
+		if opts.onLock != nil {
+			// Раз какой-то обработчик в записи, значит модификация - увеличиваем счетчик
+			atomic.AddUint32(&t.mods, 1)
+			return opts.onLock(t, res, w)
+		}
+
+		return nil
+	}
+
+	if opts.lock {
+		if opts.writer == nil {
+			err = t.conn.Write(func(w db.Writer) error { return hdlr(w) })
+		} else {
+			err = hdlr(opts.writer)
+		}
+	} else {
+		err = t.conn.Read(hdlr)
+	}
+
+	if err != nil {
 		return nil, ErrSelect.WithReason(err)
 	}
 

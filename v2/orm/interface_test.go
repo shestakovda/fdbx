@@ -214,6 +214,49 @@ func (s *ORMSuite) TestByID() {
 	s.checkVacuum(nil)
 }
 
+func (s *ORMSuite) TestUndo() {
+	id1 := fdbx.String2Key("id1")
+	id2 := fdbx.String2Key("id2")
+	id3 := fdbx.String2Key("id3")
+
+	q := orm.NewQueue(TestQueue, s.tbl, orm.Refresh(10*time.Millisecond), orm.Prefix([]byte("lox")))
+
+	s.Require().NoError(s.tbl.Upsert(s.tx,
+		fdbx.NewPair(id1, []byte("msg1")),
+		fdbx.NewPair(id2, []byte("msg2")),
+		fdbx.NewPair(id3, []byte("msg3")),
+	))
+	s.Require().NoError(s.tx.Commit())
+
+	// Публикация задач по очереди (и нарочно одну и ту же несколько раз)
+	tx, err := mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+	s.Require().NoError(q.PubList(tx, []fdbx.Key{id1, id1, id2, id2, id3}, orm.Delay(time.Millisecond)))
+	s.Require().NoError(tx.Commit())
+
+	// Теперь делаем отмену для пары задач
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+	s.Require().NoError(q.Undo(tx, id1))
+	s.Require().NoError(q.Undo(tx, id3))
+	s.Require().NoError(tx.Commit())
+
+	// Проверяем стату
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+
+	// Должно быть 2 потеряшки (которых мы отменили)
+	if wait, work, err := q.Stat(tx); s.NoError(err) {
+		s.Equal(int64(1), wait) // id2
+		s.Equal(int64(2), work) // id1 id3
+	}
+	if lost, err := q.Lost(tx, 100); s.NoError(err) && s.Len(lost, 2) {
+		s.Equal(id1, lost[0].Key())
+		s.Equal(id3, lost[1].Key())
+	}
+	s.Require().NoError(tx.Commit())
+}
+
 func (s *ORMSuite) TestQueue() {
 	id1 := fdbx.String2Key("id1")
 	id2 := fdbx.String2Key("id2")

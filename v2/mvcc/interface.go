@@ -30,7 +30,7 @@ type Tx interface {
 	Cancel(args ...Option) error
 
 	// Выборка актуального значения для ключа
-	Select(fdbx.Key) (fdbx.Pair, error)
+	Select(fdbx.Key, ...Option) (fdbx.Pair, error)
 
 	// Удаление значения для ключа
 	// Поддерживает опции Writer

@@ -41,6 +41,7 @@ type Queue interface {
 	Sub(context.Context, db.Connection, int) (<-chan Task, <-chan error)
 	SubList(context.Context, db.Connection, int) ([]Task, error)
 
+	Undo(mvcc.Tx, fdbx.Key) error
 	Stat(mvcc.Tx) (int64, int64, error)
 	Lost(mvcc.Tx, int) ([]Task, error)
 	Task(mvcc.Tx, fdbx.Key) (Task, error)
@@ -207,6 +208,7 @@ var (
 	ErrSub       = errx.New("Ошибка получения задач из очереди")
 	ErrPub       = errx.New("Ошибка публикации задачи в очередь")
 	ErrAck       = errx.New("Ошибка подтверждения задач в очереди")
+	ErrUndo      = errx.New("Ошибка отмены опубликованной задачи")
 	ErrLost      = errx.New("Ошибка получения неподтвержденных задач")
 	ErrStat      = errx.New("Ошибка получения статистики задач")
 	ErrTask      = errx.New("Ошибка получения метаданных задачи")
