@@ -2,6 +2,7 @@ package orm
 
 import (
 	"context"
+	"math/rand"
 	"time"
 
 	"github.com/shestakovda/errx"
@@ -172,12 +173,8 @@ func (t *v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 	return nil
 }
 
-func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Option) {
+func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 	var err error
-
-	opts := getOpts(args)
-	tick := time.NewTicker(opts.vwait)
-	defer tick.Stop()
 
 	defer func() {
 		// Перезапуск только в случае ошибки
@@ -187,7 +184,7 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Opti
 			// И только если мы вообще можем еще запускать
 			if ctx.Err() == nil {
 				// Тогда стартуем заново и в s.wait ничего не ставим
-				go t.Autovacuum(ctx, cn, args...)
+				go t.Autovacuum(ctx, cn)
 				return
 			}
 		}
@@ -204,15 +201,29 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Opti
 		}
 	}()
 
+	// Работать должен постоянно
+	timer := time.NewTimer(time.Hour)
 	for ctx.Err() == nil {
+		// Очистка таймера
+		if !timer.Stop() {
+			<-timer.C
+		}
 
-		if err = t.vacuumStep(cn); err != nil {
+		// Выбираем случайное время с 00:00 до 06:00
+		// Чтобы делать темные делишки под покровом ночи
+		now := time.Now()
+		min := rand.Intn(60)
+		hour := rand.Intn(7)
+		when := time.Date(now.Year(), now.Month(), now.Day()+1, hour, min, 00, 00, now.Location())
+		timer.Reset(when.Sub(now))
+
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
 			return
 		}
 
-		select {
-		case <-tick.C:
-		case <-ctx.Done():
+		if err = t.vacuumStep(cn); err != nil {
 			return
 		}
 	}
