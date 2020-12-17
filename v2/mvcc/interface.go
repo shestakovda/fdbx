@@ -42,11 +42,11 @@ type Tx interface {
 
 	// Последовательная выборка всех активных ключей в диапазоне
 	// Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
-	ListAll(...Option) ([]fdbx.Pair, error)
+	ListAll(context.Context, ...Option) ([]fdbx.Pair, error)
 
 	// Последовательная выборка всех активных ключей в диапазоне
 	// Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
-	SeqScan(ctx context.Context, args ...Option) (<-chan fdbx.Pair, <-chan error)
+	SeqScan(context.Context, ...Option) (<-chan fdbx.Pair, <-chan error)
 
 	// Загрузка бинарных данных по ключу, указывается ожидаемый размер
 	LoadBLOB(fdbx.Key, int, ...Option) ([]byte, error)

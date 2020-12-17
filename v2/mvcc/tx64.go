@@ -271,8 +271,8 @@ func (t *tx64) Select(key fdbx.Key, args ...Option) (res fdbx.Pair, err error) {
 	return res, nil
 }
 
-func (t *tx64) ListAll(args ...Option) (_ []fdbx.Pair, err error) {
-	ctx, cancel := context.WithCancel(context.Background())
+func (t *tx64) ListAll(ctx context.Context, args ...Option) (_ []fdbx.Pair, err error) {
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	list := make([]fdbx.Pair, 0, 128)

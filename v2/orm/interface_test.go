@@ -469,6 +469,59 @@ func (s *ORMSuite) TestMultiIndex() {
 	}
 }
 
+func (s *ORMSuite) TestSubList() {
+	id1 := fdbx.String2Key("id1")
+	id2 := fdbx.String2Key("id2")
+	id3 := fdbx.String2Key("id3")
+
+	s.Require().NoError(s.tbl.Upsert(s.tx,
+		fdbx.NewPair(id1, []byte("message")),
+		fdbx.NewPair(id2, []byte("text")),
+		fdbx.NewPair(id3, []byte("mussage")),
+	))
+	s.Require().NoError(s.tx.Commit())
+
+	q := orm.NewQueue(TestQueue, s.tbl, orm.Refresh(10*time.Millisecond), orm.Prefix([]byte("lox")))
+
+	// Публикация задач по очереди (и нарочно одну и ту же несколько раз)
+	tx, err := mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+	s.Require().NoError(q.PubList(tx, []fdbx.Key{id1, id1, id2, id2, id3}, orm.Delay(time.Millisecond)))
+	s.Require().NoError(tx.Commit())
+
+	// Запрашиваем несколько задач, с ограничением
+	tx, err = mvcc.Begin(s.cn)
+	s.Require().NoError(err)
+
+	// На все про все даем пару секунд, этого более, чем достаточно
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// В первой пачке должно быть 2 задачи, потому их там больше, чем мы просим
+	if list, err := q.SubList(ctx, s.cn, 2); s.NoError(err) && s.Len(list, 2) {
+		s.Equal(id1, list[0].Key())
+		s.Equal(id2, list[1].Key())
+	}
+
+	// Во второй пачке должна быть 1 задача, потому их мы не ждем наполнения, а выходим сразу, как что-то есть
+	if list, err := q.SubList(ctx, s.cn, 2); s.NoError(err) && s.Len(list, 1) {
+		s.Equal(id3, list[0].Key())
+	}
+
+	start := time.Now()
+	wctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+
+	// Наконец, в 3 пачке не должно быть ничего
+	// Кроме того, мы ставим маленький контекст
+	if _, err := q.SubList(wctx, s.cn, 2000); s.Error(err) {
+		s.True(errx.Is(err, context.DeadlineExceeded))
+	}
+
+	// Важно убедиться, что мы не ждем у моря погоды, а выходим сразу, как просрачился контекст
+	s.True(time.Since(start) < time.Second)
+}
+
 func (s *ORMSuite) TestCursor() {
 	const recCount = 3
 

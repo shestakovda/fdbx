@@ -1,6 +1,7 @@
 package mvcc_test
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -318,11 +319,13 @@ func (s *MVCCSuite) TestListAll() {
 		fdbx.NewPair(key7, val7),
 	}))
 
-	if list, err := s.tx.ListAll(); s.NoError(err) {
+	ctx := context.Background()
+
+	if list, err := s.tx.ListAll(ctx); s.NoError(err) {
 		s.Len(list, 7)
 	}
 
-	if list, err := s.tx.ListAll(mvcc.From(key2), mvcc.Last(key6)); s.NoError(err) {
+	if list, err := s.tx.ListAll(ctx, mvcc.From(key2), mvcc.Last(key6)); s.NoError(err) {
 		s.Len(list, 5)
 	}
 	s.Require().NoError(s.tx.Commit())
@@ -353,6 +356,7 @@ func (s *MVCCSuite) TestListAll() {
 
 	s.Require().NoError(s.cn.Write(func(w db.Writer) error {
 		if list, err := tx2.ListAll(
+			ctx,
 			mvcc.From(key2),
 			mvcc.Limit(3),
 			mvcc.Writer(w),
@@ -364,6 +368,7 @@ func (s *MVCCSuite) TestListAll() {
 
 		vals = make([]string, 0, 2)
 		if list, err := tx2.ListAll(
+			ctx,
 			mvcc.From(key2),
 			mvcc.Limit(3),
 			mvcc.Writer(w),
