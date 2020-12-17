@@ -79,10 +79,7 @@ func (s *ORMSuite) TearDownTest() {
 }
 
 func (s *ORMSuite) checkVacuum(ignore map[string]bool) {
-	// Запускаем вакуум
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	s.tbl.Autovacuum(ctx, s.cn)
+	s.Require().NoError(s.tbl.Vacuum(s.cn))
 
 	// В базе ничего не должно оставаться
 	s.Require().NoError(s.cn.Read(func(r db.Reader) error {

@@ -197,7 +197,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 			var tx mvcc.Tx
 
 			if tx, exp = mvcc.Begin(cn); exp != nil {
-				return ErrSub.WithReason(exp)
+				return
 			}
 			defer tx.Cancel(mvcc.Writer(w))
 
@@ -269,7 +269,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 		var tx mvcc.Tx
 
 		if tx, exp = mvcc.Begin(cn); exp != nil {
-			return ErrSub.WithReason(exp)
+			return
 		}
 		defer tx.Cancel()
 
@@ -282,9 +282,11 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 	}
 
 	for {
-		if err = q.waitTask(ctx, waiter, refresh); err != nil {
-			return
+		if err = ctx.Err(); err != nil {
+			return nil, ErrSub.WithReason(err)
 		}
+
+		q.waitTask(ctx, waiter, refresh)
 
 		if err = hdlr(); err != nil {
 			return nil, ErrSub.WithReason(err)
@@ -295,7 +297,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 		}
 
 		if err = load(); err != nil {
-			return
+			return nil, ErrSub.WithReason(err)
 		}
 
 		return list, nil
@@ -433,13 +435,9 @@ func (q v1Queue) Task(tx mvcc.Tx, key fdbx.Key) (res Task, err error) {
 	return tsk, nil
 }
 
-func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter, refresh time.Duration) (err error) {
+func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter, refresh time.Duration) {
 	if waiter == nil {
-		return nil
-	}
-
-	if ctx.Err() != nil {
-		return ErrSub.WithReason(ctx.Err())
+		return
 	}
 
 	// Даже если waiter установлен, то при отсутствии других публикаций мы тут зависнем навечно.
@@ -455,8 +453,6 @@ func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter, refresh time.
 	// Чтобы избежать массовых конфликтов транзакций и улучшить распределение задач делаем небольшую
 	// случайную задержку, в пределах 5 мс. Немного для человека, значительно для уменьшения конфликтов
 	time.Sleep(time.Duration(rand.Intn(5)) * time.Millisecond)
-
-	return nil
 }
 
 func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {

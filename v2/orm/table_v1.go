@@ -223,13 +223,13 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 			return
 		}
 
-		if err = t.vacuumStep(cn); err != nil {
+		if err = t.Vacuum(cn); err != nil {
 			return
 		}
 	}
 }
 
-func (t *v1Table) vacuumStep(cn db.Connection) (err error) {
+func (t *v1Table) Vacuum(cn db.Connection) (err error) {
 	var tx mvcc.Tx
 
 	if tx, err = mvcc.Begin(cn); err != nil {

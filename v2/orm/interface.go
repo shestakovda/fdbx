@@ -27,6 +27,7 @@ type Table interface {
 	Upsert(mvcc.Tx, ...fdbx.Pair) error
 	Insert(mvcc.Tx, ...fdbx.Pair) error
 
+	Vacuum(db.Connection) error
 	Autovacuum(context.Context, db.Connection)
 }
 
