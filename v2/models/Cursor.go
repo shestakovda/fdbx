@@ -22,21 +22,21 @@ func (t *CursorT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	if t == nil {
 		return 0
 	}
-	LastKeyOffset := flatbuffers.UOffsetT(0)
+	lastKeyOffset := flatbuffers.UOffsetT(0)
 	if t.LastKey != nil {
-		LastKeyOffset = builder.CreateByteString(t.LastKey)
+		lastKeyOffset = builder.CreateByteString(t.LastKey)
 	}
-	IdxFromOffset := flatbuffers.UOffsetT(0)
+	idxFromOffset := flatbuffers.UOffsetT(0)
 	if t.IdxFrom != nil {
-		IdxFromOffset = builder.CreateByteString(t.IdxFrom)
+		idxFromOffset = builder.CreateByteString(t.IdxFrom)
 	}
-	IdxLastOffset := flatbuffers.UOffsetT(0)
+	idxLastOffset := flatbuffers.UOffsetT(0)
 	if t.IdxLast != nil {
-		IdxLastOffset = builder.CreateByteString(t.IdxLast)
+		idxLastOffset = builder.CreateByteString(t.IdxLast)
 	}
-	QueryIDOffset := flatbuffers.UOffsetT(0)
+	queryIDOffset := flatbuffers.UOffsetT(0)
 	if t.QueryID != nil {
-		QueryIDOffset = builder.CreateByteString(t.QueryID)
+		queryIDOffset = builder.CreateByteString(t.QueryID)
 	}
 	CursorStart(builder)
 	CursorAddSize(builder, t.Size)
@@ -44,10 +44,10 @@ func (t *CursorT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	CursorAddLimit(builder, t.Limit)
 	CursorAddReverse(builder, t.Reverse)
 	CursorAddIdxType(builder, t.IdxType)
-	CursorAddLastKey(builder, LastKeyOffset)
-	CursorAddIdxFrom(builder, IdxFromOffset)
-	CursorAddIdxLast(builder, IdxLastOffset)
-	CursorAddQueryID(builder, QueryIDOffset)
+	CursorAddLastKey(builder, lastKeyOffset)
+	CursorAddIdxFrom(builder, idxFromOffset)
+	CursorAddIdxLast(builder, idxLastOffset)
+	CursorAddQueryID(builder, queryIDOffset)
 	return CursorEnd(builder)
 }
 
@@ -291,41 +291,41 @@ func (rcv *Cursor) MutateQueryID(j int, n byte) bool {
 func CursorStart(builder *flatbuffers.Builder) {
 	builder.StartObject(9)
 }
-func CursorAddSize(builder *flatbuffers.Builder, Size uint32) {
-	builder.PrependUint32Slot(0, Size, 0)
+func CursorAddSize(builder *flatbuffers.Builder, size uint32) {
+	builder.PrependUint32Slot(0, size, 0)
 }
-func CursorAddPage(builder *flatbuffers.Builder, Page uint32) {
-	builder.PrependUint32Slot(1, Page, 0)
+func CursorAddPage(builder *flatbuffers.Builder, page uint32) {
+	builder.PrependUint32Slot(1, page, 0)
 }
-func CursorAddLimit(builder *flatbuffers.Builder, Limit uint32) {
-	builder.PrependUint32Slot(2, Limit, 0)
+func CursorAddLimit(builder *flatbuffers.Builder, limit uint32) {
+	builder.PrependUint32Slot(2, limit, 0)
 }
-func CursorAddReverse(builder *flatbuffers.Builder, Reverse bool) {
-	builder.PrependBoolSlot(3, Reverse, false)
+func CursorAddReverse(builder *flatbuffers.Builder, reverse bool) {
+	builder.PrependBoolSlot(3, reverse, false)
 }
-func CursorAddIdxType(builder *flatbuffers.Builder, IdxType uint16) {
-	builder.PrependUint16Slot(4, IdxType, 0)
+func CursorAddIdxType(builder *flatbuffers.Builder, idxType uint16) {
+	builder.PrependUint16Slot(4, idxType, 0)
 }
-func CursorAddLastKey(builder *flatbuffers.Builder, LastKey flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(5, flatbuffers.UOffsetT(LastKey), 0)
+func CursorAddLastKey(builder *flatbuffers.Builder, lastKey flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(5, flatbuffers.UOffsetT(lastKey), 0)
 }
 func CursorStartLastKeyVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
 }
-func CursorAddIdxFrom(builder *flatbuffers.Builder, IdxFrom flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(6, flatbuffers.UOffsetT(IdxFrom), 0)
+func CursorAddIdxFrom(builder *flatbuffers.Builder, idxFrom flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(6, flatbuffers.UOffsetT(idxFrom), 0)
 }
 func CursorStartIdxFromVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
 }
-func CursorAddIdxLast(builder *flatbuffers.Builder, IdxLast flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(7, flatbuffers.UOffsetT(IdxLast), 0)
+func CursorAddIdxLast(builder *flatbuffers.Builder, idxLast flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(7, flatbuffers.UOffsetT(idxLast), 0)
 }
 func CursorStartIdxLastVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
 }
-func CursorAddQueryID(builder *flatbuffers.Builder, QueryID flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(8, flatbuffers.UOffsetT(QueryID), 0)
+func CursorAddQueryID(builder *flatbuffers.Builder, queryID flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(8, flatbuffers.UOffsetT(queryID), 0)
 }
 func CursorStartQueryIDVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)

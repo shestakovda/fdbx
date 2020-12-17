@@ -7,27 +7,43 @@ import (
 )
 
 type RowT struct {
-	State *RowStateT
-	Data  []byte
+	CMin uint32
+	CMax uint32
+	XMin []byte
+	XMax []byte
+	Data []byte
 }
 
 func (t *RowT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	if t == nil {
 		return 0
 	}
-	DataOffset := flatbuffers.UOffsetT(0)
+	xMinOffset := flatbuffers.UOffsetT(0)
+	if t.XMin != nil {
+		xMinOffset = builder.CreateByteString(t.XMin)
+	}
+	xMaxOffset := flatbuffers.UOffsetT(0)
+	if t.XMax != nil {
+		xMaxOffset = builder.CreateByteString(t.XMax)
+	}
+	dataOffset := flatbuffers.UOffsetT(0)
 	if t.Data != nil {
-		DataOffset = builder.CreateByteString(t.Data)
+		dataOffset = builder.CreateByteString(t.Data)
 	}
 	RowStart(builder)
-	StateOffset := t.State.Pack(builder)
-	RowAddState(builder, StateOffset)
-	RowAddData(builder, DataOffset)
+	RowAddCMin(builder, t.CMin)
+	RowAddCMax(builder, t.CMax)
+	RowAddXMin(builder, xMinOffset)
+	RowAddXMax(builder, xMaxOffset)
+	RowAddData(builder, dataOffset)
 	return RowEnd(builder)
 }
 
 func (rcv *Row) UnPackTo(t *RowT) {
-	t.State = rcv.State(nil).UnPack()
+	t.CMin = rcv.CMin()
+	t.CMax = rcv.CMax()
+	t.XMin = rcv.XMinBytes()
+	t.XMax = rcv.XMaxBytes()
 	t.Data = rcv.DataBytes()
 }
 
@@ -60,21 +76,100 @@ func (rcv *Row) Table() flatbuffers.Table {
 	return rcv._tab
 }
 
-func (rcv *Row) State(obj *RowState) *RowState {
+func (rcv *Row) CMin() uint32 {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(4))
 	if o != 0 {
-		x := o + rcv._tab.Pos
-		if obj == nil {
-			obj = new(RowState)
-		}
-		obj.Init(rcv._tab.Bytes, x)
-		return obj
+		return rcv._tab.GetUint32(o + rcv._tab.Pos)
+	}
+	return 0
+}
+
+func (rcv *Row) MutateCMin(n uint32) bool {
+	return rcv._tab.MutateUint32Slot(4, n)
+}
+
+func (rcv *Row) CMax() uint32 {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
+	if o != 0 {
+		return rcv._tab.GetUint32(o + rcv._tab.Pos)
+	}
+	return 0
+}
+
+func (rcv *Row) MutateCMax(n uint32) bool {
+	return rcv._tab.MutateUint32Slot(6, n)
+}
+
+func (rcv *Row) XMin(j int) byte {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
+	if o != 0 {
+		a := rcv._tab.Vector(o)
+		return rcv._tab.GetByte(a + flatbuffers.UOffsetT(j*1))
+	}
+	return 0
+}
+
+func (rcv *Row) XMinLength() int {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
+	if o != 0 {
+		return rcv._tab.VectorLen(o)
+	}
+	return 0
+}
+
+func (rcv *Row) XMinBytes() []byte {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
+	if o != 0 {
+		return rcv._tab.ByteVector(o + rcv._tab.Pos)
 	}
 	return nil
 }
 
+func (rcv *Row) MutateXMin(j int, n byte) bool {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
+	if o != 0 {
+		a := rcv._tab.Vector(o)
+		return rcv._tab.MutateByte(a+flatbuffers.UOffsetT(j*1), n)
+	}
+	return false
+}
+
+func (rcv *Row) XMax(j int) byte {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
+	if o != 0 {
+		a := rcv._tab.Vector(o)
+		return rcv._tab.GetByte(a + flatbuffers.UOffsetT(j*1))
+	}
+	return 0
+}
+
+func (rcv *Row) XMaxLength() int {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
+	if o != 0 {
+		return rcv._tab.VectorLen(o)
+	}
+	return 0
+}
+
+func (rcv *Row) XMaxBytes() []byte {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
+	if o != 0 {
+		return rcv._tab.ByteVector(o + rcv._tab.Pos)
+	}
+	return nil
+}
+
+func (rcv *Row) MutateXMax(j int, n byte) bool {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
+	if o != 0 {
+		a := rcv._tab.Vector(o)
+		return rcv._tab.MutateByte(a+flatbuffers.UOffsetT(j*1), n)
+	}
+	return false
+}
+
 func (rcv *Row) Data(j int) byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
 		return rcv._tab.GetByte(a + flatbuffers.UOffsetT(j*1))
@@ -83,7 +178,7 @@ func (rcv *Row) Data(j int) byte {
 }
 
 func (rcv *Row) DataLength() int {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
 	if o != 0 {
 		return rcv._tab.VectorLen(o)
 	}
@@ -91,7 +186,7 @@ func (rcv *Row) DataLength() int {
 }
 
 func (rcv *Row) DataBytes() []byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
 	if o != 0 {
 		return rcv._tab.ByteVector(o + rcv._tab.Pos)
 	}
@@ -99,7 +194,7 @@ func (rcv *Row) DataBytes() []byte {
 }
 
 func (rcv *Row) MutateData(j int, n byte) bool {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
 		return rcv._tab.MutateByte(a+flatbuffers.UOffsetT(j*1), n)
@@ -108,13 +203,28 @@ func (rcv *Row) MutateData(j int, n byte) bool {
 }
 
 func RowStart(builder *flatbuffers.Builder) {
-	builder.StartObject(2)
+	builder.StartObject(5)
 }
-func RowAddState(builder *flatbuffers.Builder, State flatbuffers.UOffsetT) {
-	builder.PrependStructSlot(0, flatbuffers.UOffsetT(State), 0)
+func RowAddCMin(builder *flatbuffers.Builder, cMin uint32) {
+	builder.PrependUint32Slot(0, cMin, 0)
 }
-func RowAddData(builder *flatbuffers.Builder, Data flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(1, flatbuffers.UOffsetT(Data), 0)
+func RowAddCMax(builder *flatbuffers.Builder, cMax uint32) {
+	builder.PrependUint32Slot(1, cMax, 0)
+}
+func RowAddXMin(builder *flatbuffers.Builder, xMin flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(2, flatbuffers.UOffsetT(xMin), 0)
+}
+func RowStartXMinVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+	return builder.StartVector(1, numElems, 1)
+}
+func RowAddXMax(builder *flatbuffers.Builder, xMax flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(3, flatbuffers.UOffsetT(xMax), 0)
+}
+func RowStartXMaxVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+	return builder.StartVector(1, numElems, 1)
+}
+func RowAddData(builder *flatbuffers.Builder, data flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(4, flatbuffers.UOffsetT(data), 0)
 }
 func RowStartDataVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)

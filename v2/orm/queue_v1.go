@@ -194,11 +194,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 		// Критически важно делать это в одной физической транзакции
 		// Иначе остается шанс, что одну и ту же задачу возьмут в обработку два воркера
 		return cn.Write(func(w db.Writer) (exp error) {
-			var tx mvcc.Tx
-
-			if tx, exp = mvcc.Begin(cn); exp != nil {
-				return
-			}
+			tx := mvcc.Begin(cn)
 			defer tx.Cancel(mvcc.Writer(w))
 
 			if pairs, exp = tx.ListAll(
@@ -267,20 +263,10 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 		})
 	}
 
-	load := func() (exp error) {
-		var tx mvcc.Tx
-
-		if tx, exp = mvcc.Begin(cn); exp != nil {
-			return
-		}
-		defer tx.Cancel()
-
-		// Достаем данные по каждой задаче, кроме тех, по которым исходный объект уже удален
-		if list, exp = q.loadTasks(tx, pairs, true); exp != nil {
-			return
-		}
-
-		return tx.Commit()
+	// Достаем данные по каждой задаче, кроме тех, по которым исходный объект уже удален
+	load := func(tx mvcc.Tx) (exp error) {
+		list, exp = q.loadTasks(tx, pairs, true)
+		return
 	}
 
 	for {
@@ -300,7 +286,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 			continue
 		}
 
-		if err = load(); err != nil {
+		if err = mvcc.WithTx(cn, load); err != nil {
 			return nil, ErrSub.WithReason(err)
 		}
 

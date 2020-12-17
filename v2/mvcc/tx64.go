@@ -3,10 +3,12 @@ package mvcc
 import (
 	"bytes"
 	"context"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/oklog/ulid"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -26,26 +28,25 @@ import (
 	* Получить монотонно возрастающий идентификатор транзакции, синхронизированный между всеми инстансами
 	* Не создать ни одного конфликта записи/чтения между параллельно стартующими транзакциями
 */
-func newTx64(conn db.Connection) (t *tx64, err error) {
-	t = &tx64{
+func newTx64(conn db.Connection) *tx64 {
+	now := time.Now().UTC()
+	etp := entropy.Get().(io.Reader)
+	defer entropy.Put(etp)
+	uid := ulid.MustNew(ulid.Timestamp(now), etp)
+	return &tx64{
 		conn:   conn,
-		start:  uint64(time.Now().UTC().UnixNano()),
+		txid:   uid[:],
+		start:  now.UnixNano(),
 		status: txStatusRunning,
 	}
-
-	if t.txid, err = sflake.NextID(); err != nil {
-		return
-	}
-
-	return t, nil
 }
 
 type tx64 struct {
 	conn   db.Connection
 	mods   uint32
 	opid   uint32
-	txid   uint64
-	start  uint64
+	txid   []byte
+	start  int64
 	locks  locks
 	status byte
 	oncomm []CommitHandler
@@ -595,44 +596,48 @@ func (t *tx64) SharedLock(key fdbx.Key, wait time.Duration) (err error) {
 	}
 }
 
-func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) (_ bool, err error) {
+func (t *tx64) isCommitted(local *txCache, r db.Reader, txid []byte) (_ bool, err error) {
 	var status byte
 
-	if status, err = t.txStatus(local, r, x); err != nil {
+	if status, err = t.txStatus(local, r, txid); err != nil {
 		return
 	}
 
 	return status == txStatusCommitted, nil
 }
 
-func (t *tx64) isAborted(local *txCache, r db.Reader, x uint64) (_ bool, err error) {
+func (t *tx64) isAborted(local *txCache, r db.Reader, txid []byte) (_ bool, err error) {
 	var status byte
 
-	if status, err = t.txStatus(local, r, x); err != nil {
+	if status, err = t.txStatus(local, r, txid); err != nil {
 		return
 	}
 
 	return status == txStatusAborted, nil
 }
 
-func (t *tx64) txStatus(local *txCache, r db.Reader, x uint64) (status byte, err error) {
+func (t *tx64) txStatus(local *txCache, r db.Reader, txid []byte) (status byte, err error) {
+	var uid ulid.ULID
+
+	copy(uid[:], txid)
+
 	// Дешевле всего чекнуть в глобальном кеше, вдруг уже знаем такую
-	if status = globCache.get(x); status != txStatusUnknown {
+	if status = globCache.get(uid); status != txStatusUnknown {
 		return
 	}
 
 	// Возможно, это открытая транзакция из локального кеша
-	if status = local.get(x); status != txStatusUnknown {
+	if status = local.get(uid); status != txStatusUnknown {
 		return
 	}
 
 	// Придется слазать в БД за статусом и положить в кеш
-	val := r.Data(txKey(x)).Value()
+	val := r.Data(fdbx.Bytes2Key(txid).RPart(nsTx)).Value()
 
 	// Если в БД нет записи, то либо транзакция еще открыта, либо это был откат
 	// Поскольку нет определенности, в глобальный кеш ничего не складываем
 	if len(val) == 0 {
-		local.set(x, txStatusRunning)
+		local.set(uid, txStatusRunning)
 		return txStatusRunning, nil
 	}
 
@@ -641,17 +646,16 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, x uint64) (status byte, err
 
 	// В случае финальных статусов можем положить в глобальный кеш
 	if status == txStatusCommitted || status == txStatusAborted {
-		globCache.set(x, status)
+		globCache.set(uid, status)
 	}
 
 	// В локальный кеш можем положить в любом случае, затем вернуть
-	local.set(x, status)
+	local.set(uid, status)
 	return status, nil
 }
 
 func (t *tx64) pack() []byte {
 	return fdbx.FlatPack(&models.TransactionT{
-		TxID:   t.txid,
 		Start:  t.start,
 		Status: t.status,
 	})
@@ -678,7 +682,8 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	}
 
 	// Получаем ключ транзакции и устанавливаем статус
-	txid := txKey(t.txid)
+	var uid ulid.ULID
+	copy(uid[:], t.txid)
 	mods := atomic.LoadUint32(&t.mods)
 	t.status = status
 
@@ -686,12 +691,12 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	// в рамках транзакции могли быть какие-то изменения (счетчик mods > 0)
 	// В остальных случаях можем спокойно установить локальный кеш и выйти
 	if mods == 0 {
-		globCache.set(t.txid, t.status)
+		globCache.set(uid, t.status)
 		return nil
 	}
 
 	// Cохраняем в БД объект с обновленным статусом
-	pair := fdbx.NewPair(txid, t.pack())
+	pair := fdbx.NewPair(fdbx.Bytes2Key(t.txid).RPart(nsTx), t.pack())
 	hdlr := func(w db.Writer) error { w.Upsert(pair); return nil }
 
 	// Выполняем обработчик в физической транзакции - указанной или новой
@@ -706,7 +711,7 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	}
 
 	// При удачном стечении обстоятельств - устанавливаем глобальный кеш
-	globCache.set(t.txid, t.status)
+	globCache.set(uid, t.status)
 	return nil
 }
 
@@ -745,8 +750,6 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 */
 func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGetter) (_ fdbx.Pair, err error) {
 	var comm bool
-	var buf models.RowState
-	var row models.RowStateT
 
 	if lc == nil {
 		lc = makeCache()
@@ -763,20 +766,20 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 			continue
 		}
 
-		models.GetRootAsRow(val, 0).State(&buf).UnPackTo(&row)
+		row := models.GetRootAsRow(val, 0)
 
 		// Частный случай - если запись создана в рамках текущей транзакции
-		if row.XMin == t.txid {
+		if bytes.Equal(row.XMinBytes(), t.txid) {
 
 			// Если запись создана позже в рамках данной транзакции, то еще не видна
-			if row.CMin >= opid {
+			if row.CMin() >= opid {
 				continue
 			}
 
 			// Поскольку данная транзакция еще не закоммичена, то версия может быть
 			// Или удалена в этой же транзакции, или вообще не удалена (или 0, или t.txid)
 			// Если запись удалена в текущей транзакции и до этого момента, то уже не видна
-			if row.XMax == t.txid && row.CMax < opid {
+			if bytes.Equal(row.XMaxBytes(), t.txid) && row.CMax() < opid {
 				continue
 			}
 
@@ -784,7 +787,7 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 			return list[i], nil
 		}
 
-		if comm, err = t.isCommitted(lc, r, row.XMin); err != nil {
+		if comm, err = t.isCommitted(lc, r, row.XMinBytes()); err != nil {
 			return
 		}
 
@@ -793,28 +796,29 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 			continue
 		}
 
+		// В этом случае объект создан в закоммиченной транзакции и еще не был удален
+		if row.XMaxLength() == 0 {
+			return list[i], nil
+		}
+
 		// Проверяем, возможно запись уже была удалена
-		switch row.XMax {
-		case t.txid:
+		if bytes.Equal(row.XMaxBytes(), t.txid) {
 			// Если она была удалена до этого момента, то уже не видна
-			if row.CMax < opid {
+			if row.CMax() < opid {
 				continue
 			}
 
 			// В этом случае объект создан в закоммиченной транзакции и удален позже, чем мы тут читаем
-			fallthrough
-		case 0:
-			// В этом случае объект создан в закоммиченной транзакции и еще не был удален
 			return list[i], nil
-		default:
-			// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
-			if comm, err = t.isCommitted(lc, r, row.XMax); err != nil {
-				return
-			}
+		}
 
-			if !comm {
-				return list[i], nil
-			}
+		// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
+		if comm, err = t.isCommitted(lc, r, row.XMaxBytes()); err != nil {
+			return
+		}
+
+		if !comm {
+			return list[i], nil
 		}
 	}
 
@@ -824,8 +828,6 @@ func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 // Аналогично fetchRow, но все актуальные версии всех ключей по диапазону
 func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGetter) (cnt int, res []fdbx.Pair, err error) {
 	var comm bool
-	var buf models.RowState
-	var row models.RowStateT
 
 	if lc == nil {
 		lc = makeCache()
@@ -843,20 +845,20 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 			continue
 		}
 
-		models.GetRootAsRow(val, 0).State(&buf).UnPackTo(&row)
+		row := models.GetRootAsRow(val, 0)
 
 		// Частный случай - если запись создана в рамках текущей транзакции
-		if row.XMin == t.txid {
+		if bytes.Equal(row.XMinBytes(), t.txid) {
 
 			// Если запись создана позже в рамках данной транзакции, то еще не видна
-			if row.CMin >= opid {
+			if row.CMin() >= opid {
 				continue
 			}
 
 			// Поскольку данная транзакция еще не закоммичена, то версия может быть
 			// Или удалена в этой же транзакции, или вообще не удалена (или 0, или t.txid)
 			// Если запись удалена в текущей транзакции и до этого момента, то уже не видна
-			if row.XMax == t.txid && row.CMax < opid {
+			if bytes.Equal(row.XMaxBytes(), t.txid) && row.CMax() < opid {
 				continue
 			}
 
@@ -865,7 +867,7 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 			continue
 		}
 
-		if comm, err = t.isCommitted(lc, r, row.XMin); err != nil {
+		if comm, err = t.isCommitted(lc, r, row.XMinBytes()); err != nil {
 			return
 		}
 
@@ -874,29 +876,32 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 			continue
 		}
 
+		// В этом случае объект создан в закоммиченной транзакции и еще не был удален
+		if row.XMaxLength() == 0 {
+			res = append(res, list[i])
+			continue
+		}
+
 		// Проверяем, возможно запись уже была удалена
-		switch row.XMax {
-		case t.txid:
+		if bytes.Equal(row.XMaxBytes(), t.txid) {
 			// Если она была удалена до этого момента, то уже не видна
-			if row.CMax < opid {
+			if row.CMax() < opid {
 				continue
 			}
 
 			// В этом случае объект создан в закоммиченной транзакции и удален позже, чем мы тут читаем
-			fallthrough
-		case 0:
-			// В этом случае объект создан в закоммиченной транзакции и еще не был удален
 			res = append(res, list[i])
 			continue
-		default:
-			// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
-			if comm, err = t.isCommitted(lc, r, row.XMax); err != nil {
-				return
-			}
-			if !comm {
-				res = append(res, list[i])
-				continue
-			}
+		}
+
+		// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
+		if comm, err = t.isCommitted(lc, r, row.XMaxBytes()); err != nil {
+			return
+		}
+
+		if !comm {
+			res = append(res, list[i])
+			continue
 		}
 	}
 
@@ -927,20 +932,20 @@ func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handle
 			}
 		}
 
-		// В модели состояния поля указаны как required
-		// Обновление должно произойти 100%, если только это не косяк модели или баг библиотеки
-		if state := row.State(nil); !(state.MutateXMax(t.txid) && state.MutateCMax(opid)) {
-			return ErrDelete.WithStack()
-		}
+		buf = fdbx.FlatPack(&models.RowT{
+			XMin: row.XMinBytes(),
+			XMax: t.txid,
+			CMin: row.CMin(),
+			CMax: opid,
+			Data: row.DataBytes(),
+		})
 	} else {
 		// По идее сюда никогда не должны попасть, но на всякий случай - элемент автовосстановления стабильности
 		buf = fdbx.FlatPack(&models.RowT{
-			State: &models.RowStateT{
-				XMin: t.txid,
-				XMax: t.txid,
-				CMin: 0,
-				CMax: opid,
-			},
+			XMin: t.txid,
+			XMax: t.txid,
+			CMin: 0,
+			CMax: opid,
 			Data: nil,
 		})
 	}
@@ -997,8 +1002,7 @@ func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) (_ fdbx.Key, err error) {
 	var ok bool
 	var val []byte
-	var buf models.RowState
-	var row models.RowStateT
+	var row *models.Row
 
 	list := lg.Resolve()
 
@@ -1023,7 +1027,7 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 					val = nil
 				}
 			}()
-			models.GetRootAsRow(val, 0).State(&buf).UnPackTo(&row)
+			row = models.GetRootAsRow(val, 0)
 		}()
 
 		if len(val) == 0 {
@@ -1031,14 +1035,14 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 		}
 
 		// Частный случай - если запись создана в рамках текущей транзакции
-		if row.XMin == t.txid {
+		if bytes.Equal(row.XMinBytes(), t.txid) {
 			// Хотя в ряде случаев запись уже можно удалять, но для упрощения логики не будем.
 			// К тому же, это будет транзакция очистки, вряд ли мы вообще сюда когда-то попадем
 			continue
 		}
 
 		// Проверяем статус транзакции, которая создала запись
-		if ok, err = t.isAborted(lc, w, row.XMin); err != nil {
+		if ok, err = t.isAborted(lc, w, row.XMinBytes()); err != nil {
 			return
 		}
 
@@ -1050,12 +1054,12 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 
 		// Если запись еще не удалена, то в любом случае не трогаем
 		// Если она удалена данной транзакцией, то для упрощения тоже пока не трогаем
-		if row.XMax == 0 || row.XMax == t.txid {
+		if row.XMaxLength() == 0 || bytes.Equal(row.XMaxBytes(), t.txid) {
 			continue
 		}
 
 		// Проверяем статус транзакции, которая создала запись
-		if ok, err = t.isCommitted(lc, w, row.XMax); err != nil {
+		if ok, err = t.isCommitted(lc, w, row.XMaxBytes()); err != nil {
 			return
 		}
 

@@ -17,15 +17,15 @@ func (t *ValueT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	if t == nil {
 		return 0
 	}
-	DataOffset := flatbuffers.UOffsetT(0)
+	dataOffset := flatbuffers.UOffsetT(0)
 	if t.Data != nil {
-		DataOffset = builder.CreateByteString(t.Data)
+		dataOffset = builder.CreateByteString(t.Data)
 	}
 	ValueStart(builder)
 	ValueAddBlob(builder, t.Blob)
 	ValueAddSize(builder, t.Size)
 	ValueAddHash(builder, t.Hash)
-	ValueAddData(builder, DataOffset)
+	ValueAddData(builder, dataOffset)
 	return ValueEnd(builder)
 }
 
@@ -138,17 +138,17 @@ func (rcv *Value) MutateData(j int, n byte) bool {
 func ValueStart(builder *flatbuffers.Builder) {
 	builder.StartObject(4)
 }
-func ValueAddBlob(builder *flatbuffers.Builder, Blob bool) {
-	builder.PrependBoolSlot(0, Blob, false)
+func ValueAddBlob(builder *flatbuffers.Builder, blob bool) {
+	builder.PrependBoolSlot(0, blob, false)
 }
-func ValueAddSize(builder *flatbuffers.Builder, Size uint32) {
-	builder.PrependUint32Slot(1, Size, 0)
+func ValueAddSize(builder *flatbuffers.Builder, size uint32) {
+	builder.PrependUint32Slot(1, size, 0)
 }
-func ValueAddHash(builder *flatbuffers.Builder, Hash uint64) {
-	builder.PrependUint64Slot(2, Hash, 0)
+func ValueAddHash(builder *flatbuffers.Builder, hash uint64) {
+	builder.PrependUint64Slot(2, hash, 0)
 }
-func ValueAddData(builder *flatbuffers.Builder, Data flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(3, flatbuffers.UOffsetT(Data), 0)
+func ValueAddData(builder *flatbuffers.Builder, data flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(3, flatbuffers.UOffsetT(data), 0)
 }
 func ValueStartDataVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)

@@ -1,6 +1,6 @@
 .PHONY: fdbx db mvcc orm
 
-TESTARGS=-run . -timeout 60s -failfast -race -gcflags=all=-d=checkptr=0 -count=1 -cover
+TESTARGS=-run . -timeout 600s -failfast -race -gcflags=all=-d=checkptr=0 -count=30 -cover
 BENCHARGS=-bench . -benchtime=3s -benchmem
 
 all: test

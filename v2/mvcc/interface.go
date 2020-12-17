@@ -13,7 +13,19 @@ import (
 var TxCacheSize = 8000000
 
 // Begin - создание и старт новой транзакции
-func Begin(conn db.Connection) (Tx, error) { return newTx64(conn) }
+func Begin(dbc db.Connection) Tx { return newTx64(dbc) }
+
+// WithTx - выполнение метода в рамках транзакции
+func WithTx(dbc db.Connection, hdl TxHandler) (err error) {
+	tx := Begin(dbc)
+	defer tx.Cancel()
+
+	if err = hdl(tx); err != nil {
+		return
+	}
+
+	return tx.Commit()
+}
 
 // Tx - объект "логической" транзакции MVCC поверх "физической" транзакции FDB
 type Tx interface {
@@ -81,6 +93,9 @@ type Option func(*options)
 // Handler - обработчик события операции с записью
 type Handler func(Tx, fdbx.Pair) error
 
+// TxHandler - обработчик события операции с записью
+type TxHandler func(Tx) error
+
 // RowHandler - обработчик события операции с записью в рамках физической транзакции
 type RowHandler func(Tx, fdbx.Pair, db.Writer) error
 
@@ -98,7 +113,7 @@ func WrapKey(key fdbx.Key) fdbx.Key {
 // UnwrapKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
 func UnwrapKey(key fdbx.Key) fdbx.Key {
 	if key != nil {
-		return key.LSkip(1).RSkip(8)
+		return key.LSkip(1).RSkip(16)
 	}
 	return nil
 }

@@ -1,11 +1,12 @@
 package mvcc
 
 import (
-	"encoding/binary"
+	"math/rand"
+	"sync"
 	"time"
 
+	"github.com/oklog/ulid"
 	"github.com/shestakovda/fdbx/v2"
-	"github.com/sony/sonyflake"
 )
 
 // Переменные модуля, менять которые не рекомендуется
@@ -34,13 +35,12 @@ const (
 	txStatusCommitted byte = 3
 )
 
-func txKey(x uint64) fdbx.Key {
-	var txid [9]byte
-	txid[0] = nsTx
-	binary.BigEndian.PutUint64(txid[1:], x)
-	return fdbx.Bytes2Key(txid[:])
+func txKey(txid []byte) fdbx.Key {
+	return fdbx.Bytes2Key(txid).RPart(nsTx)
 }
 
-var sflake = sonyflake.NewSonyflake(sonyflake.Settings{
-	StartTime: time.Now(),
-})
+var entropy = sync.Pool{
+	New: func() interface{} {
+		return ulid.Monotonic(rand.New(rand.NewSource(time.Now().UnixNano())), 0)
+	},
+}

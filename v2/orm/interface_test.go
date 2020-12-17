@@ -46,8 +46,7 @@ func (s *ORMSuite) SetupTest() {
 	s.Require().NoError(err)
 	s.Require().NoError(s.cn.Clear())
 
-	s.tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	s.tx = mvcc.Begin(s.cn)
 
 	s.idx = make([]string, 0, 8)
 	s.tbl = orm.NewTable(
@@ -226,21 +225,18 @@ func (s *ORMSuite) TestUndo() {
 	s.Require().NoError(s.tx.Commit())
 
 	// Публикация задач по очереди (и нарочно одну и ту же несколько раз)
-	tx, err := mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx := mvcc.Begin(s.cn)
 	s.Require().NoError(q.PubList(tx, []fdbx.Key{id1, id1, id2, id2, id3}, orm.Delay(time.Millisecond)))
 	s.Require().NoError(tx.Commit())
 
 	// Теперь делаем отмену для пары задач
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx = mvcc.Begin(s.cn)
 	s.Require().NoError(q.Undo(tx, id1))
 	s.Require().NoError(q.Undo(tx, id3))
 	s.Require().NoError(tx.Commit())
 
 	// Проверяем стату
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx = mvcc.Begin(s.cn)
 
 	// Должно быть 2 потеряшки (которых мы отменили)
 	if wait, work, err := q.Stat(tx); s.NoError(err) {
@@ -303,19 +299,16 @@ func (s *ORMSuite) TestQueue() {
 	}()
 
 	// Публикация задачи, которой нет
-	tx, err := mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx := mvcc.Begin(s.cn)
 	s.Require().NoError(q.Pub(tx, id4, orm.Delay(5*time.Millisecond)))
 	s.Require().NoError(tx.Commit())
 
 	// Публикация задач по очереди (и нарочно одну и ту же два раза)
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx = mvcc.Begin(s.cn)
 	s.Require().NoError(q.PubList(tx, []fdbx.Key{id1, id2, id2}, orm.Delay(time.Millisecond)))
 	s.Require().NoError(tx.Commit())
 
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx = mvcc.Begin(s.cn)
 	s.Require().NoError(q.Pub(tx, id3, orm.Delay(time.Hour)))
 	s.Require().NoError(tx.Commit())
 
@@ -323,8 +316,7 @@ func (s *ORMSuite) TestQueue() {
 	wg.Wait()
 
 	// Проверяем стату
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx = mvcc.Begin(s.cn)
 
 	if lost, err := q.Lost(tx, 100); s.NoError(err) {
 		s.Len(lost, 2)
@@ -386,8 +378,7 @@ func (s *ORMSuite) TestQueue() {
 	s.Require().NoError(tx.Commit())
 
 	// Удаляем строки, чтобы автовакуум их собрал
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx = mvcc.Begin(s.cn)
 	s.Require().NoError(s.tbl.Select(tx).Delete())
 	s.Require().NoError(tx.Commit())
 
@@ -454,8 +445,7 @@ func (s *ORMSuite) TestMultiIndex() {
 	))
 	s.Require().NoError(s.tx.Commit())
 
-	tx, err := mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx := mvcc.Begin(s.cn)
 	defer tx.Cancel()
 
 	query := s.tbl.Select(tx).ByIndex(TestIndex2, fdbx.String2Key("ss"))
@@ -484,14 +474,12 @@ func (s *ORMSuite) TestSubList() {
 	q := orm.NewQueue(TestQueue, s.tbl, orm.Refresh(10*time.Millisecond), orm.Prefix([]byte("lox")))
 
 	// Публикация задач по очереди (и нарочно одну и ту же несколько раз)
-	tx, err := mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx := mvcc.Begin(s.cn)
 	s.Require().NoError(q.PubList(tx, []fdbx.Key{id1, id1, id2, id2, id3}, orm.Delay(time.Millisecond)))
 	s.Require().NoError(tx.Commit())
 
 	// Запрашиваем несколько задач, с ограничением
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx = mvcc.Begin(s.cn)
 
 	// На все про все даем пару секунд, этого более, чем достаточно
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -544,8 +532,7 @@ func (s *ORMSuite) TestCursor() {
 
 	// Проверка курсора по индексу прямо
 
-	tx, err := mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx := mvcc.Begin(s.cn)
 
 	query := s.tbl.Select(tx).ByIndex(TestIndex, fdbx.String2Key("msg"))
 
@@ -561,8 +548,7 @@ func (s *ORMSuite) TestCursor() {
 	s.Require().NoError(err)
 	s.Require().NoError(tx.Commit())
 
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx = mvcc.Begin(s.cn)
 
 	query, err = s.tbl.Cursor(tx, qid)
 	s.Require().NoError(err)
@@ -591,8 +577,7 @@ func (s *ORMSuite) TestCursor() {
 	s.Require().NoError(err)
 	s.Require().NoError(tx.Commit())
 
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx = mvcc.Begin(s.cn)
 
 	query, err = s.tbl.Cursor(tx, qid)
 	s.Require().NoError(err)
@@ -607,8 +592,7 @@ func (s *ORMSuite) TestCursor() {
 
 	// Проверка курсора по коллекции прямо
 
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx = mvcc.Begin(s.cn)
 
 	query = s.tbl.Select(tx)
 
@@ -624,8 +608,7 @@ func (s *ORMSuite) TestCursor() {
 	s.Require().NoError(err)
 	s.Require().NoError(tx.Commit())
 
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx = mvcc.Begin(s.cn)
 
 	query, err = s.tbl.Cursor(tx, qid)
 	s.Require().NoError(err)
@@ -653,8 +636,7 @@ func (s *ORMSuite) TestCursor() {
 	s.Require().NoError(err)
 	s.Require().NoError(tx.Commit())
 
-	tx, err = mvcc.Begin(s.cn)
-	s.Require().NoError(err)
+	tx = mvcc.Begin(s.cn)
 
 	query, err = s.tbl.Cursor(tx, qid)
 	s.Require().NoError(err)
@@ -676,8 +658,7 @@ func BenchmarkUpsert(b *testing.B) {
 	require.NoError(b, err)
 	require.NoError(b, cn.Clear())
 
-	tx, err := mvcc.Begin(cn)
-	require.NoError(b, err)
+	tx := mvcc.Begin(cn)
 	defer tx.Cancel()
 
 	tbl := orm.NewTable(TestTable)
@@ -696,8 +677,7 @@ func BenchmarkUpsertBatch(b *testing.B) {
 	require.NoError(b, err)
 	require.NoError(b, cn.Clear())
 
-	tx, err := mvcc.Begin(cn)
-	require.NoError(b, err)
+	tx := mvcc.Begin(cn)
 	defer tx.Cancel()
 
 	tbl := orm.NewTable(TestTable)
@@ -729,8 +709,7 @@ func BenchmarkCount(b *testing.B) {
 	require.NoError(b, err)
 	require.NoError(b, cn.Clear())
 
-	tx, err := mvcc.Begin(cn)
-	require.NoError(b, err)
+	tx := mvcc.Begin(cn)
 
 	tbl := orm.NewTable(TestTable)
 
@@ -745,8 +724,7 @@ func BenchmarkCount(b *testing.B) {
 
 	require.NoError(b, tx.Commit())
 
-	tx, err = mvcc.Begin(cn)
-	require.NoError(b, err)
+	tx = mvcc.Begin(cn)
 	defer tx.Cancel()
 
 	b.ResetTimer()

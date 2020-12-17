@@ -229,39 +229,37 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 	}
 }
 
-func (t *v1Table) Vacuum(cn db.Connection) (err error) {
-	var tx mvcc.Tx
+func (t *v1Table) Vacuum(dbc db.Connection) error {
+	if exp := mvcc.WithTx(dbc, func(tx mvcc.Tx) (err error) {
+		// Этот запрос очищает только данные. Для них должен быть обработчик очистки BLOB
+		if err = tx.Vacuum(WrapTableKey(t.id, nil), mvcc.OnVacuum(t.onVacuum)); err != nil {
+			return
+		}
 
-	if tx, err = mvcc.Begin(cn); err != nil {
-		return ErrVacuum.WithReason(err)
+		// Отдельно очистка всех индексов
+		if err = tx.Vacuum(WrapIndexKey(t.id, 0, nil).RSkip(2)); err != nil {
+			return
+		}
+
+		// Отдельно очистка всех очередей
+		if err = tx.Vacuum(WrapQueueKey(t.id, 0, nil, 0, nil).RSkip(3)); err != nil {
+			return
+		}
+
+		// Отдельно очистка всех блобов
+		if err = tx.Vacuum(WrapBlobKey(t.id, nil)); err != nil {
+			return
+		}
+
+		// Отдельно очистка всех курсоров
+		if err = tx.Vacuum(WrapQueryKey(t.id, nil)); err != nil {
+			return
+		}
+
+		return nil
+	}); exp != nil {
+		return ErrVacuum.WithReason(exp)
 	}
-	defer tx.Cancel()
-
-	// Этот запрос очищает только данные. Для них должен быть обработчик очистки BLOB
-	if err = tx.Vacuum(WrapTableKey(t.id, nil), mvcc.OnVacuum(t.onVacuum)); err != nil {
-		return ErrVacuum.WithReason(err)
-	}
-
-	// Отдельно очистка всех индексов
-	if err = tx.Vacuum(WrapIndexKey(t.id, 0, nil).RSkip(2)); err != nil {
-		return ErrVacuum.WithReason(err)
-	}
-
-	// Отдельно очистка всех очередей
-	if err = tx.Vacuum(WrapQueueKey(t.id, 0, nil, 0, nil).RSkip(3)); err != nil {
-		return ErrVacuum.WithReason(err)
-	}
-
-	// Отдельно очистка всех блобов
-	if err = tx.Vacuum(WrapBlobKey(t.id, nil)); err != nil {
-		return ErrVacuum.WithReason(err)
-	}
-
-	// Отдельно очистка всех курсоров
-	if err = tx.Vacuum(WrapQueryKey(t.id, nil)); err != nil {
-		return ErrVacuum.WithReason(err)
-	}
-
 	return nil
 }
 
