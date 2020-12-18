@@ -7,15 +7,13 @@ import (
 )
 
 func newUsrPair(tx mvcc.Tx, tbid uint16, orig fdbx.Pair) (_ fdbx.Pair, err error) {
-	var mod models.ValueT
-
 	val := orig.Value()
 
 	if len(val) == 0 {
 		return nil, ErrValUnpack.WithStack()
 	}
 
-	models.GetRootAsValue(val, 0).UnPackTo(&mod)
+	mod := models.GetRootAsValue(val, 0).UnPack()
 
 	// Если значение лежит в BLOB, надо достать
 	if mod.Blob {

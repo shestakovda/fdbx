@@ -8,7 +8,6 @@ require (
 	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b
 	github.com/google/flatbuffers v1.12.0
 	github.com/kr/text v0.2.0 // indirect
-	github.com/oklog/ulid v1.3.1
 	github.com/shestakovda/errx v1.2.0
 	github.com/shestakovda/typex v1.0.0
 	github.com/stretchr/testify v1.6.1

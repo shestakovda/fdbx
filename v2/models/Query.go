@@ -6,7 +6,7 @@ import (
 	flatbuffers "github.com/google/flatbuffers/go"
 )
 
-type CursorT struct {
+type QueryT struct {
 	Size    uint32
 	Page    uint32
 	Limit   uint32
@@ -18,7 +18,7 @@ type CursorT struct {
 	QueryID []byte
 }
 
-func (t *CursorT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+func (t *QueryT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	if t == nil {
 		return 0
 	}
@@ -38,20 +38,20 @@ func (t *CursorT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	if t.QueryID != nil {
 		queryIDOffset = builder.CreateByteString(t.QueryID)
 	}
-	CursorStart(builder)
-	CursorAddSize(builder, t.Size)
-	CursorAddPage(builder, t.Page)
-	CursorAddLimit(builder, t.Limit)
-	CursorAddReverse(builder, t.Reverse)
-	CursorAddIdxType(builder, t.IdxType)
-	CursorAddLastKey(builder, lastKeyOffset)
-	CursorAddIdxFrom(builder, idxFromOffset)
-	CursorAddIdxLast(builder, idxLastOffset)
-	CursorAddQueryID(builder, queryIDOffset)
-	return CursorEnd(builder)
+	QueryStart(builder)
+	QueryAddSize(builder, t.Size)
+	QueryAddPage(builder, t.Page)
+	QueryAddLimit(builder, t.Limit)
+	QueryAddReverse(builder, t.Reverse)
+	QueryAddIdxType(builder, t.IdxType)
+	QueryAddLastKey(builder, lastKeyOffset)
+	QueryAddIdxFrom(builder, idxFromOffset)
+	QueryAddIdxLast(builder, idxLastOffset)
+	QueryAddQueryID(builder, queryIDOffset)
+	return QueryEnd(builder)
 }
 
-func (rcv *Cursor) UnPackTo(t *CursorT) {
+func (rcv *Query) UnPackTo(t *QueryT) {
 	t.Size = rcv.Size()
 	t.Page = rcv.Page()
 	t.Limit = rcv.Limit()
@@ -63,36 +63,36 @@ func (rcv *Cursor) UnPackTo(t *CursorT) {
 	t.QueryID = rcv.QueryIDBytes()
 }
 
-func (rcv *Cursor) UnPack() *CursorT {
+func (rcv *Query) UnPack() *QueryT {
 	if rcv == nil {
 		return nil
 	}
-	t := &CursorT{}
+	t := &QueryT{}
 	rcv.UnPackTo(t)
 	return t
 }
 
-type Cursor struct {
+type Query struct {
 	_tab flatbuffers.Table
 }
 
-func GetRootAsCursor(buf []byte, offset flatbuffers.UOffsetT) *Cursor {
+func GetRootAsQuery(buf []byte, offset flatbuffers.UOffsetT) *Query {
 	n := flatbuffers.GetUOffsetT(buf[offset:])
-	x := &Cursor{}
+	x := &Query{}
 	x.Init(buf, n+offset)
 	return x
 }
 
-func (rcv *Cursor) Init(buf []byte, i flatbuffers.UOffsetT) {
+func (rcv *Query) Init(buf []byte, i flatbuffers.UOffsetT) {
 	rcv._tab.Bytes = buf
 	rcv._tab.Pos = i
 }
 
-func (rcv *Cursor) Table() flatbuffers.Table {
+func (rcv *Query) Table() flatbuffers.Table {
 	return rcv._tab
 }
 
-func (rcv *Cursor) Size() uint32 {
+func (rcv *Query) Size() uint32 {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(4))
 	if o != 0 {
 		return rcv._tab.GetUint32(o + rcv._tab.Pos)
@@ -100,11 +100,11 @@ func (rcv *Cursor) Size() uint32 {
 	return 0
 }
 
-func (rcv *Cursor) MutateSize(n uint32) bool {
+func (rcv *Query) MutateSize(n uint32) bool {
 	return rcv._tab.MutateUint32Slot(4, n)
 }
 
-func (rcv *Cursor) Page() uint32 {
+func (rcv *Query) Page() uint32 {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
 	if o != 0 {
 		return rcv._tab.GetUint32(o + rcv._tab.Pos)
@@ -112,11 +112,11 @@ func (rcv *Cursor) Page() uint32 {
 	return 0
 }
 
-func (rcv *Cursor) MutatePage(n uint32) bool {
+func (rcv *Query) MutatePage(n uint32) bool {
 	return rcv._tab.MutateUint32Slot(6, n)
 }
 
-func (rcv *Cursor) Limit() uint32 {
+func (rcv *Query) Limit() uint32 {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
 	if o != 0 {
 		return rcv._tab.GetUint32(o + rcv._tab.Pos)
@@ -124,11 +124,11 @@ func (rcv *Cursor) Limit() uint32 {
 	return 0
 }
 
-func (rcv *Cursor) MutateLimit(n uint32) bool {
+func (rcv *Query) MutateLimit(n uint32) bool {
 	return rcv._tab.MutateUint32Slot(8, n)
 }
 
-func (rcv *Cursor) Reverse() bool {
+func (rcv *Query) Reverse() bool {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
 	if o != 0 {
 		return rcv._tab.GetBool(o + rcv._tab.Pos)
@@ -136,11 +136,11 @@ func (rcv *Cursor) Reverse() bool {
 	return false
 }
 
-func (rcv *Cursor) MutateReverse(n bool) bool {
+func (rcv *Query) MutateReverse(n bool) bool {
 	return rcv._tab.MutateBoolSlot(10, n)
 }
 
-func (rcv *Cursor) IdxType() uint16 {
+func (rcv *Query) IdxType() uint16 {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
 	if o != 0 {
 		return rcv._tab.GetUint16(o + rcv._tab.Pos)
@@ -148,11 +148,11 @@ func (rcv *Cursor) IdxType() uint16 {
 	return 0
 }
 
-func (rcv *Cursor) MutateIdxType(n uint16) bool {
+func (rcv *Query) MutateIdxType(n uint16) bool {
 	return rcv._tab.MutateUint16Slot(12, n)
 }
 
-func (rcv *Cursor) LastKey(j int) byte {
+func (rcv *Query) LastKey(j int) byte {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
@@ -161,7 +161,7 @@ func (rcv *Cursor) LastKey(j int) byte {
 	return 0
 }
 
-func (rcv *Cursor) LastKeyLength() int {
+func (rcv *Query) LastKeyLength() int {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
 	if o != 0 {
 		return rcv._tab.VectorLen(o)
@@ -169,7 +169,7 @@ func (rcv *Cursor) LastKeyLength() int {
 	return 0
 }
 
-func (rcv *Cursor) LastKeyBytes() []byte {
+func (rcv *Query) LastKeyBytes() []byte {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
 	if o != 0 {
 		return rcv._tab.ByteVector(o + rcv._tab.Pos)
@@ -177,7 +177,7 @@ func (rcv *Cursor) LastKeyBytes() []byte {
 	return nil
 }
 
-func (rcv *Cursor) MutateLastKey(j int, n byte) bool {
+func (rcv *Query) MutateLastKey(j int, n byte) bool {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
@@ -186,7 +186,7 @@ func (rcv *Cursor) MutateLastKey(j int, n byte) bool {
 	return false
 }
 
-func (rcv *Cursor) IdxFrom(j int) byte {
+func (rcv *Query) IdxFrom(j int) byte {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
@@ -195,7 +195,7 @@ func (rcv *Cursor) IdxFrom(j int) byte {
 	return 0
 }
 
-func (rcv *Cursor) IdxFromLength() int {
+func (rcv *Query) IdxFromLength() int {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
 	if o != 0 {
 		return rcv._tab.VectorLen(o)
@@ -203,7 +203,7 @@ func (rcv *Cursor) IdxFromLength() int {
 	return 0
 }
 
-func (rcv *Cursor) IdxFromBytes() []byte {
+func (rcv *Query) IdxFromBytes() []byte {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
 	if o != 0 {
 		return rcv._tab.ByteVector(o + rcv._tab.Pos)
@@ -211,7 +211,7 @@ func (rcv *Cursor) IdxFromBytes() []byte {
 	return nil
 }
 
-func (rcv *Cursor) MutateIdxFrom(j int, n byte) bool {
+func (rcv *Query) MutateIdxFrom(j int, n byte) bool {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
@@ -220,7 +220,7 @@ func (rcv *Cursor) MutateIdxFrom(j int, n byte) bool {
 	return false
 }
 
-func (rcv *Cursor) IdxLast(j int) byte {
+func (rcv *Query) IdxLast(j int) byte {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(18))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
@@ -229,7 +229,7 @@ func (rcv *Cursor) IdxLast(j int) byte {
 	return 0
 }
 
-func (rcv *Cursor) IdxLastLength() int {
+func (rcv *Query) IdxLastLength() int {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(18))
 	if o != 0 {
 		return rcv._tab.VectorLen(o)
@@ -237,7 +237,7 @@ func (rcv *Cursor) IdxLastLength() int {
 	return 0
 }
 
-func (rcv *Cursor) IdxLastBytes() []byte {
+func (rcv *Query) IdxLastBytes() []byte {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(18))
 	if o != 0 {
 		return rcv._tab.ByteVector(o + rcv._tab.Pos)
@@ -245,7 +245,7 @@ func (rcv *Cursor) IdxLastBytes() []byte {
 	return nil
 }
 
-func (rcv *Cursor) MutateIdxLast(j int, n byte) bool {
+func (rcv *Query) MutateIdxLast(j int, n byte) bool {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(18))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
@@ -254,7 +254,7 @@ func (rcv *Cursor) MutateIdxLast(j int, n byte) bool {
 	return false
 }
 
-func (rcv *Cursor) QueryID(j int) byte {
+func (rcv *Query) QueryID(j int) byte {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(20))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
@@ -263,7 +263,7 @@ func (rcv *Cursor) QueryID(j int) byte {
 	return 0
 }
 
-func (rcv *Cursor) QueryIDLength() int {
+func (rcv *Query) QueryIDLength() int {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(20))
 	if o != 0 {
 		return rcv._tab.VectorLen(o)
@@ -271,7 +271,7 @@ func (rcv *Cursor) QueryIDLength() int {
 	return 0
 }
 
-func (rcv *Cursor) QueryIDBytes() []byte {
+func (rcv *Query) QueryIDBytes() []byte {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(20))
 	if o != 0 {
 		return rcv._tab.ByteVector(o + rcv._tab.Pos)
@@ -279,7 +279,7 @@ func (rcv *Cursor) QueryIDBytes() []byte {
 	return nil
 }
 
-func (rcv *Cursor) MutateQueryID(j int, n byte) bool {
+func (rcv *Query) MutateQueryID(j int, n byte) bool {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(20))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
@@ -288,48 +288,48 @@ func (rcv *Cursor) MutateQueryID(j int, n byte) bool {
 	return false
 }
 
-func CursorStart(builder *flatbuffers.Builder) {
+func QueryStart(builder *flatbuffers.Builder) {
 	builder.StartObject(9)
 }
-func CursorAddSize(builder *flatbuffers.Builder, size uint32) {
+func QueryAddSize(builder *flatbuffers.Builder, size uint32) {
 	builder.PrependUint32Slot(0, size, 0)
 }
-func CursorAddPage(builder *flatbuffers.Builder, page uint32) {
+func QueryAddPage(builder *flatbuffers.Builder, page uint32) {
 	builder.PrependUint32Slot(1, page, 0)
 }
-func CursorAddLimit(builder *flatbuffers.Builder, limit uint32) {
+func QueryAddLimit(builder *flatbuffers.Builder, limit uint32) {
 	builder.PrependUint32Slot(2, limit, 0)
 }
-func CursorAddReverse(builder *flatbuffers.Builder, reverse bool) {
+func QueryAddReverse(builder *flatbuffers.Builder, reverse bool) {
 	builder.PrependBoolSlot(3, reverse, false)
 }
-func CursorAddIdxType(builder *flatbuffers.Builder, idxType uint16) {
+func QueryAddIdxType(builder *flatbuffers.Builder, idxType uint16) {
 	builder.PrependUint16Slot(4, idxType, 0)
 }
-func CursorAddLastKey(builder *flatbuffers.Builder, lastKey flatbuffers.UOffsetT) {
+func QueryAddLastKey(builder *flatbuffers.Builder, lastKey flatbuffers.UOffsetT) {
 	builder.PrependUOffsetTSlot(5, flatbuffers.UOffsetT(lastKey), 0)
 }
-func CursorStartLastKeyVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+func QueryStartLastKeyVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
 }
-func CursorAddIdxFrom(builder *flatbuffers.Builder, idxFrom flatbuffers.UOffsetT) {
+func QueryAddIdxFrom(builder *flatbuffers.Builder, idxFrom flatbuffers.UOffsetT) {
 	builder.PrependUOffsetTSlot(6, flatbuffers.UOffsetT(idxFrom), 0)
 }
-func CursorStartIdxFromVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+func QueryStartIdxFromVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
 }
-func CursorAddIdxLast(builder *flatbuffers.Builder, idxLast flatbuffers.UOffsetT) {
+func QueryAddIdxLast(builder *flatbuffers.Builder, idxLast flatbuffers.UOffsetT) {
 	builder.PrependUOffsetTSlot(7, flatbuffers.UOffsetT(idxLast), 0)
 }
-func CursorStartIdxLastVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+func QueryStartIdxLastVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
 }
-func CursorAddQueryID(builder *flatbuffers.Builder, queryID flatbuffers.UOffsetT) {
+func QueryAddQueryID(builder *flatbuffers.Builder, queryID flatbuffers.UOffsetT) {
 	builder.PrependUOffsetTSlot(8, flatbuffers.UOffsetT(queryID), 0)
 }
-func CursorStartQueryIDVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+func QueryStartQueryIDVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
 }
-func CursorEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
+func QueryEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	return builder.EndObject()
 }

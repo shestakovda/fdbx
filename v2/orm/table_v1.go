@@ -67,67 +67,56 @@ func (t *v1Table) upsert(tx mvcc.Tx, ins bool, pairs ...fdbx.Pair) (err error) {
 		}
 	}
 
-	opts := []mvcc.Option{
-		mvcc.OnUpdate(t.onUpdate),
-		mvcc.OnDelete(t.onDelete),
-	}
-
-	if ins {
-		opts = append(opts, mvcc.OnInsert(t.onInsert))
-	}
-
-	if err = tx.Upsert(cp, opts...); err != nil {
+	if err = tx.Upsert(cp, mvcc.OnUpdate(t.onUpdate(ins)), mvcc.OnDelete(t.onDelete)); err != nil {
 		return ErrUpsert.WithReason(err)
 	}
 
 	return nil
 }
 
-func (t *v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
-	if len(pair.Value()) > 0 {
-		return ErrDuplicate.WithDebug(errx.Debug{
-			"key": pair.Key().Printable(),
-		})
-	}
-
-	return nil
-}
-
-func (t *v1Table) onUpdate(tx mvcc.Tx, pair fdbx.Pair) (err error) {
-
-	if len(t.options.batchidx) == 0 {
-		return nil
-	}
-
-	pval := pair.Value()
-	pkey := pair.Key().Bytes()
-	rows := make([]fdbx.Pair, 0, 32)
-	var dict map[uint16][]fdbx.Key
-
-	for k := range t.options.batchidx {
-		if dict, err = t.options.batchidx[k](pval); err != nil {
-			return
+func (t *v1Table) onUpdate(unique bool) mvcc.UpdateHandler {
+	return func(tx mvcc.Tx, pair fdbx.Pair, upd bool) (err error) {
+		if unique && upd {
+			return ErrDuplicate.WithDebug(errx.Debug{
+				"key": pair.Key().Printable(),
+			})
 		}
 
-		if len(dict) == 0 {
-			continue
+		if len(t.options.batchidx) == 0 {
+			return nil
 		}
 
-		for idx, keys := range dict {
-			for i := range keys {
-				if keys[i] == nil || len(keys[i].Bytes()) == 0 {
-					continue
+		pair = pair.Unwrap()
+		pval := pair.Value()
+		pkey := pair.Key().Bytes()
+		rows := make([]fdbx.Pair, 0, 32)
+		var dict map[uint16][]fdbx.Key
+
+		for k := range t.options.batchidx {
+			if dict, err = t.options.batchidx[k](pval); err != nil {
+				return
+			}
+
+			if len(dict) == 0 {
+				continue
+			}
+
+			for idx, keys := range dict {
+				for i := range keys {
+					if keys[i] == nil || len(keys[i].Bytes()) == 0 {
+						continue
+					}
+					rows = append(rows, fdbx.NewPair(WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...), pkey))
 				}
-				rows = append(rows, fdbx.NewPair(WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...), pkey))
 			}
 		}
-	}
 
-	if err = tx.Upsert(rows); err != nil {
-		return ErrIdxUpsert.WithReason(err)
-	}
+		if err = tx.Upsert(rows); err != nil {
+			return ErrIdxUpsert.WithReason(err)
+		}
 
-	return nil
+		return nil
+	}
 }
 
 func (t *v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {

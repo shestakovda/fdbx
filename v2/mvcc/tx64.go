@@ -3,12 +3,12 @@ package mvcc
 import (
 	"bytes"
 	"context"
-	"io"
+	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/oklog/ulid"
+	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -29,14 +29,10 @@ import (
 	* Не создать ни одного конфликта записи/чтения между параллельно стартующими транзакциями
 */
 func newTx64(conn db.Connection) *tx64 {
-	now := time.Now().UTC()
-	etp := entropy.Get().(io.Reader)
-	defer entropy.Put(etp)
-	uid := ulid.MustNew(ulid.Timestamp(now), etp)
 	return &tx64{
 		conn:   conn,
-		txid:   uid[:],
-		start:  now.UnixNano(),
+		txid:   newTxID(),
+		start:  time.Now().UTC().UnixNano(),
 		status: txStatusRunning,
 	}
 }
@@ -108,7 +104,7 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
 	hdlr := func(w db.Writer) (exp error) {
-		var row fdbx.Pair
+		var rows []fdbx.Pair
 
 		lc := makeCache()
 		lg := make([]fdbx.ListGetter, len(keys))
@@ -119,11 +115,11 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 		}
 
 		for i := range lg {
-			if row, exp = t.fetchRow(w, lc, opid, lg[i]); exp != nil {
+			if _, rows, exp = t.fetchRows(w, lc, opid, lg[i], true); exp != nil {
 				return
 			}
 
-			if exp = t.dropRow(w, opid, row, opts.onDelete); exp != nil {
+			if exp = t.dropRows(w, opid, rows, opts.onDelete); exp != nil {
 				return
 			}
 		}
@@ -159,7 +155,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
 	hdlr := func(w db.Writer) (exp error) {
-		var row fdbx.Pair
+		var rows []fdbx.Pair
 
 		lc := makeCache()
 		lg := make([]fdbx.ListGetter, len(pairs))
@@ -170,18 +166,18 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 		}
 
 		for i := range pairs {
-			if row, exp = t.fetchRow(w, lc, opid, lg[i]); exp != nil {
+			if _, rows, exp = t.fetchRows(w, lc, opid, lg[i], true); exp != nil {
 				return
 			}
 
-			if opts.onInsert != nil {
-				if exp = opts.onInsert(t, &usrPair{orig: row}); exp != nil {
+			if exp = t.dropRows(w, opid, rows, opts.onDelete); exp != nil {
+				return
+			}
+
+			if opts.onUpdate != nil {
+				if exp = opts.onUpdate(t, pairs[i], len(rows) > 0); exp != nil {
 					return
 				}
-			}
-
-			if exp = t.dropRow(w, opid, row, opts.onDelete); exp != nil {
-				return
 			}
 
 			w.Upsert(&sysPair{
@@ -189,12 +185,6 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 				txid: t.txid,
 				orig: pairs[i],
 			})
-
-			if opts.onUpdate != nil {
-				if exp = opts.onUpdate(t, pairs[i].Unwrap()); exp != nil {
-					return
-				}
-			}
 		}
 
 		return nil
@@ -223,7 +213,7 @@ func (t *tx64) Select(key fdbx.Key, args ...Option) (res fdbx.Pair, err error) {
 	hdlr := func(r db.Reader) (exp error) {
 		var ok bool
 		var w db.Writer
-		var row fdbx.Pair
+		var rows []fdbx.Pair
 
 		if opts.lock {
 			// Блокировка не означает модификаций, поэтому mods не увеличиваем
@@ -232,18 +222,27 @@ func (t *tx64) Select(key fdbx.Key, args ...Option) (res fdbx.Pair, err error) {
 			}
 		}
 
-		if row, exp = t.fetchRow(r, nil, opid, r.List(ukey, ukey, 0, true, false)); exp != nil {
+		lc := makeCache()
+		lg := r.List(ukey, ukey, 0, true, false)
+
+		if _, rows, exp = t.fetchRows(r, lc, opid, lg, false); exp != nil {
 			return
 		}
 
-		if row == nil {
+		if len(rows) == 0 {
 			return ErrNotFound.WithDebug(errx.Debug{
 				"key": key.Printable(),
 			})
 		}
 
+		if len(rows) > 1 {
+			return ErrDuplicate.WithDebug(errx.Debug{
+				"key": key.Printable(),
+			})
+		}
+
 		res = &usrPair{
-			orig: row,
+			orig: rows[0],
 		}
 
 		if opts.onLock != nil {
@@ -337,15 +336,16 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 		size := 0
 		rows := 0
 		skip := false
+		lcch := makeCache()
 		opts := getOpts(args)
 		from := WrapKey(opts.from)
 		last := WrapKey(opts.last)
 		opid := atomic.AddUint32(&t.opid, 1)
 		hdlr := func(r db.Reader) (exp error) {
 			if opts.reverse {
-				rows, part, last, exp = t.selectPart(r, from, last, size, skip, opid, &opts)
+				rows, part, last, exp = t.selectPart(r, lcch, from, last, size, skip, opid, &opts)
 			} else {
-				rows, part, from, exp = t.selectPart(r, from, last, size, skip, opid, &opts)
+				rows, part, from, exp = t.selectPart(r, lcch, from, last, size, skip, opid, &opts)
 			}
 			return exp
 		}
@@ -395,6 +395,7 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 
 func (t *tx64) selectPart(
 	r db.Reader,
+	lc *txCache,
 	from, to fdbx.Key,
 	size int,
 	skip bool,
@@ -406,7 +407,7 @@ func (t *tx64) selectPart(
 
 	lg := r.List(from, to, uint64(MaxRowCount), opts.reverse, skip)
 
-	if rows, part, err = t.fetchAll(r, nil, opid, lg); err != nil {
+	if rows, part, err = t.fetchRows(r, lc, opid, lg, false); err != nil {
 		return
 	}
 
@@ -617,9 +618,7 @@ func (t *tx64) isAborted(local *txCache, r db.Reader, txid []byte) (_ bool, err 
 }
 
 func (t *tx64) txStatus(local *txCache, r db.Reader, txid []byte) (status byte, err error) {
-	var uid ulid.ULID
-
-	copy(uid[:], txid)
+	uid := string(txid)
 
 	// Дешевле всего чекнуть в глобальном кеше, вдруг уже знаем такую
 	if status = globCache.get(uid); status != txStatusUnknown {
@@ -682,8 +681,7 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	}
 
 	// Получаем ключ транзакции и устанавливаем статус
-	var uid ulid.ULID
-	copy(uid[:], t.txid)
+	uid := string(t.txid)
 	mods := atomic.LoadUint32(&t.mods)
 	t.status = status
 
@@ -716,7 +714,7 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 }
 
 /*
-	fetchRow - выборка одного актуального в данной транзакции значения ключа.
+	isVisible - проверка актуального в данной транзакции значения ключа.
 
 	Каждый ключ для значения на самом деле хранится в нескольких версиях.
 	Их можно разделить на три группы: устаревшие, актуальные, незакоммиченные.
@@ -748,90 +746,98 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	сработает внутренний механизм конфликтов fdb, так что одновременно двух актуальных
 	версий не должно появиться. Один из обработчиков увидит изменения и изменит поведение.
 */
-func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGetter) (_ fdbx.Pair, err error) {
-	var comm bool
+func (t *tx64) isVisible(r db.Reader, lc *txCache, opid uint32, item fdbx.Pair, dirty bool) (ok bool, err error) {
+	var ptr [16]byte
+	var comm, fail bool
 
-	if lc == nil {
-		lc = makeCache()
-	}
-
-	// Загружаем список версий, существующих в рамках этой операции
-	list := lg.Resolve()
-
-	// Проверяем все версии, пока не получим актуальную
-	for i := range list {
-		val := list[i].Value()
-
-		if len(val) == 0 {
-			continue
+	// Нужна защита от паники, на случай левых или битых записей
+	defer func() {
+		if rec := recover(); rec != nil {
+			glog.Errorf("panic mvcc.tx64.dirtyRow: %+v", rec)
+			ok = false
+			err = nil
 		}
+	}()
 
-		row := models.GetRootAsRow(val, 0)
+	key := item.Key().Bytes()
+	copy(ptr[:], key[len(key)-16:len(key)])
+	cmin := binary.BigEndian.Uint32(ptr[8:12])
+	xmin := append(ptr[:8], ptr[12:16]...)
+	row := models.GetRootAsRow(item.Value(), 0).UnPack()
 
-		// Частный случай - если запись создана в рамках текущей транзакции
-		if bytes.Equal(row.XMinBytes(), t.txid) {
-
+	// Частный случай - если запись создана в рамках текущей транзакции
+	// то даже если запись создана позже, тут возвращаем, чтобы можно было выполнить
+	// "превентивное" удаление и чтобы не было никаких конфликтующих строк
+	// Поэтому проверять будем только сторонние транзакции
+	if bytes.Equal(xmin, t.txid) {
+		if !dirty {
 			// Если запись создана позже в рамках данной транзакции, то еще не видна
-			if row.CMin() >= opid {
-				continue
+			if cmin >= opid {
+				return false, nil
 			}
+		}
+	} else if dirty {
 
-			// Поскольку данная транзакция еще не закоммичена, то версия может быть
-			// Или удалена в этой же транзакции, или вообще не удалена (или 0, или t.txid)
-			// Если запись удалена в текущей транзакции и до этого момента, то уже не видна
-			if bytes.Equal(row.XMaxBytes(), t.txid) && row.CMax() < opid {
-				continue
-			}
-
-			// В этом случае объект создан в данной транзакции и еще не удален, можем прочитать
-			return list[i], nil
+		// Проверим, была ли отменена транзакция создания этой записи
+		if fail, err = t.isAborted(lc, r, xmin); err != nil {
+			return
 		}
 
-		if comm, err = t.isCommitted(lc, r, row.XMinBytes()); err != nil {
+		// Если запись отменена, то в любом случае она нас больше не инетересует
+		if fail {
+			return false, nil
+		}
+	} else {
+		// Проверим, была ли завершена транзакция создания этой записи
+		if comm, err = t.isCommitted(lc, r, xmin); err != nil {
 			return
 		}
 
 		// Если запись создана другой транзакцией и она еще не закоммичена, то еще не видна
 		if !comm {
-			continue
+			return false, nil
+		}
+	}
+
+	// В этом случае объект еще не был удален, значит виден
+	if len(row.Drop) == 0 {
+		return true, nil
+	}
+
+	// Эта запись уже была удалена этой или параллельной транзакцией
+	// Другая транзакция может удалить эту запись "превентивно", на случай конфликтов
+	for i := range row.Drop {
+		// Учитываем изменения, если запись удалена в текущей транзакции
+		if bytes.Equal(row.Drop[i].Tx, t.txid) {
+			// Если удалена до этого момента, то уже не видна
+			// Если "позже" в параллельном потоке - то еще можно читать
+			return row.Drop[i].Op > opid, nil
 		}
 
-		// В этом случае объект создан в закоммиченной транзакции и еще не был удален
-		if row.XMaxLength() == 0 {
-			return list[i], nil
-		}
-
-		// Проверяем, возможно запись уже была удалена
-		if bytes.Equal(row.XMaxBytes(), t.txid) {
-			// Если она была удалена до этого момента, то уже не видна
-			if row.CMax() < opid {
-				continue
-			}
-
-			// В этом случае объект создан в закоммиченной транзакции и удален позже, чем мы тут читаем
-			return list[i], nil
-		}
-
-		// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
-		if comm, err = t.isCommitted(lc, r, row.XMaxBytes()); err != nil {
+		// Проверим, была ли завершена транзакция удаления этой записи
+		if comm, err = t.isCommitted(lc, r, row.Drop[i].Tx); err != nil {
 			return
 		}
 
-		if !comm {
-			return list[i], nil
+		// Мы должны учитывать изменения, сделанные закоммиченными транзакциями
+		if comm {
+			return false, nil
 		}
 	}
 
-	return nil, nil
+	// Если не нашли "значимых" для нас удалений - значит запись еще видна
+	return true, nil
 }
 
-// Аналогично fetchRow, но все актуальные версии всех ключей по диапазону
-func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGetter) (cnt int, res []fdbx.Pair, err error) {
-	var comm bool
-
-	if lc == nil {
-		lc = makeCache()
-	}
+// fetchRows - все актуальные версии всех ключей по диапазону
+func (t *tx64) fetchRows(
+	r db.Reader,
+	lc *txCache,
+	opid uint32,
+	lg fdbx.ListGetter,
+	dirty bool,
+) (cnt int, res []fdbx.Pair, err error) {
+	var ok bool
 
 	list := lg.Resolve()
 	res = list[:0]
@@ -839,69 +845,12 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
-		val := list[i].Value()
-
-		if len(val) == 0 {
-			continue
-		}
-
-		row := models.GetRootAsRow(val, 0)
-
-		// Частный случай - если запись создана в рамках текущей транзакции
-		if bytes.Equal(row.XMinBytes(), t.txid) {
-
-			// Если запись создана позже в рамках данной транзакции, то еще не видна
-			if row.CMin() >= opid {
-				continue
-			}
-
-			// Поскольку данная транзакция еще не закоммичена, то версия может быть
-			// Или удалена в этой же транзакции, или вообще не удалена (или 0, или t.txid)
-			// Если запись удалена в текущей транзакции и до этого момента, то уже не видна
-			if bytes.Equal(row.XMaxBytes(), t.txid) && row.CMax() < opid {
-				continue
-			}
-
-			// В этом случае объект создан в данной транзакции и еще не удален, можем прочитать
-			res = append(res, list[i])
-			continue
-		}
-
-		if comm, err = t.isCommitted(lc, r, row.XMinBytes()); err != nil {
+		if ok, err = t.isVisible(r, lc, opid, list[i], dirty); err != nil {
 			return
 		}
 
-		// Если запись создана другой транзакцией и она еще не закоммичена, то еще не видна
-		if !comm {
-			continue
-		}
-
-		// В этом случае объект создан в закоммиченной транзакции и еще не был удален
-		if row.XMaxLength() == 0 {
+		if ok {
 			res = append(res, list[i])
-			continue
-		}
-
-		// Проверяем, возможно запись уже была удалена
-		if bytes.Equal(row.XMaxBytes(), t.txid) {
-			// Если она была удалена до этого момента, то уже не видна
-			if row.CMax() < opid {
-				continue
-			}
-
-			// В этом случае объект создан в закоммиченной транзакции и удален позже, чем мы тут читаем
-			res = append(res, list[i])
-			continue
-		}
-
-		// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
-		if comm, err = t.isCommitted(lc, r, row.XMaxBytes()); err != nil {
-			return
-		}
-
-		if !comm {
-			res = append(res, list[i])
-			continue
 		}
 	}
 
@@ -913,45 +862,45 @@ func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGette
 	return cnt, res, nil
 }
 
-func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handler) (err error) {
-	if pair == nil {
+func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdbx.Pair, onDelete DeleteHandler) (err error) {
+	var row *models.RowT
+
+	if len(pairs) == 0 {
 		return nil
 	}
 
 	atomic.AddUint32(&t.mods, 1)
 
-	buf := pair.Value()
+	for _, pair := range pairs {
 
-	if len(buf) > 0 {
-		row := models.GetRootAsRow(buf, 0)
+		if buf := pair.Value(); len(buf) > 0 {
+			row = models.GetRootAsRow(buf, 0).UnPack()
 
-		// Обработчик имеет возможность предотвратить удаление/обновление, выбросив ошибку
-		if onDelete != nil {
-			if err = onDelete(t, fdbx.NewPair(UnwrapKey(pair.Key()), row.DataBytes())); err != nil {
-				return ErrDelete.WithReason(err)
+			// Обработчик имеет возможность предотвратить удаление/обновление, выбросив ошибку
+			if onDelete != nil {
+				if err = onDelete(t, fdbx.NewPair(UnwrapKey(pair.Key()), row.Data)); err != nil {
+					return ErrDelete.WithReason(err)
+				}
+			}
+
+			row.Drop = append(row.Drop, &models.TxPtrT{
+				Tx: t.txid,
+				Op: opid,
+			})
+		} else {
+			// По идее сюда никогда не должны попасть, но на всякий случай - элемент автовосстановления стабильности
+			row = &models.RowT{
+				Drop: []*models.TxPtrT{{
+					Tx: t.txid,
+					Op: opid,
+				}},
+				Data: nil,
 			}
 		}
 
-		buf = fdbx.FlatPack(&models.RowT{
-			XMin: row.XMinBytes(),
-			XMax: t.txid,
-			CMin: row.CMin(),
-			CMax: opid,
-			Data: row.DataBytes(),
-		})
-	} else {
-		// По идее сюда никогда не должны попасть, но на всякий случай - элемент автовосстановления стабильности
-		buf = fdbx.FlatPack(&models.RowT{
-			XMin: t.txid,
-			XMax: t.txid,
-			CMin: 0,
-			CMax: opid,
-			Data: nil,
-		})
+		// Обновляем данные в БД по ключу
+		w.Upsert(fdbx.NewPair(pair.Key(), fdbx.FlatPack(row)))
 	}
-
-	// Обновляем данные в БД по ключу
-	w.Upsert(fdbx.NewPair(pair.Key(), buf))
 	return nil
 }
 
@@ -998,11 +947,9 @@ func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 	}
 }
 
-// vacuumPart - функция обратная fetchRow, в том смысле, что она удаляет все ключи, которые больше не нужны в БД
+// vacuumPart - функция обратная fetchRows, в том смысле, что она удаляет все ключи, которые больше не нужны в БД
 func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) (_ fdbx.Key, err error) {
 	var ok bool
-	var val []byte
-	var row *models.Row
 
 	list := lg.Resolve()
 
@@ -1013,58 +960,17 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 
 	lc := makeCache()
 	drop := make([]fdbx.Pair, 0, len(list))
+	opid := atomic.AddUint32(&t.opid, 1)
 
 	atomic.AddUint32(&t.mods, 1)
 
 	// Проверяем все пары ключ/значение, удаляя все, что может помешать
 	for i := range list {
-		val = list[i].Value()
-
-		// Могут попадаться не только значения mvcc, но и произвольные счетчики
-		func() {
-			defer func() {
-				if rec := recover(); rec != nil {
-					val = nil
-				}
-			}()
-			row = models.GetRootAsRow(val, 0)
-		}()
-
-		if len(val) == 0 {
-			continue
-		}
-
-		// Частный случай - если запись создана в рамках текущей транзакции
-		if bytes.Equal(row.XMinBytes(), t.txid) {
-			// Хотя в ряде случаев запись уже можно удалять, но для упрощения логики не будем.
-			// К тому же, это будет транзакция очистки, вряд ли мы вообще сюда когда-то попадем
-			continue
-		}
-
-		// Проверяем статус транзакции, которая создала запись
-		if ok, err = t.isAborted(lc, w, row.XMinBytes()); err != nil {
+		if ok, err = t.isVisible(w, lc, opid, list[i], true); err != nil {
 			return
 		}
 
-		// Удаляем, если запись точно ушла в мусор в самом начале
-		if ok {
-			drop = append(drop, list[i])
-			continue
-		}
-
-		// Если запись еще не удалена, то в любом случае не трогаем
-		// Если она удалена данной транзакцией, то для упрощения тоже пока не трогаем
-		if row.XMaxLength() == 0 || bytes.Equal(row.XMaxBytes(), t.txid) {
-			continue
-		}
-
-		// Проверяем статус транзакции, которая создала запись
-		if ok, err = t.isCommitted(lc, w, row.XMaxBytes()); err != nil {
-			return
-		}
-
-		// Если запись была удалена другой транзакцией, и она закоммичена, то смело можем удалять
-		if ok {
+		if !ok {
 			drop = append(drop, list[i])
 		}
 	}

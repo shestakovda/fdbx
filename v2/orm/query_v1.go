@@ -45,7 +45,7 @@ func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
 		return nil, ErrLoadQuery.WithReason(ErrValUnpack.WithReason(err))
 	}
 
-	cur := models.GetRootAsCursor(val, 0).UnPack()
+	cur := models.GetRootAsQuery(val, 0).UnPack()
 
 	q.size = cur.Size
 	q.page = cur.Page
@@ -318,7 +318,7 @@ func (q *v1Query) Save() (cid string, err error) {
 		q.queryid = typex.NewUUID()
 	}
 
-	cur := &models.CursorT{
+	cur := &models.QueryT{
 		Size:    atomic.LoadUint32(&q.size),
 		Page:    q.page,
 		Limit:   q.limit,

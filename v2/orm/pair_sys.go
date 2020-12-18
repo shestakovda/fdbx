@@ -12,7 +12,6 @@ func newSysPair(tx mvcc.Tx, tbid uint16, orig fdbx.Pair) (_ fdbx.Pair, err error
 	mod := &models.ValueT{
 		Blob: false,
 		Size: uint32(len(val)),
-		Hash: 0,
 		Data: val,
 	}
 

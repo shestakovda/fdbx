@@ -1,12 +1,9 @@
 package mvcc
 
 import (
+	"encoding/binary"
 	"math/rand"
-	"sync"
 	"time"
-
-	"github.com/oklog/ulid"
-	"github.com/shestakovda/fdbx/v2"
 )
 
 // Переменные модуля, менять которые не рекомендуется
@@ -30,17 +27,15 @@ const (
 
 const (
 	txStatusUnknown   byte = 0
-	txStatusRunning   byte = 1
-	txStatusAborted   byte = 2
+	txStatusAborted   byte = 1
+	txStatusRunning   byte = 2
 	txStatusCommitted byte = 3
 )
 
-func txKey(txid []byte) fdbx.Key {
-	return fdbx.Bytes2Key(txid).RPart(nsTx)
-}
-
-var entropy = sync.Pool{
-	New: func() interface{} {
-		return ulid.Monotonic(rand.New(rand.NewSource(time.Now().UnixNano())), 0)
-	},
+func newTxID() []byte {
+	var uid [12]byte
+	now := time.Now().UTC().UnixNano()
+	binary.BigEndian.PutUint64(uid[:8], uint64(now))
+	binary.BigEndian.PutUint32(uid[8:12], rand.New(rand.NewSource(now)).Uint32())
+	return uid[:]
 }

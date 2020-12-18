@@ -8,22 +8,23 @@ table Transaction {
     status:uint8=3;
 }
 
+table TxPtr {
+    op:uint32;
+    tx:[uint8];
+}
+
 table Row {
-    cMin:uint32;
-    cMax:uint32;
-    xMin:[uint8];
-    xMax:[uint8];
+    drop:[TxPtr];
     data:[uint8];
 }
 
 table Value {
     blob:bool;
     size:uint32;
-    hash:uint64;
     data:[uint8];
 }
 
-table Cursor {
+table Query {
     size:uint32;
     page:uint32;
     limit:uint32;
@@ -52,9 +53,4 @@ table Task {
     state:TaskState (required);
     creator:string;
     headers:[TaskHeader];
-}
-
-table Answer {
-    err:bool;
-    buf:[uint8];
 }

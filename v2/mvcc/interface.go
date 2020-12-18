@@ -90,11 +90,14 @@ type Tx interface {
 // Option - дополнительный аргумент при выполнении команды
 type Option func(*options)
 
-// Handler - обработчик события операции с записью
-type Handler func(Tx, fdbx.Pair) error
-
 // TxHandler - обработчик события операции с записью
 type TxHandler func(Tx) error
+
+// DeleteHandler - обработчик события удаления записи
+type DeleteHandler func(Tx, fdbx.Pair) error
+
+// UpdateHandler - обработчик события обновления записи с флагом обновления
+type UpdateHandler func(Tx, fdbx.Pair, bool) error
 
 // RowHandler - обработчик события операции с записью в рамках физической транзакции
 type RowHandler func(Tx, fdbx.Pair, db.Writer) error
@@ -144,6 +147,7 @@ var (
 	ErrDelete     = errx.New("Ошибка удаления данных")
 	ErrSeqScan    = errx.New("Ошибка полной выборки данных")
 	ErrNotFound   = errx.New("Отсутствует значение")
+	ErrDuplicate  = errx.New("Дублирующее значение")
 	ErrBLOBLoad   = errx.New("Ошибка загрузки BLOB")
 	ErrBLOBDrop   = errx.New("Ошибка удаления BLOB")
 	ErrBLOBSave   = errx.New("Ошибка сохранения BLOB")

@@ -159,26 +159,29 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 		s.True(errx.Is(err, mvcc.ErrNotFound))
 	}
 
-	hdlr := func(tx mvcc.Tx, p fdbx.Pair) error {
+	onInsert := func(tx mvcc.Tx, p fdbx.Pair, upd bool) error {
+		s.False(upd)
 		s.NotNil(p)
 		s.Nil(p.Unwrap())
+		s.Equal(val2, p.Value())
+		s.Equal(key2.String(), p.Key().String())
 		return nil
 	}
 
 	// insert and check val2
-	if err = s.tx.Upsert([]fdbx.Pair{fdbx.NewPair(key2, val2)}, mvcc.OnInsert(hdlr)); s.NoError(err) {
+	if err = s.tx.Upsert([]fdbx.Pair{fdbx.NewPair(key2, val2)}, mvcc.OnUpdate(onInsert)); s.NoError(err) {
 		if sel, err = s.tx.Select(key2); s.NoError(err) {
 			s.Equal(string(val2), string(sel.Value()))
 		}
 	}
 
-	hdlr = func(tx mvcc.Tx, p fdbx.Pair) error {
+	onDelete := func(tx mvcc.Tx, p fdbx.Pair) error {
 		s.Equal(key1.String(), p.Key().String())
 		return nil
 	}
 
 	// delete and check there are no val1
-	if err = s.tx.Delete([]fdbx.Key{key1}, mvcc.OnDelete(hdlr)); s.NoError(err) {
+	if err = s.tx.Delete([]fdbx.Key{key1}, mvcc.OnDelete(onDelete)); s.NoError(err) {
 		if _, err = s.tx.Select(key1); s.Error(err) {
 			s.True(errx.Is(err, mvcc.ErrSelect))
 			s.True(errx.Is(err, mvcc.ErrNotFound))
