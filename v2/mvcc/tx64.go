@@ -107,15 +107,17 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 		var rows []fdbx.Pair
 
 		lc := makeCache()
+		kl := make([]int, len(keys))
 		lg := make([]fdbx.ListGetter, len(keys))
 
 		for i := range keys {
 			ukey := WrapKey(keys[i])
+			kl[i] = len(ukey.Bytes())
 			lg[i] = w.List(ukey, ukey, 0, true, false)
 		}
 
 		for i := range lg {
-			if _, rows, exp = t.fetchRows(w, lc, opid, lg[i], true); exp != nil {
+			if _, rows, exp = t.fetchRows(w, lc, opid, lg[i], true, kl[i]); exp != nil {
 				return
 			}
 
@@ -158,15 +160,17 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 		var rows []fdbx.Pair
 
 		lc := makeCache()
+		kl := make([]int, len(pairs))
 		lg := make([]fdbx.ListGetter, len(pairs))
 
 		for i := range pairs {
 			ukey := WrapKey(pairs[i].Key())
+			kl[i] = len(ukey.Bytes())
 			lg[i] = w.List(ukey, ukey, 0, true, false)
 		}
 
 		for i := range pairs {
-			if _, rows, exp = t.fetchRows(w, lc, opid, lg[i], true); exp != nil {
+			if _, rows, exp = t.fetchRows(w, lc, opid, lg[i], true, kl[i]); exp != nil {
 				return
 			}
 
@@ -223,9 +227,10 @@ func (t *tx64) Select(key fdbx.Key, args ...Option) (res fdbx.Pair, err error) {
 		}
 
 		lc := makeCache()
+		kl := len(ukey.Bytes())
 		lg := r.List(ukey, ukey, 0, true, false)
 
-		if _, rows, exp = t.fetchRows(r, lc, opid, lg, false); exp != nil {
+		if _, rows, exp = t.fetchRows(r, lc, opid, lg, false, kl); exp != nil {
 			return
 		}
 
@@ -407,7 +412,7 @@ func (t *tx64) selectPart(
 
 	lg := r.List(from, to, uint64(MaxRowCount), opts.reverse, skip)
 
-	if rows, part, err = t.fetchRows(r, lc, opid, lg, false); err != nil {
+	if rows, part, err = t.fetchRows(r, lc, opid, lg, false, 0); err != nil {
 		return
 	}
 
@@ -836,6 +841,7 @@ func (t *tx64) fetchRows(
 	opid uint32,
 	lg fdbx.ListGetter,
 	dirty bool,
+	exact int,
 ) (cnt int, res []fdbx.Pair, err error) {
 	var ok bool
 
@@ -845,6 +851,10 @@ func (t *tx64) fetchRows(
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
+		if exact > 0 && len(list[i].Key().Bytes()) != (exact+16) {
+			continue
+		}
+
 		if ok, err = t.isVisible(r, lc, opid, list[i], dirty); err != nil {
 			return
 		}
