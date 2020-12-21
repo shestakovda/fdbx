@@ -10,6 +10,9 @@ import (
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
+// Debug - флаг отладочных принтов
+var Debug = false
+
 // Task status
 const (
 	StatusPublished   byte = 1

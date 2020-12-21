@@ -3,6 +3,7 @@ package orm
 import (
 	"context"
 
+	"github.com/golang/glog"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
@@ -58,6 +59,12 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 
 		if opts.reverse {
 			reqs = append(reqs, mvcc.Reverse())
+		}
+
+		if Debug {
+			glog.Infof("indexSelector.Select.fkey = %s", WrapIndexKey(tbl.ID(), s.idx, fkey).Printable())
+			glog.Infof("indexSelector.Select.lkey = %s", WrapIndexKey(tbl.ID(), s.idx, lkey).Printable())
+			glog.Infof("indexSelector.Select.skip = %t", skip)
 		}
 
 		wctx, exit := context.WithCancel(ctx)

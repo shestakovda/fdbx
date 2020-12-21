@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -181,6 +182,10 @@ func (q v1Queue) Sub(ctx context.Context, cn db.Connection, pack int) (<-chan Ta
 }
 
 func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list []Task, err error) {
+	if Debug {
+		glog.Infof("v1Queue.SubList(%d)", pack)
+	}
+
 	if pack == 0 {
 		return nil, nil
 	}
@@ -190,6 +195,11 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 	var refresh time.Duration
 
 	from := q.wrapFlagKey(qList, nil)
+
+	if Debug {
+		glog.Infof("v1Queue.SubList.from = %s", from.Printable())
+	}
+
 	hdlr := func() error {
 		// Критически важно делать это в одной физической транзакции
 		// Иначе остается шанс, что одну и ту же задачу возьмут в обработку два воркера
@@ -206,6 +216,10 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 				mvcc.Writer(w),
 			); exp != nil {
 				return
+			}
+
+			if Debug {
+				glog.Infof("v1Queue.SubList.hdlr.len(pairs) = %d", len(pairs))
 			}
 
 			if len(pairs) == 0 {
@@ -225,6 +239,10 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 					return
 				}
 
+				if Debug {
+					glog.Infof("v1Queue.SubList.hdlr.len(next) = %d", len(next))
+				}
+
 				if len(next) > 0 {
 					var when time.Time
 
@@ -236,6 +254,10 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 						return
 					}
 
+					if Debug {
+						glog.Infof("v1Queue.SubList.hdlr.when = %s", when)
+					}
+
 					refresh = when.Sub(time.Now())
 				} else {
 					// Если следующей задачи нет (очередь пуста), ставим таймаут из опций
@@ -245,6 +267,10 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 				// Если по какой-то причине задача уже в прошлом, большой таймаут не нужен
 				if refresh <= 0 {
 					refresh = time.Second
+				}
+
+				if Debug {
+					glog.Infof("v1Queue.SubList.hdlr.refresh = %s", refresh)
 				}
 
 				return nil
@@ -265,6 +291,9 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 
 	// Достаем данные по каждой задаче, кроме тех, по которым исходный объект уже удален
 	load := func(tx mvcc.Tx) (exp error) {
+		if Debug {
+			glog.Infof("v1Queue.SubList.loadTasks(%d)", len(pairs))
+		}
 		list, exp = q.loadTasks(tx, pairs, true)
 		return
 	}
@@ -295,6 +324,10 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 }
 
 func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter, refresh time.Duration) {
+	if Debug {
+		glog.Infof("v1Queue.waitTask(%s)", refresh)
+	}
+
 	// Даже если waiter установлен, то при отсутствии других публикаций мы тут зависнем навечно.
 	// А задачи, время которых настало, будут просрочены. Для этого нужен особый механизм обработки по таймауту.
 	wctx, cancel := context.WithTimeout(ctx, refresh)
@@ -302,7 +335,9 @@ func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter, refresh time.
 
 	// Игнорируем ошибку. Вышли так вышли, главное, что не застряли. Очередь должна работать дальше
 	//nolint:errcheck
-	waiter.Resolve(wctx)
+	if err := waiter.Resolve(wctx); Debug && err != nil {
+		glog.Errorf("v1Queue.waitTask.Resolve = %+v", err)
+	}
 
 	// Если запущено много обработчиков, все они рванут забирать события одновременно.
 	// Чтобы избежать массовых конфликтов транзакций и улучшить распределение задач делаем небольшую
