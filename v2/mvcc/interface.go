@@ -9,6 +9,9 @@ import (
 	"github.com/shestakovda/fdbx/v2/db"
 )
 
+// Debug - флаг отладочных принтов
+var Debug = false
+
 // TxCacheSize - размер глобального кеша статусов завершенных транзакций
 var TxCacheSize = 8000000
 

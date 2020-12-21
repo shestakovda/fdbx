@@ -355,6 +355,10 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 			return exp
 		}
 
+		if Debug {
+			glog.Infof("tx64.seqScan(%s, %s, %d)", from.Printable(), last.Printable(), opts.limit)
+		}
+
 		for {
 			if ctx.Err() != nil {
 				return
@@ -373,6 +377,13 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 			if err != nil {
 				errs <- ErrSeqScan.WithReason(err)
 				return
+			}
+
+			if Debug {
+				glog.Infof("tx64.seqScan.from = %s", from.Printable())
+				glog.Infof("tx64.seqScan.last = %s", last.Printable())
+				glog.Infof("tx64.seqScan.rows = %d", rows)
+				glog.Infof("tx64.seqScan.part = %d", len(part))
 			}
 
 			if len(part) == 0 {
@@ -410,10 +421,19 @@ func (t *tx64) selectPart(
 	var ok bool
 	var w db.Writer
 
+	if Debug {
+		glog.Infof("tx64.selectPart(%s, %s, %d)", from.Printable(), to.Printable(), size)
+	}
+
 	lg := r.List(from, to, uint64(MaxRowCount), opts.reverse, skip)
 
 	if rows, part, err = t.fetchRows(r, lc, opid, lg, false, 0); err != nil {
 		return
+	}
+
+	if Debug {
+		glog.Infof("tx64.selectPart.rows = %d", rows)
+		glog.Infof("tx64.selectPart.part = %d", len(part))
 	}
 
 	if len(part) == 0 {
@@ -769,6 +789,10 @@ func (t *tx64) isVisible(r db.Reader, lc *txCache, opid uint32, item fdbx.Pair, 
 	cmin := binary.BigEndian.Uint32(ptr[8:12])
 	xmin := append(ptr[:8], ptr[12:16]...)
 	row := models.GetRootAsRow(item.Value(), 0).UnPack()
+
+	if Debug {
+		defer func() { glog.Infof("isVisible(%s) = %t", item.Key().Printable(), ok) }()
+	}
 
 	// Частный случай - если запись создана в рамках текущей транзакции
 	// то даже если запись создана позже, тут возвращаем, чтобы можно было выполнить
