@@ -117,7 +117,7 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 		}
 
 		for i := range lg {
-			if _, rows, exp = t.fetchRows(w, lc, opid, lg[i], true, kl[i]); exp != nil {
+			if rows, exp = t.fetchRows(w, lc, opid, lg[i], true, kl[i]); exp != nil {
 				return
 			}
 
@@ -170,7 +170,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 		}
 
 		for i := range pairs {
-			if _, rows, exp = t.fetchRows(w, lc, opid, lg[i], true, kl[i]); exp != nil {
+			if rows, exp = t.fetchRows(w, lc, opid, lg[i], true, kl[i]); exp != nil {
 				return
 			}
 
@@ -230,7 +230,7 @@ func (t *tx64) Select(key fdbx.Key, args ...Option) (res fdbx.Pair, err error) {
 		kl := len(ukey.Bytes())
 		lg := r.List(ukey, ukey, 0, true, false)
 
-		if _, rows, exp = t.fetchRows(r, lc, opid, lg, false, kl); exp != nil {
+		if rows, exp = t.fetchRows(r, lc, opid, lg, false, kl); exp != nil {
 			return
 		}
 
@@ -427,21 +427,30 @@ func (t *tx64) selectPart(
 
 	lg := r.List(from, to, uint64(MaxRowCount), opts.reverse, skip)
 
-	if rows, part, err = t.fetchRows(r, lc, opid, lg, false, 0); err != nil {
+	if part, err = t.fetchRows(r, lc, opid, lg, false, 0); err != nil {
 		return
 	}
 
-	if Debug {
-		glog.Infof("tx64.selectPart.rows = %d", rows)
-		glog.Infof("tx64.selectPart.part = %d", len(part))
-	}
+	// вызов из кеша
+	list := lg.Resolve()
 
-	if len(part) == 0 {
+	if rows = len(list); rows == 0 {
 		if opts.reverse {
 			return rows, nil, from, nil
 		} else {
 			return rows, nil, to, nil
 		}
+	}
+	last = list[len(list)-1].Key()
+
+	if Debug {
+		glog.Infof("tx64.selectPart.rows = %d", rows)
+		glog.Infof("tx64.selectPart.part = %d", len(part))
+		glog.Infof("tx64.selectPart.last = %s", last.Printable())
+	}
+
+	if len(part) == 0 {
+		return rows, nil, last, nil
 	}
 
 	if opts.lock {
@@ -458,7 +467,6 @@ func (t *tx64) selectPart(
 	}
 
 	part = part[:cnt]
-	last = part[cnt-1].Key()
 
 	for i := range part {
 		part[i] = &usrPair{orig: part[i]}
@@ -866,12 +874,11 @@ func (t *tx64) fetchRows(
 	lg fdbx.ListGetter,
 	dirty bool,
 	exact int,
-) (cnt int, res []fdbx.Pair, err error) {
+) (res []fdbx.Pair, err error) {
 	var ok bool
 
 	list := lg.Resolve()
-	res = list[:0]
-	cnt = len(list)
+	res = make([]fdbx.Pair, 0, len(list))
 
 	// Проверяем все версии, пока не получим актуальную
 	for i := range list {
@@ -888,12 +895,7 @@ func (t *tx64) fetchRows(
 		}
 	}
 
-	// Стираем хвост, чтобы сборщик мусора пришел за ним
-	for i := len(res); i < len(list); i++ {
-		list[i] = nil
-	}
-
-	return cnt, res, nil
+	return res, nil
 }
 
 func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdbx.Pair, onDelete DeleteHandler) (err error) {

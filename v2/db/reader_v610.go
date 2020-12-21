@@ -61,23 +61,23 @@ func (r v610Reader) List(from, last fdbx.Key, limit uint64, reverse, skip bool) 
 	// В данном случае не передаем режим запроса, т.к. не оставляем это на выбор потребителя
 	// Если вызывать GetSlice*, то будет StreamingModeWantAll или StreamingModeExact, зависит от наличия Limit
 	// Если вызывать Iterator, то по-умолчанию будет последовательный режим StreamingModeIterator
-	return &listGetter{r.tx.GetRange(rng, fdb.RangeOptions{Limit: int(limit), Reverse: reverse})}
+	return &listGetter{RangeResult: r.tx.GetRange(rng, fdb.RangeOptions{Limit: int(limit), Reverse: reverse})}
 }
 
 type listGetter struct {
 	fdb.RangeResult
+	res []fdbx.Pair
 }
 
-func (g listGetter) Resolve() []fdbx.Pair {
-	list := g.GetSliceOrPanic()
-	res := make([]fdbx.Pair, 0, len(list))
+func (g *listGetter) Resolve() []fdbx.Pair {
+	if g.res == nil {
+		list := g.GetSliceOrPanic()
+		g.res = make([]fdbx.Pair, len(list))
 
-	for i := range list {
-		res = append(res, fdbx.NewPair(
-			fdbx.Bytes2Key(list[i].Key[1:]),
-			list[i].Value,
-		))
+		for i := range list {
+			g.res[i] = fdbx.NewPair(fdbx.Bytes2Key(list[i].Key[1:]), list[i].Value)
+		}
 	}
 
-	return res
+	return g.res
 }
