@@ -564,6 +564,9 @@ func (q v1Queue) loadTasks(tx mvcc.Tx, items []fdbx.Pair, strict bool) (res []Ta
 		// Значение элемента - идентификатор объекта в коллекции
 		// Получаем исходные данные объекта как данные задачи
 		if tsk, err = q.loadTask(tx, fdbx.Bytes2Key(items[i].Value())); err != nil {
+			if !strict && errx.Is(err, mvcc.ErrNotFound) {
+				continue
+			}
 			return
 		}
 
