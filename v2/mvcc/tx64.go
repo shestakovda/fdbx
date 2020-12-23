@@ -664,7 +664,7 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, txid []byte) (status byte, 
 	}
 
 	// Придется слазать в БД за статусом и положить в кеш
-	val := r.Data(fdbx.Bytes2Key(txid).RPart(nsTx)).Value()
+	val := r.Data(WrapTxKey(fdbx.Bytes2Key(txid))).Value()
 
 	// Если в БД нет записи, то либо транзакция еще открыта, либо это был откат
 	// Поскольку нет определенности, в глобальный кеш ничего не складываем
@@ -727,7 +727,7 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	}
 
 	// Cохраняем в БД объект с обновленным статусом
-	pair := fdbx.NewPair(fdbx.Bytes2Key(t.txid).RPart(nsTx), t.pack())
+	pair := fdbx.NewPair(WrapTxKey(fdbx.Bytes2Key(t.txid)), t.pack())
 	hdlr := func(w db.Writer) error { w.Upsert(pair); return nil }
 
 	// Выполняем обработчик в физической транзакции - указанной или новой
@@ -786,7 +786,7 @@ func (t *tx64) isVisible(r db.Reader, lc *txCache, opid uint32, item fdbx.Pair, 
 	// Нужна защита от паники, на случай левых или битых записей
 	defer func() {
 		if rec := recover(); rec != nil {
-			glog.Errorf("panic mvcc.tx64.dirtyRow: %+v", rec)
+			glog.Errorf("panic mvcc.tx64.isVisible(%s): %+v", item.Key().Printable(), rec)
 			ok = false
 			err = nil
 		}
@@ -976,7 +976,7 @@ func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 		}
 
 		// Пустой ключ - значит больше не было строк, условие выхода
-		if from == nil {
+		if len(from.Bytes()) == 0 {
 			return nil
 		}
 		skip = true
@@ -991,7 +991,7 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 
 	// Больше нечего получить - условие выхода
 	if len(list) == 0 {
-		return nil, nil
+		return fdbx.Bytes2Key(nil), nil
 	}
 
 	lc := makeCache()

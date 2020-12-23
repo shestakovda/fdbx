@@ -6,6 +6,8 @@ import (
 )
 
 func getOpts(args []Option) (o options) {
+	o.packSize = 10000
+
 	for i := range args {
 		args[i](&o)
 	}
@@ -32,8 +34,9 @@ func Last(k fdbx.Key) Option            { return func(o *options) { o.last = k }
 func From(k fdbx.Key) Option            { return func(o *options) { o.from = k } }
 func Limit(l int) Option                { return func(o *options) { o.limit = l } }
 func Writer(w db.Writer) Option         { return func(o *options) { o.writer = w } }
+func Reverse() Option                   { return func(o *options) { o.reverse = true } }
 func OnUpdate(hdl UpdateHandler) Option { return func(o *options) { o.onUpdate = hdl } }
 func OnDelete(hdl DeleteHandler) Option { return func(o *options) { o.onDelete = hdl } }
 func OnVacuum(hdl RowHandler) Option    { return func(o *options) { o.onVacuum = hdl } }
 func Exclusive(hdl RowHandler) Option   { return func(o *options) { o.lock = true; o.onLock = hdl } }
-func Reverse() Option                   { return func(o *options) { o.reverse = true } }
+func VacuumPack(size int) Option        { return func(o *options) { o.packSize = size } }

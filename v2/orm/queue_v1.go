@@ -641,6 +641,8 @@ func (t v1Task) Key() fdbx.Key { return fdbx.Bytes2Key(t.m.Key) }
 
 func (t v1Task) Body() []byte { return t.b }
 
+func (t v1Task) Pair() fdbx.Pair { return fdbx.NewPair(t.Key(), t.b) }
+
 func (t v1Task) Dump() []byte { return fdbx.FlatPack(t.m) }
 
 func (t v1Task) Status() byte { return t.m.State.Status }

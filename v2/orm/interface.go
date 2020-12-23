@@ -55,6 +55,7 @@ type Queue interface {
 type Task interface {
 	Key() fdbx.Key
 	Body() []byte
+	Pair() fdbx.Pair
 	Status() byte
 	Repeats() uint32
 	Creator() string

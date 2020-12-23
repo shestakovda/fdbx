@@ -2,7 +2,6 @@ package orm
 
 import (
 	"context"
-	"math/rand"
 	"time"
 
 	"github.com/shestakovda/errx"
@@ -200,11 +199,12 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 
 		// Выбираем случайное время с 00:00 до 06:00
 		// Чтобы делать темные делишки под покровом ночи
-		now := time.Now()
-		min := rand.Intn(60)
-		hour := rand.Intn(7)
-		when := time.Date(now.Year(), now.Month(), now.Day()+1, hour, min, 00, 00, now.Location())
-		timer.Reset(when.Sub(now))
+		// now := time.Now()
+		// min := rand.Intn(60)
+		// hour := rand.Intn(7)
+		// when := time.Date(now.Year(), now.Month(), now.Day()+1, hour, min, 00, 00, now.Location())
+		// timer.Reset(when.Sub(now))
+		timer.Reset(5 * time.Minute)
 
 		select {
 		case <-timer.C:
@@ -232,11 +232,6 @@ func (t *v1Table) Vacuum(dbc db.Connection) error {
 
 		// Отдельно очистка всех очередей
 		if err = tx.Vacuum(WrapQueueKey(t.id, 0, nil, 0, nil).RSkip(3)); err != nil {
-			return
-		}
-
-		// Отдельно очистка всех блобов
-		if err = tx.Vacuum(WrapBlobKey(t.id, nil)); err != nil {
 			return
 		}
 

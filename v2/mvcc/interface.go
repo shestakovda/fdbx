@@ -124,6 +124,14 @@ func UnwrapKey(key fdbx.Key) fdbx.Key {
 	return nil
 }
 
+// WrapTxKey - обертка для получения системного ключа из пользовательского, при сохранении
+func WrapTxKey(key fdbx.Key) fdbx.Key {
+	if key == nil {
+		key = fdbx.Bytes2Key(nil)
+	}
+	return key.LPart(nsTx)
+}
+
 // WrapLockKey - обертка для получения системного ключа из пользовательского, при сохранении
 func WrapLockKey(key fdbx.Key) fdbx.Key {
 	if key == nil {
