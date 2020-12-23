@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -190,11 +191,14 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 	}()
 
 	// Работать должен постоянно
-	timer := time.NewTimer(time.Hour)
+	glog.Errorf("Autovacuum on %x", t.ID())
+	timer := time.NewTimer(time.Second)
 	for ctx.Err() == nil {
 		// Очистка таймера
 		if !timer.Stop() {
+			glog.Errorf("timer.Stop")
 			<-timer.C
+			glog.Errorf("timer.C")
 		}
 
 		// Выбираем случайное время с 00:00 до 06:00
@@ -205,14 +209,16 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 		// when := time.Date(now.Year(), now.Month(), now.Day()+1, hour, min, 00, 00, now.Location())
 		// timer.Reset(when.Sub(now))
 		timer.Reset(5 * time.Minute)
+		glog.Errorf("timer.Reset")
 
 		select {
 		case <-timer.C:
-		case <-ctx.Done():
-			return
-		}
+			glog.Errorf("timer.OK")
 
-		if err = t.Vacuum(cn); err != nil {
+			if err = t.Vacuum(cn); err != nil {
+				return
+			}
+		case <-ctx.Done():
 			return
 		}
 	}
@@ -220,25 +226,31 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 
 func (t *v1Table) Vacuum(dbc db.Connection) error {
 	if exp := mvcc.WithTx(dbc, func(tx mvcc.Tx) (err error) {
+		glog.Errorf("%x.vacuum.Data", t.ID())
+
 		// Этот запрос очищает только данные. Для них должен быть обработчик очистки BLOB
 		if err = tx.Vacuum(WrapTableKey(t.id, nil), mvcc.OnVacuum(t.onVacuum)); err != nil {
 			return
 		}
+		glog.Errorf("%x.vacuum.Index", t.ID())
 
 		// Отдельно очистка всех индексов
 		if err = tx.Vacuum(WrapIndexKey(t.id, 0, nil).RSkip(2)); err != nil {
 			return
 		}
+		glog.Errorf("%x.vacuum.Queue", t.ID())
 
 		// Отдельно очистка всех очередей
 		if err = tx.Vacuum(WrapQueueKey(t.id, 0, nil, 0, nil).RSkip(3)); err != nil {
 			return
 		}
+		glog.Errorf("%x.vacuum.Query", t.ID())
 
 		// Отдельно очистка всех курсоров
 		if err = tx.Vacuum(WrapQueryKey(t.id, nil)); err != nil {
 			return
 		}
+		glog.Errorf("%x.vacuum.OK", t.ID())
 
 		return nil
 	}); exp != nil {
