@@ -174,14 +174,14 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 				return
 			}
 
-			if exp = t.dropRows(w, opid, rows, opts.onDelete); exp != nil {
-				return
-			}
-
 			if opts.onUpdate != nil {
 				if exp = opts.onUpdate(t, pairs[i], len(rows) > 0); exp != nil {
 					return
 				}
+			}
+
+			if exp = t.dropRows(w, opid, rows, opts.onDelete); exp != nil {
+				return
 			}
 
 			w.Upsert(&sysPair{

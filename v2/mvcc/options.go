@@ -6,7 +6,7 @@ import (
 )
 
 func getOpts(args []Option) (o options) {
-	o.packSize = 10000
+	o.packSize = 100
 
 	for i := range args {
 		args[i](&o)

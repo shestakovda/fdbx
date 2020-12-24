@@ -2,6 +2,7 @@ package orm
 
 import (
 	"context"
+	"encoding/binary"
 	"time"
 
 	"github.com/golang/glog"
@@ -164,6 +165,11 @@ func (t *v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 
 func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 	var err error
+	var tbid [2]byte
+	var timer *time.Timer
+
+	binary.BigEndian.PutUint16(tbid[:], t.id)
+	tkey := fdbx.Bytes2Key(tbid[:]).Printable()
 
 	defer func() {
 		// Перезапуск только в случае ошибки
@@ -191,13 +197,8 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 	}()
 
 	// Работать должен постоянно
-	glog.Errorf("Start autovacuum on \\x%d\\x%d", byte(t.id>>8), byte(t.id))
-	timer := time.NewTimer(time.Second)
+	glog.Errorf("Start autovacuum on %s", tkey)
 	for ctx.Err() == nil {
-		// Очистка таймера
-		if !timer.Stop() {
-			<-timer.C
-		}
 
 		// Выбираем случайное время с 00:00 до 06:00
 		// Чтобы делать темные делишки под покровом ночи
@@ -205,18 +206,18 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 		// min := rand.Intn(60)
 		// hour := rand.Intn(7)
 		// when := time.Date(now.Year(), now.Month(), now.Day()+1, hour, min, 00, 00, now.Location())
-		// timer.Reset(when.Sub(now))
-		timer.Reset(5 * time.Minute)
+		// timer = time.NewTimer(when.Sub(now))
+		timer = time.NewTimer(time.Hour)
 
 		select {
 		case <-timer.C:
-			glog.Errorf("Run vacuum on \\x%d\\x%d", byte(t.id>>8), byte(t.id))
+			glog.Errorf("Run vacuum on %s", tkey)
 
 			if err = t.Vacuum(cn); err != nil {
 				return
 			}
 
-			glog.Errorf("Complete vacuum on \\x%d\\x%d", byte(t.id>>8), byte(t.id))
+			glog.Errorf("Complete vacuum on %s", tkey)
 		case <-ctx.Done():
 			return
 		}
