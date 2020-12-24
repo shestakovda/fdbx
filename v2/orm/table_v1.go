@@ -3,6 +3,7 @@ package orm
 import (
 	"context"
 	"encoding/binary"
+	"math/rand"
 	"time"
 
 	"github.com/golang/glog"
@@ -56,7 +57,7 @@ func (t *v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
 	return nil
 }
 
-func (t *v1Table) upsert(tx mvcc.Tx, ins bool, pairs ...fdbx.Pair) (err error) {
+func (t *v1Table) upsert(tx mvcc.Tx, unique bool, pairs ...fdbx.Pair) (err error) {
 	if len(pairs) == 0 {
 		return nil
 	}
@@ -68,56 +69,63 @@ func (t *v1Table) upsert(tx mvcc.Tx, ins bool, pairs ...fdbx.Pair) (err error) {
 		}
 	}
 
-	if err = tx.Upsert(cp, mvcc.OnUpdate(t.onUpdate(ins)), mvcc.OnDelete(t.onDelete)); err != nil {
+	opts := []mvcc.Option{
+		mvcc.OnInsert(t.onInsert),
+		mvcc.OnDelete(t.onDelete),
+	}
+
+	if unique {
+		opts = append(opts, mvcc.OnUpdate(t.onUpdate))
+	}
+
+	if err = tx.Upsert(cp, opts...); err != nil {
 		return ErrUpsert.WithReason(err)
 	}
 
 	return nil
 }
 
-func (t *v1Table) onUpdate(unique bool) mvcc.UpdateHandler {
-	return func(tx mvcc.Tx, pair fdbx.Pair, upd bool) (err error) {
-		if unique && upd {
-			return ErrDuplicate.WithDebug(errx.Debug{
-				"key": pair.Key().Printable(),
-			})
-		}
-
-		if len(t.options.batchidx) == 0 {
-			return nil
-		}
-
-		pair = pair.Unwrap()
-		pval := pair.Value()
-		pkey := pair.Key().Bytes()
-		rows := make([]fdbx.Pair, 0, 32)
-		var dict map[uint16][]fdbx.Key
-
-		for k := range t.options.batchidx {
-			if dict, err = t.options.batchidx[k](pval); err != nil {
-				return
-			}
-
-			if len(dict) == 0 {
-				continue
-			}
-
-			for idx, keys := range dict {
-				for i := range keys {
-					if keys[i] == nil || len(keys[i].Bytes()) == 0 {
-						continue
-					}
-					rows = append(rows, fdbx.NewPair(WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...), pkey))
-				}
-			}
-		}
-
-		if err = tx.Upsert(rows); err != nil {
-			return ErrIdxUpsert.WithReason(err)
-		}
-
+func (t *v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+	if len(t.options.batchidx) == 0 {
 		return nil
 	}
+
+	pair = pair.Unwrap()
+	pval := pair.Value()
+	pkey := pair.Key().Bytes()
+	rows := make([]fdbx.Pair, 0, 32)
+	var dict map[uint16][]fdbx.Key
+
+	for k := range t.options.batchidx {
+		if dict, err = t.options.batchidx[k](pval); err != nil {
+			return
+		}
+
+		if len(dict) == 0 {
+			continue
+		}
+
+		for idx, keys := range dict {
+			for i := range keys {
+				if keys[i] == nil || len(keys[i].Bytes()) == 0 {
+					continue
+				}
+				rows = append(rows, fdbx.NewPair(WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...), pkey))
+			}
+		}
+	}
+
+	if err = tx.Upsert(rows); err != nil {
+		return ErrIdxUpsert.WithReason(err)
+	}
+
+	return nil
+}
+
+func (t *v1Table) onUpdate(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+	return ErrDuplicate.WithDebug(errx.Debug{
+		"key": pair.Key().Printable(),
+	})
 }
 
 func (t *v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
@@ -202,12 +210,12 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 
 		// Выбираем случайное время с 00:00 до 06:00
 		// Чтобы делать темные делишки под покровом ночи
-		// now := time.Now()
-		// min := rand.Intn(60)
-		// hour := rand.Intn(7)
-		// when := time.Date(now.Year(), now.Month(), now.Day()+1, hour, min, 00, 00, now.Location())
-		// timer = time.NewTimer(when.Sub(now))
-		timer = time.NewTimer(time.Hour)
+		now := time.Now()
+		min := rand.Intn(60)
+		hour := rand.Intn(7)
+		when := time.Date(now.Year(), now.Month(), now.Day()+1, hour, min, 00, 00, now.Location())
+		timer = time.NewTimer(when.Sub(now))
+		// timer = time.NewTimer(time.Hour)
 
 		select {
 		case <-timer.C:

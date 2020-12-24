@@ -174,14 +174,20 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 				return
 			}
 
-			if opts.onUpdate != nil {
-				if exp = opts.onUpdate(t, pairs[i], len(rows) > 0); exp != nil {
+			if opts.onUpdate != nil && len(rows) > 0 {
+				if exp = opts.onUpdate(t, pairs[i]); exp != nil {
 					return
 				}
 			}
 
 			if exp = t.dropRows(w, opid, rows, opts.onDelete); exp != nil {
 				return
+			}
+
+			if opts.onInsert != nil {
+				if exp = opts.onInsert(t, pairs[i]); exp != nil {
+					return
+				}
 			}
 
 			w.Upsert(&sysPair{
@@ -898,7 +904,7 @@ func (t *tx64) fetchRows(
 	return res, nil
 }
 
-func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdbx.Pair, onDelete DeleteHandler) (err error) {
+func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdbx.Pair, onDelete PairHandler) (err error) {
 	var row *models.RowT
 
 	if len(pairs) == 0 {
@@ -980,6 +986,9 @@ func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 			return nil
 		}
 		skip = true
+
+		// Передышка, чтобы не слишком грузить бд
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

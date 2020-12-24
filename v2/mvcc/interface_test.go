@@ -159,8 +159,7 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 		s.True(errx.Is(err, mvcc.ErrNotFound))
 	}
 
-	onInsert := func(tx mvcc.Tx, p fdbx.Pair, upd bool) error {
-		s.False(upd)
+	onInsert := func(tx mvcc.Tx, p fdbx.Pair) error {
 		s.NotNil(p)
 		s.Nil(p.Unwrap())
 		s.Equal(val2, p.Value())
@@ -169,7 +168,7 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 	}
 
 	// insert and check val2
-	if err = s.tx.Upsert([]fdbx.Pair{fdbx.NewPair(key2, val2)}, mvcc.OnUpdate(onInsert)); s.NoError(err) {
+	if err = s.tx.Upsert([]fdbx.Pair{fdbx.NewPair(key2, val2)}, mvcc.OnInsert(onInsert)); s.NoError(err) {
 		if sel, err = s.tx.Select(key2); s.NoError(err) {
 			s.Equal(string(val2), string(sel.Value()))
 		}

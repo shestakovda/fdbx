@@ -96,11 +96,8 @@ type Option func(*options)
 // TxHandler - обработчик события операции с записью
 type TxHandler func(Tx) error
 
-// DeleteHandler - обработчик события удаления записи
-type DeleteHandler func(Tx, fdbx.Pair) error
-
-// UpdateHandler - обработчик события обновления записи с флагом обновления
-type UpdateHandler func(Tx, fdbx.Pair, bool) error
+// PairHandler - обработчик события обработки записи
+type PairHandler func(Tx, fdbx.Pair) error
 
 // RowHandler - обработчик события операции с записью в рамках физической транзакции
 type RowHandler func(Tx, fdbx.Pair, db.Writer) error
