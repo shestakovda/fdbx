@@ -4,36 +4,36 @@
 namespace models;
 
 table Transaction {
-    TxID:uint64;
-    Start:uint64;
-    Status:uint8=3;
+    start:int64;
+    status:uint8=3;
 }
 
-struct RowState {
-    XMin:uint64;
-    XMax:uint64;
-    CMin:uint32;
-    CMax:uint32;
+table TxPtr {
+    op:uint32;
+    tx:[uint8];
 }
 
 table Row {
-    State:RowState (required);
-    Data:[uint8];
+    drop:[TxPtr];
+    data:[uint8];
 }
 
 table Value {
-    Blob:bool;
-    Size:uint32;
-    Hash:uint64;
-    Data:[uint8];
+    blob:bool;
+    size:uint32;
+    data:[uint8];
 }
 
-table Cursor {
-    Reverse:bool;
-    IdxType:uint16;
-    LastKey:[uint8];
-    IPrefix:[uint8];
-    QueryID:[uint8];
+table Query {
+    size:uint32;
+    page:uint32;
+    limit:uint32;
+    reverse:bool;
+    idx_type:uint16;
+    last_key:[uint8];
+    idx_from:[uint8];
+    idx_last:[uint8];
+    queryID:[uint8];
 }
 
 table TaskHeader {
@@ -53,9 +53,4 @@ table Task {
     state:TaskState (required);
     creator:string;
     headers:[TaskHeader];
-}
-
-table Answer {
-    err:bool;
-    buf:[uint8];
 }

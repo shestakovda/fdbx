@@ -9,11 +9,26 @@ import (
 	"github.com/shestakovda/fdbx/v2/db"
 )
 
+// Debug - флаг отладочных принтов
+var Debug = false
+
 // TxCacheSize - размер глобального кеша статусов завершенных транзакций
 var TxCacheSize = 8000000
 
 // Begin - создание и старт новой транзакции
-func Begin(conn db.Connection) (Tx, error) { return newTx64(conn) }
+func Begin(dbc db.Connection) Tx { return newTx64(dbc) }
+
+// WithTx - выполнение метода в рамках транзакции
+func WithTx(dbc db.Connection, hdl TxHandler) (err error) {
+	tx := Begin(dbc)
+	defer tx.Cancel()
+
+	if err = hdl(tx); err != nil {
+		return
+	}
+
+	return tx.Commit()
+}
 
 // Tx - объект "логической" транзакции MVCC поверх "физической" транзакции FDB
 type Tx interface {
@@ -30,7 +45,7 @@ type Tx interface {
 	Cancel(args ...Option) error
 
 	// Выборка актуального значения для ключа
-	Select(fdbx.Key) (fdbx.Pair, error)
+	Select(fdbx.Key, ...Option) (fdbx.Pair, error)
 
 	// Удаление значения для ключа
 	// Поддерживает опции Writer
@@ -42,11 +57,11 @@ type Tx interface {
 
 	// Последовательная выборка всех активных ключей в диапазоне
 	// Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
-	ListAll(...Option) ([]fdbx.Pair, error)
+	ListAll(context.Context, ...Option) ([]fdbx.Pair, error)
 
 	// Последовательная выборка всех активных ключей в диапазоне
 	// Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
-	SeqScan(ctx context.Context, args ...Option) (<-chan fdbx.Pair, <-chan error)
+	SeqScan(context.Context, ...Option) (<-chan fdbx.Pair, <-chan error)
 
 	// Загрузка бинарных данных по ключу, указывается ожидаемый размер
 	LoadBLOB(fdbx.Key, int, ...Option) ([]byte, error)
@@ -65,14 +80,24 @@ type Tx interface {
 	OnCommit(CommitHandler)
 
 	// Запуск очистки устаревших записей ключей по указанному префиксу
-	Vacuum(fdbx.Key, ...Option) (err error)
+	Vacuum(fdbx.Key, ...Option) error
+
+	// Изменение сигнального ключа, чтобы сработали Watch
+	// По сути, выставляет хук OnCommit с правильным содержимым
+	Touch(fdbx.Key)
+
+	// Ожидание изменения сигнального ключа в Touch
+	Watch(fdbx.Key) (fdbx.Waiter, error)
 }
 
 // Option - дополнительный аргумент при выполнении команды
 type Option func(*options)
 
-// Handler - обработчик события операции с записью
-type Handler func(Tx, fdbx.Pair) error
+// TxHandler - обработчик события операции с записью
+type TxHandler func(Tx) error
+
+// PairHandler - обработчик события обработки записи
+type PairHandler func(Tx, fdbx.Pair) error
 
 // RowHandler - обработчик события операции с записью в рамках физической транзакции
 type RowHandler func(Tx, fdbx.Pair, db.Writer) error
@@ -91,9 +116,17 @@ func WrapKey(key fdbx.Key) fdbx.Key {
 // UnwrapKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
 func UnwrapKey(key fdbx.Key) fdbx.Key {
 	if key != nil {
-		return key.LSkip(1).RSkip(8)
+		return key.LSkip(1).RSkip(16)
 	}
 	return nil
+}
+
+// WrapTxKey - обертка для получения системного ключа из пользовательского, при сохранении
+func WrapTxKey(key fdbx.Key) fdbx.Key {
+	if key == nil {
+		key = fdbx.Bytes2Key(nil)
+	}
+	return key.LPart(nsTx)
 }
 
 // WrapLockKey - обертка для получения системного ключа из пользовательского, при сохранении
@@ -102,6 +135,14 @@ func WrapLockKey(key fdbx.Key) fdbx.Key {
 		key = fdbx.Bytes2Key(nil)
 	}
 	return key.LPart(nsLock)
+}
+
+// WrapWatchKey - обертка для получения системного ключа из пользовательского, при сохранении
+func WrapWatchKey(key fdbx.Key) fdbx.Key {
+	if key == nil {
+		key = fdbx.Bytes2Key(nil)
+	}
+	return key.LPart(nsWatch)
 }
 
 // Ошибки модуля
@@ -114,6 +155,7 @@ var (
 	ErrDelete     = errx.New("Ошибка удаления данных")
 	ErrSeqScan    = errx.New("Ошибка полной выборки данных")
 	ErrNotFound   = errx.New("Отсутствует значение")
+	ErrDuplicate  = errx.New("Дублирующее значение")
 	ErrBLOBLoad   = errx.New("Ошибка загрузки BLOB")
 	ErrBLOBDrop   = errx.New("Ошибка удаления BLOB")
 	ErrBLOBSave   = errx.New("Ошибка сохранения BLOB")

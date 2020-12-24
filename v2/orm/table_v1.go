@@ -2,8 +2,11 @@ package orm
 
 import (
 	"context"
+	"encoding/binary"
+	"math/rand"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -23,21 +26,21 @@ type v1Table struct {
 	id uint16
 }
 
-func (t v1Table) ID() uint16 { return t.id }
+func (t *v1Table) ID() uint16 { return t.id }
 
-func (t v1Table) Select(tx mvcc.Tx) Query { return NewQuery(&t, tx) }
+func (t *v1Table) Select(tx mvcc.Tx) Query { return NewQuery(t, tx) }
 
-func (t v1Table) Cursor(tx mvcc.Tx, id string) (Query, error) { return loadQuery(&t, tx, id) }
+func (t *v1Table) Cursor(tx mvcc.Tx, id string) (Query, error) { return loadQuery(t, tx, id) }
 
-func (t v1Table) Insert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
-	return t.upsert(tx, t.onInsert, pairs...)
+func (t *v1Table) Insert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
+	return t.upsert(tx, true, pairs...)
 }
 
-func (t v1Table) Upsert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
-	return t.upsert(tx, t.onUpdate, pairs...)
+func (t *v1Table) Upsert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
+	return t.upsert(tx, false, pairs...)
 }
 
-func (t v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
+func (t *v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -54,7 +57,7 @@ func (t v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
 	return nil
 }
 
-func (t v1Table) upsert(tx mvcc.Tx, hdl mvcc.Handler, pairs ...fdbx.Pair) (err error) {
+func (t *v1Table) upsert(tx mvcc.Tx, unique bool, pairs ...fdbx.Pair) (err error) {
 	if len(pairs) == 0 {
 		return nil
 	}
@@ -66,116 +69,115 @@ func (t v1Table) upsert(tx mvcc.Tx, hdl mvcc.Handler, pairs ...fdbx.Pair) (err e
 		}
 	}
 
-	if err = tx.Upsert(cp, mvcc.OnUpdate(hdl), mvcc.OnDelete(t.onDelete)); err != nil {
+	opts := []mvcc.Option{
+		mvcc.OnInsert(t.onInsert),
+		mvcc.OnDelete(t.onDelete),
+	}
+
+	if unique {
+		opts = append(opts, mvcc.OnUpdate(t.onUpdate))
+	}
+
+	if err = tx.Upsert(cp, opts...); err != nil {
 		return ErrUpsert.WithReason(err)
 	}
 
 	return nil
 }
 
-func (t v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
-	if len(pair.Value()) > 0 {
-		return ErrDuplicate.WithDebug(errx.Debug{
-			"key": pair.Key().String(),
-		})
-	}
-
-	return t.onUpdate(tx, pair)
-}
-
-func (t v1Table) onUpdate(tx mvcc.Tx, pair fdbx.Pair) (err error) {
-	if len(t.options.indexes) == 0 && len(t.options.multidx) == 0 {
+func (t *v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+	if len(t.options.batchidx) == 0 {
 		return nil
 	}
 
+	pair = pair.Unwrap()
+	pval := pair.Value()
 	pkey := pair.Key().Bytes()
+	rows := make([]fdbx.Pair, 0, 32)
+	var dict map[uint16][]fdbx.Key
 
-	var ups [1]fdbx.Pair
-	for idx, fnc := range t.options.indexes {
-		tmp := fnc(pair.Value())
+	for k := range t.options.batchidx {
+		if dict, err = t.options.batchidx[k](pval); err != nil {
+			return
+		}
 
-		if tmp == nil || len(tmp.Bytes()) == 0 {
+		if len(dict) == 0 {
 			continue
 		}
 
-		ups[0] = fdbx.NewPair(WrapIndexKey(t.id, idx, tmp).RPart(pkey...), pkey)
-		if err = tx.Upsert(ups[:]); err != nil {
-			return ErrIdxUpsert.WithReason(err).WithDebug(errx.Debug{"idx": idx})
+		for idx, keys := range dict {
+			for i := range keys {
+				if keys[i] == nil || len(keys[i].Bytes()) == 0 {
+					continue
+				}
+				rows = append(rows, fdbx.NewPair(WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...), pkey))
+			}
 		}
 	}
 
-	for idx, fnc := range t.options.multidx {
-		keys := fnc(pair.Value())
-
-		if len(keys) == 0 {
-			continue
-		}
-
-		pairs := make([]fdbx.Pair, 0, len(keys))
-		for i := range keys {
-			pairs = append(pairs, fdbx.NewPair(WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...), pkey))
-		}
-
-		if err = tx.Upsert(pairs); err != nil {
-			return ErrIdxUpsert.WithReason(err).WithDebug(errx.Debug{"idx": idx})
-		}
+	if err = tx.Upsert(rows); err != nil {
+		return ErrIdxUpsert.WithReason(err)
 	}
 
 	return nil
 }
 
-func (t v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
-	if len(t.options.indexes) == 0 && len(t.options.multidx) == 0 {
+func (t *v1Table) onUpdate(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+	return ErrDuplicate.WithDebug(errx.Debug{
+		"key": pair.Key().Printable(),
+	})
+}
+
+func (t *v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+	var usr fdbx.Pair
+
+	if len(t.options.batchidx) == 0 {
 		return nil
 	}
-
-	var usr fdbx.Pair
-	var ups [1]fdbx.Key
-
-	pkey := UnwrapTableKey(pair.Key()).Bytes()
 
 	// Здесь нам придется обернуть еще значение, которое возвращается, потому что оно не обработано уровнем ниже
 	if usr, err = newUsrPair(tx, t.id, pair); err != nil {
 		return ErrIdxDelete.WithReason(err)
 	}
 
-	for idx, fnc := range t.options.indexes {
-		if ups[0] = fnc(usr.Value()); ups[0] == nil || len(ups[0].Bytes()) == 0 {
+	uval := usr.Value()
+	rows := make([]fdbx.Key, 0, 32)
+	pkey := UnwrapTableKey(pair.Key()).Bytes()
+	var dict map[uint16][]fdbx.Key
+
+	for k := range t.options.batchidx {
+		if dict, err = t.options.batchidx[k](uval); err != nil {
+			return
+		}
+
+		if len(dict) == 0 {
 			continue
 		}
 
-		ups[0] = WrapIndexKey(t.id, idx, ups[0]).RPart(pkey...)
-
-		if err = tx.Delete(ups[:]); err != nil {
-			return ErrIdxDelete.WithReason(err).WithDebug(errx.Debug{"idx": idx})
+		for idx, keys := range dict {
+			for i := range keys {
+				if keys[i] == nil || len(keys[i].Bytes()) == 0 {
+					continue
+				}
+				rows = append(rows, WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...))
+			}
 		}
 	}
 
-	for idx, fnc := range t.options.multidx {
-		keys := fnc(usr.Value())
-
-		if len(keys) == 0 {
-			continue
-		}
-
-		for i := range keys {
-			keys[i] = WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...)
-		}
-
-		if err = tx.Delete(keys); err != nil {
-			return ErrIdxDelete.WithReason(err).WithDebug(errx.Debug{"idx": idx})
-		}
+	if err = tx.Delete(rows); err != nil {
+		return ErrIdxDelete.WithReason(err)
 	}
 
 	return nil
 }
 
-func (t v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Option) {
+func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 	var err error
+	var tbid [2]byte
+	var timer *time.Timer
 
-	opts := getOpts(args)
-	tick := time.NewTicker(opts.vwait)
-	defer tick.Stop()
+	binary.BigEndian.PutUint16(tbid[:], t.id)
+	tkey := fdbx.Bytes2Key(tbid[:]).Printable()
 
 	defer func() {
 		// Перезапуск только в случае ошибки
@@ -185,7 +187,7 @@ func (t v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Optio
 			// И только если мы вообще можем еще запускать
 			if ctx.Err() == nil {
 				// Тогда стартуем заново и в s.wait ничего не ставим
-				go t.Autovacuum(ctx, cn, args...)
+				go t.Autovacuum(ctx, cn)
 				return
 			}
 		}
@@ -202,57 +204,65 @@ func (t v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Optio
 		}
 	}()
 
+	// Работать должен постоянно
+	glog.Errorf("Start autovacuum on %s", tkey)
 	for ctx.Err() == nil {
 
-		if err = t.vacuumStep(cn); err != nil {
-			return
-		}
+		// Выбираем случайное время с 00:00 до 06:00
+		// Чтобы делать темные делишки под покровом ночи
+		now := time.Now()
+		min := rand.Intn(60)
+		hour := rand.Intn(7)
+		when := time.Date(now.Year(), now.Month(), now.Day()+1, hour, min, 00, 00, now.Location())
+		timer = time.NewTimer(when.Sub(now))
+		// timer = time.NewTimer(time.Hour)
 
 		select {
-		case <-tick.C:
+		case <-timer.C:
+			glog.Errorf("Run vacuum on %s", tkey)
+
+			if err = t.Vacuum(cn); err != nil {
+				return
+			}
+
+			glog.Errorf("Complete vacuum on %s", tkey)
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func (t v1Table) vacuumStep(cn db.Connection) (err error) {
-	var tx mvcc.Tx
+func (t *v1Table) Vacuum(dbc db.Connection) error {
+	if exp := mvcc.WithTx(dbc, func(tx mvcc.Tx) (err error) {
 
-	if tx, err = mvcc.Begin(cn); err != nil {
-		return ErrVacuum.WithReason(err)
+		// Этот запрос очищает только данные. Для них должен быть обработчик очистки BLOB
+		if err = tx.Vacuum(WrapTableKey(t.id, nil), mvcc.OnVacuum(t.onVacuum)); err != nil {
+			return
+		}
+
+		// Отдельно очистка всех индексов
+		if err = tx.Vacuum(WrapIndexKey(t.id, 0, nil).RSkip(2)); err != nil {
+			return
+		}
+
+		// Отдельно очистка всех очередей
+		if err = tx.Vacuum(WrapQueueKey(t.id, 0, nil, 0, nil).RSkip(3)); err != nil {
+			return
+		}
+
+		// Отдельно очистка всех курсоров
+		if err = tx.Vacuum(WrapQueryKey(t.id, nil)); err != nil {
+			return
+		}
+
+		return nil
+	}); exp != nil {
+		return ErrVacuum.WithReason(exp)
 	}
-	defer tx.Cancel()
-
-	// Этот запрос очищает только данные. Для них должен быть обработчик очистки BLOB
-	if err = tx.Vacuum(WrapTableKey(t.id, nil), mvcc.OnVacuum(t.onVacuum)); err != nil {
-		return ErrVacuum.WithReason(err)
-	}
-
-	// Отдельно очистка всех индексов
-	if err = tx.Vacuum(WrapIndexKey(t.id, 0, nil).RSkip(2)); err != nil {
-		return ErrVacuum.WithReason(err)
-	}
-
-	// Отдельно очистка всех очередей
-	if err = tx.Vacuum(WrapQueueKey(t.id, 0, nil, 0, nil).RSkip(3)); err != nil {
-		return ErrVacuum.WithReason(err)
-	}
-
-	// Отдельно очистка всех блобов
-	if err = tx.Vacuum(WrapBlobKey(t.id, nil)); err != nil {
-		return ErrVacuum.WithReason(err)
-	}
-
-	// Отдельно очистка всех курсоров
-	if err = tx.Vacuum(WrapQueryKey(t.id, nil)); err != nil {
-		return ErrVacuum.WithReason(err)
-	}
-
 	return nil
 }
 
-func (t v1Table) onVacuum(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
+func (t *v1Table) onVacuum(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
 	var mod models.ValueT
 
 	val := p.Value()

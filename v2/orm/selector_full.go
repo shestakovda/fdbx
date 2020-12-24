@@ -9,12 +9,12 @@ import (
 
 func NewFullSelector(tx mvcc.Tx) Selector {
 	return &fullSelector{
-		baseSelector: newBaseSelector(tx),
+		tx: tx,
 	}
 }
 
 type fullSelector struct {
-	*baseSelector
+	tx mvcc.Tx
 }
 
 func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-chan fdbx.Pair, <-chan error) {
@@ -22,21 +22,20 @@ func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<
 	errs := make(chan error, 1)
 
 	go func() {
-		var err error
+		var reqs []mvcc.Option
 
 		defer close(list)
 		defer close(errs)
 
 		opts := getOpts(args)
-		nkey := WrapTableKey(tbl.ID(), nil)
-		lkey := WrapTableKey(tbl.ID(), opts.lastkey)
-		reqs := make([]mvcc.Option, 0, 3)
+		fkey := WrapTableKey(tbl.ID(), opts.lastkey)
+		lkey := WrapTableKey(tbl.ID(), nil)
 		skip := len(opts.lastkey.Bytes()) > 0
 
 		if opts.reverse {
-			reqs = append(reqs, mvcc.From(nkey), mvcc.To(lkey), mvcc.Reverse())
+			reqs = []mvcc.Option{mvcc.From(lkey), mvcc.Last(fkey), mvcc.Reverse()}
 		} else {
-			reqs = append(reqs, mvcc.From(lkey), mvcc.To(nkey))
+			reqs = []mvcc.Option{mvcc.From(fkey), mvcc.Last(lkey)}
 		}
 
 		wctx, exit := context.WithCancel(ctx)
@@ -51,12 +50,11 @@ func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<
 				continue
 			}
 
-			if err = s.sendPair(wctx, list, pair); err != nil {
-				errs <- err
+			select {
+			case list <- fdbx.WrapPair(UnwrapTableKey(pair.Key()), pair):
+			case <-wctx.Done():
 				return
 			}
-
-			s.setKey(UnwrapTableKey(pair.Key()))
 		}
 
 		for err := range errc {

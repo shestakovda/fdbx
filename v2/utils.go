@@ -40,7 +40,7 @@ func Byte2Time(buf []byte) (time.Time, error) {
 		})
 	}
 
-	return time.Unix(0, int64(binary.BigEndian.Uint64(buf[:8]))), nil
+	return time.Unix(0, int64(binary.BigEndian.Uint64(buf[:8]))).UTC(), nil
 }
 
 func FlatPack(obj FlatPacker) []byte {

@@ -10,6 +10,9 @@ import (
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
+// Debug - флаг отладочных принтов
+var Debug = false
+
 // Task status
 const (
 	StatusPublished   byte = 1
@@ -27,7 +30,8 @@ type Table interface {
 	Upsert(mvcc.Tx, ...fdbx.Pair) error
 	Insert(mvcc.Tx, ...fdbx.Pair) error
 
-	Autovacuum(context.Context, db.Connection, ...Option)
+	Vacuum(db.Connection) error
+	Autovacuum(context.Context, db.Connection)
 }
 
 // Queue - универсальный интерфейс очередей, для работы с задачами
@@ -41,6 +45,7 @@ type Queue interface {
 	Sub(context.Context, db.Connection, int) (<-chan Task, <-chan error)
 	SubList(context.Context, db.Connection, int) ([]Task, error)
 
+	Undo(mvcc.Tx, fdbx.Key) error
 	Stat(mvcc.Tx) (int64, int64, error)
 	Lost(mvcc.Tx, int) ([]Task, error)
 	Task(mvcc.Tx, fdbx.Key) (Task, error)
@@ -50,6 +55,7 @@ type Queue interface {
 type Task interface {
 	Key() fdbx.Key
 	Body() []byte
+	Pair() fdbx.Pair
 	Status() byte
 	Repeats() uint32
 	Creator() string
@@ -74,19 +80,23 @@ type Query interface {
 	ByID(ids ...fdbx.Key) Query
 	PossibleByID(ids ...fdbx.Key) Query
 	ByIndex(idx uint16, query fdbx.Key) Query
+	ByIndexRange(idx uint16, from, last fdbx.Key) Query
 	BySelector(Selector) Query
 
 	// Модификаторы селекторов
 	Reverse() Query
+	Page(int) Query
 	Limit(int) Query
 	Where(Filter) Query
 
 	// Обработка результатов
 	Agg(...Aggregator) error
 	All() ([]fdbx.Pair, error)
+	Next() ([]fdbx.Pair, error)
 	First() (fdbx.Pair, error)
 	Sequence(context.Context) (<-chan fdbx.Pair, <-chan error)
 	Delete() error
+	Empty() bool
 
 	// Сохранение запроса (курсор)
 	Save() (string, error)
@@ -95,15 +105,17 @@ type Query interface {
 
 // Selector - поставщик сырых данных для запроса
 type Selector interface {
-	LastKey() fdbx.Key
 	Select(context.Context, Table, ...Option) (<-chan fdbx.Pair, <-chan error)
 }
 
 // IndexKey - для получения ключей при индексации коллекций
-type IndexKey func([]byte) fdbx.Key
+type IndexKey func([]byte) (fdbx.Key, error)
 
 // IndexMultiKey - для получения ключей при индексации коллекций
-type IndexMultiKey func([]byte) []fdbx.Key
+type IndexMultiKey func([]byte) ([]fdbx.Key, error)
+
+// IndexBatchKey - для получения ключей при индексации коллекций
+type IndexBatchKey func([]byte) (map[uint16][]fdbx.Key, error)
 
 // Option - доп.аргумент для инициализации коллекций
 type Option func(*options)
@@ -201,6 +213,7 @@ var (
 	ErrSub       = errx.New("Ошибка получения задач из очереди")
 	ErrPub       = errx.New("Ошибка публикации задачи в очередь")
 	ErrAck       = errx.New("Ошибка подтверждения задач в очереди")
+	ErrUndo      = errx.New("Ошибка отмены опубликованной задачи")
 	ErrLost      = errx.New("Ошибка получения неподтвержденных задач")
 	ErrStat      = errx.New("Ошибка получения статистики задач")
 	ErrTask      = errx.New("Ошибка получения метаданных задачи")
@@ -217,6 +230,7 @@ var (
 	ErrValUnpack = errx.New("Ошибка распаковки значения")
 	ErrVacuum    = errx.New("Ошибка автоочистки значений")
 	ErrAll       = errx.New("Ошибка загрузки всех значений")
+	ErrNext      = errx.New("Ошибка загрузки страницы значений")
 	ErrFirst     = errx.New("Ошибка загрузки первого значения")
 	ErrSequence  = errx.New("Ошибка загрузки коллекции")
 	ErrLoadQuery = errx.New("Ошибка загрузки курсора запроса")

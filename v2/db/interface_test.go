@@ -93,7 +93,7 @@ func (s *InterfaceSuite) TestConnection() {
 			s.Equal("val2", string(r.Data(key1).Value()))
 			s.Equal(num+add, int64(binary.LittleEndian.Uint64(r.Data(key2).Value())))
 			s.Empty(r.Data(key3).Value())
-			s.Len(r.List(nil, nil, 0, false).Resolve(), 2)
+			s.Len(r.List(nil, nil, 0, false, false).Resolve(), 2)
 			return nil
 		}))
 
@@ -118,7 +118,7 @@ func (s *InterfaceSuite) TestConnection() {
 	s.Require().NoError(cn.Write(func(w db.Writer) error {
 		w.Lock(key1, key3)
 		w.Erase(key1, key3)
-		s.Len(w.List(nil, nil, 0, false).Resolve(), 0)
+		s.Len(w.List(nil, nil, 0, false, false).Resolve(), 0)
 		return nil
 	}))
 }

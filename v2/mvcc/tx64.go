@@ -3,10 +3,12 @@ package mvcc
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -26,26 +28,21 @@ import (
 	* Получить монотонно возрастающий идентификатор транзакции, синхронизированный между всеми инстансами
 	* Не создать ни одного конфликта записи/чтения между параллельно стартующими транзакциями
 */
-func newTx64(conn db.Connection) (t *tx64, err error) {
-	t = &tx64{
+func newTx64(conn db.Connection) *tx64 {
+	return &tx64{
 		conn:   conn,
-		start:  uint64(time.Now().UTC().UnixNano()),
+		txid:   newTxID(),
+		start:  time.Now().UTC().UnixNano(),
 		status: txStatusRunning,
 	}
-
-	if t.txid, err = sflake.NextID(); err != nil {
-		return
-	}
-
-	return t, nil
 }
 
 type tx64 struct {
 	conn   db.Connection
 	mods   uint32
 	opid   uint32
-	txid   uint64
-	start  uint64
+	txid   []byte
+	start  int64
 	locks  locks
 	status byte
 	oncomm []CommitHandler
@@ -107,22 +104,24 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
 	hdlr := func(w db.Writer) (exp error) {
-		var row fdbx.Pair
+		var rows []fdbx.Pair
 
 		lc := makeCache()
+		kl := make([]int, len(keys))
 		lg := make([]fdbx.ListGetter, len(keys))
 
 		for i := range keys {
 			ukey := WrapKey(keys[i])
-			lg[i] = w.List(ukey, ukey, 0, true)
+			kl[i] = len(ukey.Bytes())
+			lg[i] = w.List(ukey, ukey, 0, true, false)
 		}
 
 		for i := range lg {
-			if row, exp = t.fetchRow(w, lc, opid, lg[i]); exp != nil {
+			if rows, exp = t.fetchRows(w, lc, opid, lg[i], true, kl[i]); exp != nil {
 				return
 			}
 
-			if exp = t.dropRow(w, opid, row, opts.onDelete); exp != nil {
+			if exp = t.dropRows(w, opid, rows, opts.onDelete); exp != nil {
 				return
 			}
 		}
@@ -158,29 +157,37 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
 	hdlr := func(w db.Writer) (exp error) {
-		var row fdbx.Pair
+		var rows []fdbx.Pair
 
 		lc := makeCache()
+		kl := make([]int, len(pairs))
 		lg := make([]fdbx.ListGetter, len(pairs))
 
 		for i := range pairs {
 			ukey := WrapKey(pairs[i].Key())
-			lg[i] = w.List(ukey, ukey, 0, true)
+			kl[i] = len(ukey.Bytes())
+			lg[i] = w.List(ukey, ukey, 0, true, false)
 		}
 
 		for i := range pairs {
-			if row, exp = t.fetchRow(w, lc, opid, lg[i]); exp != nil {
+			if rows, exp = t.fetchRows(w, lc, opid, lg[i], true, kl[i]); exp != nil {
 				return
 			}
 
-			if row == nil && opts.onInsert != nil {
-				if exp = opts.onInsert(t, pairs[i].Unwrap()); exp != nil {
+			if opts.onUpdate != nil && len(rows) > 0 {
+				if exp = opts.onUpdate(t, pairs[i]); exp != nil {
 					return
 				}
 			}
 
-			if exp = t.dropRow(w, opid, row, opts.onDelete); exp != nil {
+			if exp = t.dropRows(w, opid, rows, opts.onDelete); exp != nil {
 				return
+			}
+
+			if opts.onInsert != nil {
+				if exp = opts.onInsert(t, pairs[i]); exp != nil {
+					return
+				}
 			}
 
 			w.Upsert(&sysPair{
@@ -188,12 +195,6 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 				txid: t.txid,
 				orig: pairs[i],
 			})
-
-			if opts.onUpdate != nil {
-				if exp = opts.onUpdate(t, pairs[i].Unwrap()); exp != nil {
-					return
-				}
-			}
 		}
 
 		return nil
@@ -215,36 +216,74 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 /*
 	Select - выборка актуального в данной транзакции значения ключа.
 */
-func (t *tx64) Select(key fdbx.Key) (res fdbx.Pair, err error) {
+func (t *tx64) Select(key fdbx.Key, args ...Option) (res fdbx.Pair, err error) {
 	ukey := WrapKey(key)
+	opts := getOpts(args)
 	opid := atomic.AddUint32(&t.opid, 1)
+	hdlr := func(r db.Reader) (exp error) {
+		var ok bool
+		var w db.Writer
+		var rows []fdbx.Pair
 
-	if err = t.conn.Read(func(r db.Reader) (exp error) {
-		var row fdbx.Pair
+		if opts.lock {
+			// Блокировка не означает модификаций, поэтому mods не увеличиваем
+			if w, ok = r.(db.Writer); ok {
+				w.Lock(ukey, ukey)
+			}
+		}
 
-		if row, exp = t.fetchRow(r, nil, opid, r.List(ukey, ukey, 0, true)); exp != nil {
+		lc := makeCache()
+		kl := len(ukey.Bytes())
+		lg := r.List(ukey, ukey, 0, true, false)
+
+		if rows, exp = t.fetchRows(r, lc, opid, lg, false, kl); exp != nil {
 			return
 		}
 
-		if row != nil {
-			res = &usrPair{
-				orig: row,
-			}
-			return nil
+		if len(rows) == 0 {
+			return ErrNotFound.WithDebug(errx.Debug{
+				"key": key.Printable(),
+			})
 		}
 
-		return ErrNotFound.WithDebug(errx.Debug{
-			"key": key.String(),
-		})
-	}); err != nil {
+		if len(rows) > 1 {
+			return ErrDuplicate.WithDebug(errx.Debug{
+				"key": key.Printable(),
+			})
+		}
+
+		res = &usrPair{
+			orig: rows[0],
+		}
+
+		if opts.onLock != nil {
+			// Раз какой-то обработчик в записи, значит модификация - увеличиваем счетчик
+			atomic.AddUint32(&t.mods, 1)
+			return opts.onLock(t, res, w)
+		}
+
+		return nil
+	}
+
+	if opts.lock {
+		if opts.writer == nil {
+			err = t.conn.Write(func(w db.Writer) error { return hdlr(w) })
+		} else {
+			err = hdlr(opts.writer)
+		}
+	} else {
+		err = t.conn.Read(hdlr)
+	}
+
+	if err != nil {
 		return nil, ErrSelect.WithReason(err)
 	}
 
 	return res, nil
 }
 
-func (t *tx64) ListAll(args ...Option) (_ []fdbx.Pair, err error) {
-	ctx, cancel := context.WithCancel(context.Background())
+func (t *tx64) ListAll(ctx context.Context, args ...Option) (_ []fdbx.Pair, err error) {
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	list := make([]fdbx.Pair, 0, 128)
@@ -278,7 +317,6 @@ func (t *tx64) SeqScan(ctx context.Context, args ...Option) (<-chan fdbx.Pair, <
 				select {
 				case list <- part[i]:
 				case <-ctx.Done():
-					errs <- ErrSeqScan.WithReason(ctx.Err())
 					return
 				}
 			}
@@ -308,20 +346,30 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 
 		size := 0
 		rows := 0
+		skip := false
+		lcch := makeCache()
 		opts := getOpts(args)
 		from := WrapKey(opts.from)
-		last := WrapKey(opts.to)
+		last := WrapKey(opts.last)
 		opid := atomic.AddUint32(&t.opid, 1)
 		hdlr := func(r db.Reader) (exp error) {
 			if opts.reverse {
-				rows, part, last, exp = t.selectPart(r, from, last, size, opid, &opts)
+				rows, part, last, exp = t.selectPart(r, lcch, from, last, size, skip, opid, &opts)
 			} else {
-				rows, part, from, exp = t.selectPart(r, from, last, size, opid, &opts)
+				rows, part, from, exp = t.selectPart(r, lcch, from, last, size, skip, opid, &opts)
 			}
 			return exp
 		}
 
+		if Debug {
+			glog.Infof("tx64.seqScan(%s, %s, %d)", from.Printable(), last.Printable(), opts.limit)
+		}
+
 		for {
+			if ctx.Err() != nil {
+				return
+			}
+
 			if opts.lock {
 				if opts.writer == nil {
 					err = t.conn.Write(func(w db.Writer) error { return hdlr(w) })
@@ -337,6 +385,13 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 				return
 			}
 
+			if Debug {
+				glog.Infof("tx64.seqScan.from = %s", from.Printable())
+				glog.Infof("tx64.seqScan.last = %s", last.Printable())
+				glog.Infof("tx64.seqScan.rows = %d", rows)
+				glog.Infof("tx64.seqScan.part = %d", len(part))
+			}
+
 			if len(part) == 0 {
 				if rows < MaxRowCount {
 					return
@@ -345,15 +400,13 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 				}
 			}
 
+			skip = true
 			select {
 			case list <- part:
-				size += len(part)
+				if size += len(part); opts.limit > 0 && size >= opts.limit {
+					return
+				}
 			case <-ctx.Done():
-				errs <- ErrSeqScan.WithReason(ctx.Err())
-				return
-			}
-
-			if opts.limit > 0 && size >= opts.limit {
 				return
 			}
 		}
@@ -364,24 +417,46 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 
 func (t *tx64) selectPart(
 	r db.Reader,
+	lc *txCache,
 	from, to fdbx.Key,
 	size int,
+	skip bool,
 	opid uint32,
 	opts *options,
 ) (rows int, part []fdbx.Pair, last fdbx.Key, err error) {
 	var ok bool
 	var w db.Writer
 
-	if rows, part, err = t.fetchAll(r, nil, opid, r.List(from, to, uint64(MaxRowCount), opts.reverse)); err != nil {
+	if Debug {
+		glog.Infof("tx64.selectPart(%s, %s, %d)", from.Printable(), to.Printable(), size)
+	}
+
+	lg := r.List(from, to, uint64(MaxRowCount), opts.reverse, skip)
+
+	if part, err = t.fetchRows(r, lc, opid, lg, false, 0); err != nil {
 		return
 	}
 
-	if len(part) == 0 {
+	// вызов из кеша
+	list := lg.Resolve()
+
+	if rows = len(list); rows == 0 {
 		if opts.reverse {
 			return rows, nil, from, nil
 		} else {
 			return rows, nil, to, nil
 		}
+	}
+	last = list[len(list)-1].Key()
+
+	if Debug {
+		glog.Infof("tx64.selectPart.rows = %d", rows)
+		glog.Infof("tx64.selectPart.part = %d", len(part))
+		glog.Infof("tx64.selectPart.last = %s", last.Printable())
+	}
+
+	if len(part) == 0 {
+		return rows, nil, last, nil
 	}
 
 	if opts.lock {
@@ -398,12 +473,6 @@ func (t *tx64) selectPart(
 	}
 
 	part = part[:cnt]
-
-	if opts.reverse {
-		last = part[0].Key()
-	} else {
-		last = part[cnt-1].Key().RPart(0x01)
-	}
 
 	for i := range part {
 		part[i] = &usrPair{orig: part[i]}
@@ -467,11 +536,12 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size int, args ...Option) (_ []byte, err e
 
 	var rows []fdbx.Pair
 
+	skip := false
 	ukey := WrapKey(key)
 	end := ukey.RPart(0xFF, 0xFF)
 	res := make([][]byte, 0, pack)
 	fnc := func(r db.Reader) (exp error) {
-		rows = r.List(ukey, end, pack, false).Resolve()
+		rows = r.List(ukey, end, pack, false, skip).Resolve()
 		return nil
 	}
 
@@ -488,7 +558,8 @@ func (t *tx64) LoadBLOB(key fdbx.Key, size int, args ...Option) (_ []byte, err e
 			res = append(res, rows[i].Value())
 		}
 
-		ukey = rows[len(rows)-1].Key().RPart(0x01)
+		ukey = rows[len(rows)-1].Key()
+		skip = true
 	}
 
 	return bytes.Join(res, nil), nil
@@ -565,44 +636,46 @@ func (t *tx64) SharedLock(key fdbx.Key, wait time.Duration) (err error) {
 	}
 }
 
-func (t *tx64) isCommitted(local *txCache, r db.Reader, x uint64) (_ bool, err error) {
+func (t *tx64) isCommitted(local *txCache, r db.Reader, txid []byte) (_ bool, err error) {
 	var status byte
 
-	if status, err = t.txStatus(local, r, x); err != nil {
+	if status, err = t.txStatus(local, r, txid); err != nil {
 		return
 	}
 
 	return status == txStatusCommitted, nil
 }
 
-func (t *tx64) isAborted(local *txCache, r db.Reader, x uint64) (_ bool, err error) {
+func (t *tx64) isAborted(local *txCache, r db.Reader, txid []byte) (_ bool, err error) {
 	var status byte
 
-	if status, err = t.txStatus(local, r, x); err != nil {
+	if status, err = t.txStatus(local, r, txid); err != nil {
 		return
 	}
 
 	return status == txStatusAborted, nil
 }
 
-func (t *tx64) txStatus(local *txCache, r db.Reader, x uint64) (status byte, err error) {
+func (t *tx64) txStatus(local *txCache, r db.Reader, txid []byte) (status byte, err error) {
+	uid := string(txid)
+
 	// Дешевле всего чекнуть в глобальном кеше, вдруг уже знаем такую
-	if status = globCache.get(x); status != txStatusUnknown {
+	if status = globCache.get(uid); status != txStatusUnknown {
 		return
 	}
 
 	// Возможно, это открытая транзакция из локального кеша
-	if status = local.get(x); status != txStatusUnknown {
+	if status = local.get(uid); status != txStatusUnknown {
 		return
 	}
 
 	// Придется слазать в БД за статусом и положить в кеш
-	val := r.Data(txKey(x)).Value()
+	val := r.Data(WrapTxKey(fdbx.Bytes2Key(txid))).Value()
 
 	// Если в БД нет записи, то либо транзакция еще открыта, либо это был откат
 	// Поскольку нет определенности, в глобальный кеш ничего не складываем
 	if len(val) == 0 {
-		local.set(x, txStatusRunning)
+		local.set(uid, txStatusRunning)
 		return txStatusRunning, nil
 	}
 
@@ -611,17 +684,16 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, x uint64) (status byte, err
 
 	// В случае финальных статусов можем положить в глобальный кеш
 	if status == txStatusCommitted || status == txStatusAborted {
-		globCache.set(x, status)
+		globCache.set(uid, status)
 	}
 
 	// В локальный кеш можем положить в любом случае, затем вернуть
-	local.set(x, status)
+	local.set(uid, status)
 	return status, nil
 }
 
 func (t *tx64) pack() []byte {
 	return fdbx.FlatPack(&models.TransactionT{
-		TxID:   t.txid,
 		Start:  t.start,
 		Status: t.status,
 	})
@@ -648,20 +720,20 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	}
 
 	// Получаем ключ транзакции и устанавливаем статус
-	txid := txKey(t.txid)
+	uid := string(t.txid)
 	mods := atomic.LoadUint32(&t.mods)
 	t.status = status
 
 	// Если это откат - то сохраняем данные только в случае, если
 	// в рамках транзакции могли быть какие-то изменения (счетчик mods > 0)
 	// В остальных случаях можем спокойно установить локальный кеш и выйти
-	if t.status == txStatusAborted && mods == 0 {
-		globCache.set(t.txid, t.status)
+	if mods == 0 {
+		globCache.set(uid, t.status)
 		return nil
 	}
 
 	// Cохраняем в БД объект с обновленным статусом
-	pair := fdbx.NewPair(txid, t.pack())
+	pair := fdbx.NewPair(WrapTxKey(fdbx.Bytes2Key(t.txid)), t.pack())
 	hdlr := func(w db.Writer) error { w.Upsert(pair); return nil }
 
 	// Выполняем обработчик в физической транзакции - указанной или новой
@@ -676,12 +748,12 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	}
 
 	// При удачном стечении обстоятельств - устанавливаем глобальный кеш
-	globCache.set(t.txid, t.status)
+	globCache.set(uid, t.status)
 	return nil
 }
 
 /*
-	fetchRow - выборка одного актуального в данной транзакции значения ключа.
+	isVisible - проверка актуального в данной транзакции значения ключа.
 
 	Каждый ключ для значения на самом деле хранится в нескольких версиях.
 	Их можно разделить на три группы: устаревшие, актуальные, незакоммиченные.
@@ -713,223 +785,192 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	сработает внутренний механизм конфликтов fdb, так что одновременно двух актуальных
 	версий не должно появиться. Один из обработчиков увидит изменения и изменит поведение.
 */
-func (t *tx64) fetchRow(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGetter) (_ fdbx.Pair, err error) {
-	var comm bool
-	var buf models.RowState
-	var row models.RowStateT
+func (t *tx64) isVisible(r db.Reader, lc *txCache, opid uint32, item fdbx.Pair, dirty bool) (ok bool, err error) {
+	var ptr [16]byte
+	var comm, fail bool
 
-	if lc == nil {
-		lc = makeCache()
+	// Нужна защита от паники, на случай левых или битых записей
+	defer func() {
+		if rec := recover(); rec != nil {
+			glog.Errorf("panic mvcc.tx64.isVisible(%s): %+v", item.Key().Printable(), rec)
+			ok = false
+			err = nil
+		}
+	}()
+
+	key := item.Key().Bytes()
+	copy(ptr[:], key[len(key)-16:len(key)])
+	cmin := binary.BigEndian.Uint32(ptr[8:12])
+	xmin := append(ptr[:8], ptr[12:16]...)
+	row := models.GetRootAsRow(item.Value(), 0).UnPack()
+
+	if Debug {
+		defer func() { glog.Infof("isVisible(%s) = %t", item.Key().Printable(), ok) }()
 	}
 
-	// Загружаем список версий, существующих в рамках этой операции
-	list := lg.Resolve()
-
-	// Проверяем все версии, пока не получим актуальную
-	for i := range list {
-		val := list[i].Value()
-
-		if len(val) == 0 {
-			continue
-		}
-
-		models.GetRootAsRow(val, 0).State(&buf).UnPackTo(&row)
-
-		// Частный случай - если запись создана в рамках текущей транзакции
-		if row.XMin == t.txid {
-
+	// Частный случай - если запись создана в рамках текущей транзакции
+	// то даже если запись создана позже, тут возвращаем, чтобы можно было выполнить
+	// "превентивное" удаление и чтобы не было никаких конфликтующих строк
+	// Поэтому проверять будем только сторонние транзакции
+	if bytes.Equal(xmin, t.txid) {
+		if !dirty {
 			// Если запись создана позже в рамках данной транзакции, то еще не видна
-			if row.CMin >= opid {
-				continue
+			if cmin >= opid {
+				return false, nil
 			}
+		}
+	} else if dirty {
 
-			// Поскольку данная транзакция еще не закоммичена, то версия может быть
-			// Или удалена в этой же транзакции, или вообще не удалена (или 0, или t.txid)
-			// Если запись удалена в текущей транзакции и до этого момента, то уже не видна
-			if row.XMax == t.txid && row.CMax < opid {
-				continue
-			}
-
-			// В этом случае объект создан в данной транзакции и еще не удален, можем прочитать
-			return list[i], nil
+		// Проверим, была ли отменена транзакция создания этой записи
+		if fail, err = t.isAborted(lc, r, xmin); err != nil {
+			return
 		}
 
-		if comm, err = t.isCommitted(lc, r, row.XMin); err != nil {
+		// Если запись отменена, то в любом случае она нас больше не инетересует
+		if fail {
+			return false, nil
+		}
+	} else {
+		// Проверим, была ли завершена транзакция создания этой записи
+		if comm, err = t.isCommitted(lc, r, xmin); err != nil {
 			return
 		}
 
 		// Если запись создана другой транзакцией и она еще не закоммичена, то еще не видна
 		if !comm {
-			continue
-		}
-
-		// Проверяем, возможно запись уже была удалена
-		switch row.XMax {
-		case t.txid:
-			// Если она была удалена до этого момента, то уже не видна
-			if row.CMax < opid {
-				continue
-			}
-
-			// В этом случае объект создан в закоммиченной транзакции и удален позже, чем мы тут читаем
-			fallthrough
-		case 0:
-			// В этом случае объект создан в закоммиченной транзакции и еще не был удален
-			return list[i], nil
-		default:
-			// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
-			if comm, err = t.isCommitted(lc, r, row.XMax); err != nil {
-				return
-			}
-
-			if !comm {
-				return list[i], nil
-			}
+			return false, nil
 		}
 	}
 
-	return nil, nil
-}
-
-// Аналогично fetchRow, но все актуальные версии всех ключей по диапазону
-func (t *tx64) fetchAll(r db.Reader, lc *txCache, opid uint32, lg fdbx.ListGetter) (cnt int, res []fdbx.Pair, err error) {
-	var comm bool
-	var buf models.RowState
-	var row models.RowStateT
-
-	if lc == nil {
-		lc = makeCache()
+	// В этом случае объект еще не был удален, значит виден
+	if len(row.Drop) == 0 {
+		return true, nil
 	}
 
-	list := lg.Resolve()
-	res = list[:0]
-	cnt = len(list)
-
-	// Проверяем все версии, пока не получим актуальную
-	for i := range list {
-		val := list[i].Value()
-
-		if len(val) == 0 {
-			continue
+	// Эта запись уже была удалена этой или параллельной транзакцией
+	// Другая транзакция может удалить эту запись "превентивно", на случай конфликтов
+	for i := range row.Drop {
+		// Учитываем изменения, если запись удалена в текущей транзакции
+		if bytes.Equal(row.Drop[i].Tx, t.txid) {
+			// Если удалена до этого момента, то уже не видна
+			// Если "позже" в параллельном потоке - то еще можно читать
+			return row.Drop[i].Op > opid, nil
 		}
 
-		models.GetRootAsRow(val, 0).State(&buf).UnPackTo(&row)
-
-		// Частный случай - если запись создана в рамках текущей транзакции
-		if row.XMin == t.txid {
-
-			// Если запись создана позже в рамках данной транзакции, то еще не видна
-			if row.CMin >= opid {
-				continue
-			}
-
-			// Поскольку данная транзакция еще не закоммичена, то версия может быть
-			// Или удалена в этой же транзакции, или вообще не удалена (или 0, или t.txid)
-			// Если запись удалена в текущей транзакции и до этого момента, то уже не видна
-			if row.XMax == t.txid && row.CMax < opid {
-				continue
-			}
-
-			// В этом случае объект создан в данной транзакции и еще не удален, можем прочитать
-			res = append(res, list[i])
-			continue
-		}
-
-		if comm, err = t.isCommitted(lc, r, row.XMin); err != nil {
+		// Проверим, была ли завершена транзакция удаления этой записи
+		if comm, err = t.isCommitted(lc, r, row.Drop[i].Tx); err != nil {
 			return
 		}
 
-		// Если запись создана другой транзакцией и она еще не закоммичена, то еще не видна
-		if !comm {
-			continue
-		}
-
-		// Проверяем, возможно запись уже была удалена
-		switch row.XMax {
-		case t.txid:
-			// Если она была удалена до этого момента, то уже не видна
-			if row.CMax < opid {
-				continue
-			}
-
-			// В этом случае объект создан в закоммиченной транзакции и удален позже, чем мы тут читаем
-			fallthrough
-		case 0:
-			// В этом случае объект создан в закоммиченной транзакции и еще не был удален
-			res = append(res, list[i])
-			continue
-		default:
-			// Если запись была удалена другой транзакцией, но она еще закоммичена, то еще видна
-			if comm, err = t.isCommitted(lc, r, row.XMax); err != nil {
-				return
-			}
-			if !comm {
-				res = append(res, list[i])
-				continue
-			}
+		// Мы должны учитывать изменения, сделанные закоммиченными транзакциями
+		if comm {
+			return false, nil
 		}
 	}
 
-	// Стираем хвост, чтобы сборщик мусора пришел за ним
-	for i := len(res); i < len(list); i++ {
-		list[i] = nil
-	}
-
-	return cnt, res, nil
+	// Если не нашли "значимых" для нас удалений - значит запись еще видна
+	return true, nil
 }
 
-func (t *tx64) dropRow(w db.Writer, opid uint32, pair fdbx.Pair, onDelete Handler) (err error) {
-	if pair == nil {
+// fetchRows - все актуальные версии всех ключей по диапазону
+func (t *tx64) fetchRows(
+	r db.Reader,
+	lc *txCache,
+	opid uint32,
+	lg fdbx.ListGetter,
+	dirty bool,
+	exact int,
+) (res []fdbx.Pair, err error) {
+	var ok bool
+
+	list := lg.Resolve()
+	res = make([]fdbx.Pair, 0, len(list))
+
+	// Проверяем все версии, пока не получим актуальную
+	for i := range list {
+		if exact > 0 && len(list[i].Key().Bytes()) != (exact+16) {
+			continue
+		}
+
+		if ok, err = t.isVisible(r, lc, opid, list[i], dirty); err != nil {
+			return
+		}
+
+		if ok {
+			res = append(res, list[i])
+		}
+	}
+
+	return res, nil
+}
+
+func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdbx.Pair, onDelete PairHandler) (err error) {
+	var row *models.RowT
+
+	if len(pairs) == 0 {
 		return nil
 	}
 
 	atomic.AddUint32(&t.mods, 1)
 
-	buf := pair.Value()
+	for _, pair := range pairs {
 
-	if len(buf) > 0 {
-		row := models.GetRootAsRow(buf, 0)
+		if buf := pair.Value(); len(buf) > 0 {
+			row = models.GetRootAsRow(buf, 0).UnPack()
 
-		// Обработчик имеет возможность предотвратить удаление/обновление, выбросив ошибку
-		if onDelete != nil {
-			if err = onDelete(t, fdbx.NewPair(UnwrapKey(pair.Key()), row.DataBytes())); err != nil {
-				return ErrDelete.WithReason(err)
+			// Обработчик имеет возможность предотвратить удаление/обновление, выбросив ошибку
+			if onDelete != nil {
+				if err = onDelete(t, fdbx.NewPair(UnwrapKey(pair.Key()), row.Data)); err != nil {
+					return ErrDelete.WithReason(err)
+				}
+			}
+
+			row.Drop = append(row.Drop, &models.TxPtrT{
+				Tx: t.txid,
+				Op: opid,
+			})
+		} else {
+			// По идее сюда никогда не должны попасть, но на всякий случай - элемент автовосстановления стабильности
+			row = &models.RowT{
+				Drop: []*models.TxPtrT{{
+					Tx: t.txid,
+					Op: opid,
+				}},
+				Data: nil,
 			}
 		}
 
-		// В модели состояния поля указаны как required
-		// Обновление должно произойти 100%, если только это не косяк модели или баг библиотеки
-		if state := row.State(nil); !(state.MutateXMax(t.txid) && state.MutateCMax(opid)) {
-			return ErrDelete.WithStack()
-		}
-	} else {
-		// По идее сюда никогда не должны попасть, но на всякий случай - элемент автовосстановления стабильности
-		buf = fdbx.FlatPack(&models.RowT{
-			State: &models.RowStateT{
-				XMin: t.txid,
-				XMax: t.txid,
-				CMin: 0,
-				CMax: opid,
-			},
-			Data: nil,
-		})
+		// Обновляем данные в БД по ключу
+		w.Upsert(fdbx.NewPair(pair.Key(), fdbx.FlatPack(row)))
 	}
-
-	// Обновляем данные в БД по ключу
-	w.Upsert(fdbx.NewPair(pair.Key(), buf))
 	return nil
+}
+
+func (t *tx64) Touch(key fdbx.Key) {
+	t.OnCommit(func(w db.Writer) error {
+		w.Upsert(fdbx.NewPair(WrapWatchKey(key), fdbx.Time2Byte(time.Now())))
+		return nil
+	})
+}
+
+func (t *tx64) Watch(key fdbx.Key) (wait fdbx.Waiter, err error) {
+	return wait, t.conn.Write(func(w db.Writer) error {
+		wait = w.Watch(WrapWatchKey(key))
+		return nil
+	})
 }
 
 func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 	atomic.AddUint32(&t.mods, 1)
 
+	skip := false
 	opts := getOpts(args)
 	from := WrapKey(prefix)
 	to := from.Clone()
 
 	for {
 		if err = t.conn.Write(func(w db.Writer) (exp error) {
-			lg := w.List(from, to, uint64(opts.packSize), false)
+			lg := w.List(from, to, uint64(opts.packSize), false, skip)
 
 			if from, exp = t.vacuumPart(w, lg, opts.onVacuum); exp != nil {
 				return
@@ -941,80 +982,40 @@ func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 		}
 
 		// Пустой ключ - значит больше не было строк, условие выхода
-		if from == nil {
+		if len(from.Bytes()) == 0 {
 			return nil
 		}
+		skip = true
+
+		// Передышка, чтобы не слишком грузить бд
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-// vacuumPart - функция обратная fetchRow, в том смысле, что она удаляет все ключи, которые больше не нужны в БД
+// vacuumPart - функция обратная fetchRows, в том смысле, что она удаляет все ключи, которые больше не нужны в БД
 func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) (_ fdbx.Key, err error) {
 	var ok bool
-	var val []byte
-	var buf models.RowState
-	var row models.RowStateT
 
 	list := lg.Resolve()
 
 	// Больше нечего получить - условие выхода
 	if len(list) == 0 {
-		return nil, nil
+		return fdbx.Bytes2Key(nil), nil
 	}
 
 	lc := makeCache()
 	drop := make([]fdbx.Pair, 0, len(list))
+	opid := atomic.AddUint32(&t.opid, 1)
 
 	atomic.AddUint32(&t.mods, 1)
 
 	// Проверяем все пары ключ/значение, удаляя все, что может помешать
 	for i := range list {
-		val = list[i].Value()
-
-		// Могут попадаться не только значения mvcc, но и произвольные счетчики
-		func() {
-			defer func() {
-				if rec := recover(); rec != nil {
-					val = nil
-				}
-			}()
-			models.GetRootAsRow(val, 0).State(&buf).UnPackTo(&row)
-		}()
-
-		if len(val) == 0 {
-			continue
-		}
-
-		// Частный случай - если запись создана в рамках текущей транзакции
-		if row.XMin == t.txid {
-			// Хотя в ряде случаев запись уже можно удалять, но для упрощения логики не будем.
-			// К тому же, это будет транзакция очистки, вряд ли мы вообще сюда когда-то попадем
-			continue
-		}
-
-		// Проверяем статус транзакции, которая создала запись
-		if ok, err = t.isAborted(lc, w, row.XMin); err != nil {
+		if ok, err = t.isVisible(w, lc, opid, list[i], true); err != nil {
 			return
 		}
 
-		// Удаляем, если запись точно ушла в мусор в самом начале
-		if ok {
-			drop = append(drop, list[i])
-			continue
-		}
-
-		// Если запись еще не удалена, то в любом случае не трогаем
-		// Если она удалена данной транзакцией, то для упрощения тоже пока не трогаем
-		if row.XMax == 0 || row.XMax == t.txid {
-			continue
-		}
-
-		// Проверяем статус транзакции, которая создала запись
-		if ok, err = t.isCommitted(lc, w, row.XMax); err != nil {
-			return
-		}
-
-		// Если запись была удалена другой транзакцией, и она закоммичена, то смело можем удалять
-		if ok {
+		if !ok {
 			drop = append(drop, list[i])
 		}
 	}
@@ -1031,7 +1032,7 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 	}
 
 	// Возвращаем последний проверенный ключ, с которого надо начать след. цикл
-	return list[len(list)-1].Key().RPart(0x01), nil
+	return list[len(list)-1].Key(), nil
 }
 
 type locks struct {
@@ -1047,11 +1048,11 @@ func (l *locks) Append(key fdbx.Key) (exists bool) {
 		l.acks = make(map[string]fdbx.Key, 1)
 	}
 
-	if l.acks[key.String()] != nil {
+	if l.acks[key.Printable()] != nil {
 		return true
 	}
 
-	l.acks[key.String()] = key
+	l.acks[key.Printable()] = key
 	return false
 }
 

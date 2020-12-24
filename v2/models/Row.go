@@ -7,27 +7,45 @@ import (
 )
 
 type RowT struct {
-	State *RowStateT
-	Data  []byte
+	Drop []*TxPtrT
+	Data []byte
 }
 
 func (t *RowT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	if t == nil {
 		return 0
 	}
-	DataOffset := flatbuffers.UOffsetT(0)
+	dropOffset := flatbuffers.UOffsetT(0)
+	if t.Drop != nil {
+		dropLength := len(t.Drop)
+		dropOffsets := make([]flatbuffers.UOffsetT, dropLength)
+		for j := 0; j < dropLength; j++ {
+			dropOffsets[j] = t.Drop[j].Pack(builder)
+		}
+		RowStartDropVector(builder, dropLength)
+		for j := dropLength - 1; j >= 0; j-- {
+			builder.PrependUOffsetT(dropOffsets[j])
+		}
+		dropOffset = builder.EndVector(dropLength)
+	}
+	dataOffset := flatbuffers.UOffsetT(0)
 	if t.Data != nil {
-		DataOffset = builder.CreateByteString(t.Data)
+		dataOffset = builder.CreateByteString(t.Data)
 	}
 	RowStart(builder)
-	StateOffset := t.State.Pack(builder)
-	RowAddState(builder, StateOffset)
-	RowAddData(builder, DataOffset)
+	RowAddDrop(builder, dropOffset)
+	RowAddData(builder, dataOffset)
 	return RowEnd(builder)
 }
 
 func (rcv *Row) UnPackTo(t *RowT) {
-	t.State = rcv.State(nil).UnPack()
+	dropLength := rcv.DropLength()
+	t.Drop = make([]*TxPtrT, dropLength)
+	for j := 0; j < dropLength; j++ {
+		x := TxPtr{}
+		rcv.Drop(&x, j)
+		t.Drop[j] = x.UnPack()
+	}
 	t.Data = rcv.DataBytes()
 }
 
@@ -60,17 +78,24 @@ func (rcv *Row) Table() flatbuffers.Table {
 	return rcv._tab
 }
 
-func (rcv *Row) State(obj *RowState) *RowState {
+func (rcv *Row) Drop(obj *TxPtr, j int) bool {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(4))
 	if o != 0 {
-		x := o + rcv._tab.Pos
-		if obj == nil {
-			obj = new(RowState)
-		}
+		x := rcv._tab.Vector(o)
+		x += flatbuffers.UOffsetT(j) * 4
+		x = rcv._tab.Indirect(x)
 		obj.Init(rcv._tab.Bytes, x)
-		return obj
+		return true
 	}
-	return nil
+	return false
+}
+
+func (rcv *Row) DropLength() int {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(4))
+	if o != 0 {
+		return rcv._tab.VectorLen(o)
+	}
+	return 0
 }
 
 func (rcv *Row) Data(j int) byte {
@@ -110,11 +135,14 @@ func (rcv *Row) MutateData(j int, n byte) bool {
 func RowStart(builder *flatbuffers.Builder) {
 	builder.StartObject(2)
 }
-func RowAddState(builder *flatbuffers.Builder, State flatbuffers.UOffsetT) {
-	builder.PrependStructSlot(0, flatbuffers.UOffsetT(State), 0)
+func RowAddDrop(builder *flatbuffers.Builder, drop flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(0, flatbuffers.UOffsetT(drop), 0)
 }
-func RowAddData(builder *flatbuffers.Builder, Data flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(1, flatbuffers.UOffsetT(Data), 0)
+func RowStartDropVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+	return builder.StartVector(4, numElems, 4)
+}
+func RowAddData(builder *flatbuffers.Builder, data flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(1, flatbuffers.UOffsetT(data), 0)
 }
 func RowStartDataVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)

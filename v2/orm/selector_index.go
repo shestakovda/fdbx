@@ -3,24 +3,29 @@ package orm
 import (
 	"context"
 
+	"github.com/golang/glog"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
 func NewIndexSelector(tx mvcc.Tx, idx uint16, prefix fdbx.Key) Selector {
-	return &indexSelector{
-		idx:    idx,
-		prefix: prefix,
+	return NewIndexRangeSelector(tx, idx, prefix, prefix)
+}
 
-		baseSelector: newBaseSelector(tx),
+func NewIndexRangeSelector(tx mvcc.Tx, idx uint16, from, last fdbx.Key) Selector {
+	return &indexSelector{
+		tx:   tx,
+		idx:  idx,
+		from: from,
+		last: last,
 	}
 }
 
 type indexSelector struct {
-	*baseSelector
-
-	idx    uint16
-	prefix fdbx.Key
+	tx   mvcc.Tx
+	idx  uint16
+	from fdbx.Key
+	last fdbx.Key
 }
 
 func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-chan fdbx.Pair, <-chan error) {
@@ -34,21 +39,32 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 		defer close(list)
 		defer close(errs)
 
-		skip := false
+		fkey := s.from
+		lkey := s.last
 		opts := getOpts(args)
-		nkey := WrapIndexKey(tbl.ID(), s.idx, s.prefix)
-		lkey := WrapIndexKey(tbl.ID(), s.idx, s.prefix)
-		reqs := make([]mvcc.Option, 0, 3)
+		skip := len(opts.lastkey.Bytes()) > 0
 
-		if len(opts.lastkey.Bytes()) > 0 {
-			skip = true
-			lkey = WrapIndexKey(tbl.ID(), s.idx, opts.lastkey)
+		if skip {
+			if opts.reverse {
+				lkey = opts.lastkey
+			} else {
+				fkey = opts.lastkey
+			}
+		}
+
+		reqs := []mvcc.Option{
+			mvcc.From(WrapIndexKey(tbl.ID(), s.idx, fkey)),
+			mvcc.Last(WrapIndexKey(tbl.ID(), s.idx, lkey)),
 		}
 
 		if opts.reverse {
-			reqs = append(reqs, mvcc.From(nkey), mvcc.To(lkey), mvcc.Reverse())
-		} else {
-			reqs = append(reqs, mvcc.From(lkey), mvcc.To(nkey))
+			reqs = append(reqs, mvcc.Reverse())
+		}
+
+		if Debug {
+			glog.Infof("indexSelector.Select.fkey = %s", WrapIndexKey(tbl.ID(), s.idx, fkey).Printable())
+			glog.Infof("indexSelector.Select.lkey = %s", WrapIndexKey(tbl.ID(), s.idx, lkey).Printable())
+			glog.Infof("indexSelector.Select.skip = %t", skip)
 		}
 
 		wctx, exit := context.WithCancel(ctx)
@@ -68,12 +84,11 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 				return
 			}
 
-			if err = s.sendPair(wctx, list, pair); err != nil {
-				errs <- err
+			select {
+			case list <- fdbx.WrapPair(UnwrapIndexKey(item.Key()), pair):
+			case <-wctx.Done():
 				return
 			}
-
-			s.setKey(UnwrapIndexKey(item.Key()))
 		}
 
 		for err := range errc {

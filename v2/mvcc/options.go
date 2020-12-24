@@ -6,6 +6,8 @@ import (
 )
 
 func getOpts(args []Option) (o options) {
+	o.packSize = 10
+
 	for i := range args {
 		args[i](&o)
 	}
@@ -19,22 +21,24 @@ type options struct {
 	limit    int
 	packSize int
 	from     fdbx.Key
-	to       fdbx.Key
-	onInsert Handler
-	onUpdate Handler
-	onDelete Handler
+	last     fdbx.Key
+	onInsert PairHandler
+	onUpdate PairHandler
+	onDelete PairHandler
 	onVacuum RowHandler
 	onLock   RowHandler
 	writer   db.Writer
 }
 
-func To(k fdbx.Key) Option            { return func(o *options) { o.to = k } }
+func Lock() Option                    { return func(o *options) { o.lock = true } }
+func Last(k fdbx.Key) Option          { return func(o *options) { o.last = k } }
 func From(k fdbx.Key) Option          { return func(o *options) { o.from = k } }
 func Limit(l int) Option              { return func(o *options) { o.limit = l } }
 func Writer(w db.Writer) Option       { return func(o *options) { o.writer = w } }
-func OnInsert(hdl Handler) Option     { return func(o *options) { o.onInsert = hdl } }
-func OnUpdate(hdl Handler) Option     { return func(o *options) { o.onUpdate = hdl } }
-func OnDelete(hdl Handler) Option     { return func(o *options) { o.onDelete = hdl } }
+func Reverse() Option                 { return func(o *options) { o.reverse = true } }
+func OnInsert(hdl PairHandler) Option { return func(o *options) { o.onInsert = hdl } }
+func OnUpdate(hdl PairHandler) Option { return func(o *options) { o.onUpdate = hdl } }
+func OnDelete(hdl PairHandler) Option { return func(o *options) { o.onDelete = hdl } }
 func OnVacuum(hdl RowHandler) Option  { return func(o *options) { o.onVacuum = hdl } }
 func Exclusive(hdl RowHandler) Option { return func(o *options) { o.lock = true; o.onLock = hdl } }
-func Reverse() Option                 { return func(o *options) { o.reverse = true } }
+func VacuumPack(size int) Option      { return func(o *options) { o.packSize = size } }

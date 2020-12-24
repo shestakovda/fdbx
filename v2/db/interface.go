@@ -45,7 +45,7 @@ type Reader interface {
 
 	// Получение списка значений в интервале [from, to)
 	// В случае реверса, интервал [to, from)
-	List(from, to fdbx.Key, limit uint64, reverse bool) fdbx.ListGetter
+	List(from, to fdbx.Key, limit uint64, reverse, skip bool) fdbx.ListGetter
 }
 
 // Writer - обработчик модификации значений в БД (физическая транзакция)

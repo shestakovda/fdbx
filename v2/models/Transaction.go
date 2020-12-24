@@ -7,8 +7,7 @@ import (
 )
 
 type TransactionT struct {
-	TxID   uint64
-	Start  uint64
+	Start  int64
 	Status byte
 }
 
@@ -17,14 +16,12 @@ func (t *TransactionT) Pack(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 		return 0
 	}
 	TransactionStart(builder)
-	TransactionAddTxID(builder, t.TxID)
 	TransactionAddStart(builder, t.Start)
 	TransactionAddStatus(builder, t.Status)
 	return TransactionEnd(builder)
 }
 
 func (rcv *Transaction) UnPackTo(t *TransactionT) {
-	t.TxID = rcv.TxID()
 	t.Start = rcv.Start()
 	t.Status = rcv.Status()
 }
@@ -58,32 +55,20 @@ func (rcv *Transaction) Table() flatbuffers.Table {
 	return rcv._tab
 }
 
-func (rcv *Transaction) TxID() uint64 {
+func (rcv *Transaction) Start() int64 {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(4))
 	if o != 0 {
-		return rcv._tab.GetUint64(o + rcv._tab.Pos)
+		return rcv._tab.GetInt64(o + rcv._tab.Pos)
 	}
 	return 0
 }
 
-func (rcv *Transaction) MutateTxID(n uint64) bool {
-	return rcv._tab.MutateUint64Slot(4, n)
-}
-
-func (rcv *Transaction) Start() uint64 {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
-	if o != 0 {
-		return rcv._tab.GetUint64(o + rcv._tab.Pos)
-	}
-	return 0
-}
-
-func (rcv *Transaction) MutateStart(n uint64) bool {
-	return rcv._tab.MutateUint64Slot(6, n)
+func (rcv *Transaction) MutateStart(n int64) bool {
+	return rcv._tab.MutateInt64Slot(4, n)
 }
 
 func (rcv *Transaction) Status() byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
 	if o != 0 {
 		return rcv._tab.GetByte(o + rcv._tab.Pos)
 	}
@@ -91,20 +76,17 @@ func (rcv *Transaction) Status() byte {
 }
 
 func (rcv *Transaction) MutateStatus(n byte) bool {
-	return rcv._tab.MutateByteSlot(8, n)
+	return rcv._tab.MutateByteSlot(6, n)
 }
 
 func TransactionStart(builder *flatbuffers.Builder) {
-	builder.StartObject(3)
+	builder.StartObject(2)
 }
-func TransactionAddTxID(builder *flatbuffers.Builder, TxID uint64) {
-	builder.PrependUint64Slot(0, TxID, 0)
+func TransactionAddStart(builder *flatbuffers.Builder, start int64) {
+	builder.PrependInt64Slot(0, start, 0)
 }
-func TransactionAddStart(builder *flatbuffers.Builder, Start uint64) {
-	builder.PrependUint64Slot(1, Start, 0)
-}
-func TransactionAddStatus(builder *flatbuffers.Builder, Status byte) {
-	builder.PrependByteSlot(2, Status, 3)
+func TransactionAddStatus(builder *flatbuffers.Builder, status byte) {
+	builder.PrependByteSlot(1, status, 3)
 }
 func TransactionEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	return builder.EndObject()
