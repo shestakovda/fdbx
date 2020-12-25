@@ -44,48 +44,43 @@ func (q v1Queue) wrapItemKey(plan time.Time, key fdbx.Key) fdbx.Key {
 func (q v1Queue) ID() uint16 { return q.id }
 
 func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
-	var tsk *v1Task
 
-	keys := make([]fdbx.Key, 0, 3*len(ids))
-	diff := make(map[string]struct{}, len(ids))
-	nope := make(map[string]struct{}, len(ids))
+	// Подтверждение задач надо делать атомарно, иначе может быть нарушена консистентность счетчиков
+	if err = tx.Conn().Write(func(w db.Writer) (exp error) {
+		var sel fdbx.Pair
 
-	for i := range ids {
-		diff[ids[i].Printable()] = struct{}{}
+		keys := make([]fdbx.Key, 0, 2*len(ids))
+		diff := make(map[string]struct{}, len(ids))
 
-		// Помечаем к удалению из неподтвержденных
-		keys = append(keys, q.wrapFlagKey(qWork, ids[i]))
+		for i := range ids {
+			mkey := q.wrapFlagKey(qMeta, ids[i])
 
-		// Помечаем к удалению из индекса статусов задач
-		keys = append(keys, q.wrapFlagKey(qMeta, ids[i]))
+			// Пока не удалили - загружаем задачу, если она есть то счетчик надо уменьшить
+			if sel, exp = tx.Select(mkey, mvcc.Writer(w), mvcc.Lock()); exp == nil {
+				if tsk := models.GetRootAsTask(sel.Value(), 0).State(nil).UnPack(); tsk.Status == StatusUnconfirmed {
+					diff[ids[i].Printable()] = struct{}{}
 
-		// Пока не удалили - загружаем задачу, если она есть
-		if tsk, err = q.loadTask(tx, ids[i]); err == nil {
-			// Если задача еще висит и в ней указано плановое время, можем грохнуть из плана
-			if plan := tsk.Planned(); !plan.IsZero() {
-				if tsk.Status() == StatusPublished {
-					nope[ids[i].Printable()] = struct{}{}
+					// Помечаем к удалению из индекса статусов задач
+					keys = append(keys, mkey)
+
+					// Помечаем к удалению из неподтвержденных
+					keys = append(keys, q.wrapFlagKey(qWork, ids[i]))
 				}
-				keys = append(keys, q.wrapItemKey(plan, ids[i]))
 			}
 		}
-	}
 
-	if err = tx.Delete(keys); err != nil {
-		return ErrAck.WithReason(err)
-	}
-
-	// Уменьшаем счетчик задач в работе
-	tx.OnCommit(func(w db.Writer) error {
-		// Убираем задачи из очереди ожидания, если такие были
-		if len(nope) > 0 {
-			w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWaitKey)), int64(-len(nope)))
+		// Удаление всех ключей
+		if exp = tx.Delete(keys, mvcc.Writer(w)); exp != nil {
+			return
 		}
 
 		// Убираем задачи из очереди обработки
 		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWorkKey)), int64(-len(diff)))
 		return nil
-	})
+	}); err != nil {
+		return ErrAck.WithReason(err)
+	}
+
 	return nil
 }
 
@@ -113,19 +108,21 @@ func (q v1Queue) PubList(tx mvcc.Tx, ids []fdbx.Key, args ...Option) (err error)
 		)
 	}
 
-	if err = tx.Upsert(pairs); err != nil {
-		return ErrPub.WithReason(err)
-	}
+	// Публикацию задач надо делать атомарно, иначе может быть нарушена консистентность счетчиков
+	if err = tx.Conn().Write(func(w db.Writer) (exp error) {
+		if exp = tx.Upsert(pairs, mvcc.Writer(w)); exp != nil {
+			return
+		}
 
-	// Особая магия - инкремент счетчика очереди, чтобы затриггерить подписчиков
-	// А также инкремент счетчиков статистики очереди
-	tx.OnCommit(func(w db.Writer) error {
 		// Увеличиваем счетчик задач в ожидании
 		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWaitKey)), int64(len(diff)))
-		// Триггерим обработчики забрать новые задачи
+
+		// Особая магия - инкремент счетчика очереди, чтобы затриггерить подписчиков
 		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTriggerKey)), 1)
 		return nil
-	})
+	}); err != nil {
+		return ErrPub.WithReason(err)
+	}
 
 	return nil
 }

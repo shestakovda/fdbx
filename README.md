@@ -1,6 +1,6 @@
 ## FoundationDB eXtended
 
-[![GoDoc](https://godoc.org/github.com/shestakovda/fdbx?status.svg)](https://godoc.org/github.com/shestakovda/fdbx)
+[![GoDoc](https://godoc.org/github.com/shestakovda/fdbx?status.svg)](https://godoc.org/github.com/shestakovda/fdbx/v2/orm)
 [![Codebeat](https://codebeat.co/badges/6909b169-393c-4c2b-aa9c-b9b1c3ff5708)](https://codebeat.co/projects/github-com-shestakovda-fdbx-master)
 [![Go Report Card](https://goreportcard.com/badge/github.com/shestakovda/fdbx)](https://goreportcard.com/report/github.com/shestakovda/fdbx)
 
@@ -10,9 +10,9 @@ FoundationDB **object storage** and **queue manager** for Golang projects
 
 This project aims to help you use FoundationDB in your project by providing high-level interfaces for transactions, tables, indexes and queues. 
 
-Current version is **unstable** [v2.0.0-prerelease.*](https://github.com/shestakovda/fdbx/tree/master/v2)
+Current version is **probably stable** [v2.0.*](https://github.com/shestakovda/fdbx/tree/master/v2)
 
-You can carefully use it for local tests, experiments or startups, but we strongly recommend not to use it for production purposes. 
+Feel free to use it for local tests, experiments or startups, but we strongly recommend to use it carefully for production purposes.
 
 ### Basic principles
 
