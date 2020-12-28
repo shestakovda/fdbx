@@ -85,7 +85,7 @@ func (t *v1Table) upsert(tx mvcc.Tx, unique bool, pairs ...fdbx.Pair) (err error
 	return nil
 }
 
-func (t *v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+func (t *v1Table) onInsert(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) {
 	if len(t.options.batchidx) == 0 {
 		return nil
 	}
@@ -122,13 +122,13 @@ func (t *v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 	return nil
 }
 
-func (t *v1Table) onUpdate(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+func (t *v1Table) onUpdate(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) {
 	return ErrDuplicate.WithDebug(errx.Debug{
 		"key": pair.Key().Printable(),
 	})
 }
 
-func (t *v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+func (t *v1Table) onDelete(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) {
 	var usr fdbx.Pair
 
 	if len(t.options.batchidx) == 0 {
@@ -212,7 +212,7 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Opti
 		// Выбираем случайное время с 00:00 до 06:00
 		// Чтобы делать темные делишки под покровом ночи
 		if opts.vwait > 0 {
-			timer = time.NewTimer(time.Hour)
+			timer = time.NewTimer(opts.vwait)
 		} else {
 			now := time.Now()
 			min := rand.Intn(60)
@@ -266,7 +266,7 @@ func (t *v1Table) Vacuum(dbc db.Connection) error {
 	return nil
 }
 
-func (t *v1Table) onVacuum(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
+func (t *v1Table) onVacuum(tx mvcc.Tx, w db.Writer, p fdbx.Pair) (err error) {
 	var mod models.ValueT
 
 	val := p.Value()

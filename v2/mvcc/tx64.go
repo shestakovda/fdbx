@@ -175,7 +175,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 			}
 
 			if opts.onUpdate != nil && len(rows) > 0 {
-				if exp = opts.onUpdate(t, pairs[i]); exp != nil {
+				if exp = opts.onUpdate(t, w, pairs[i]); exp != nil {
 					return
 				}
 			}
@@ -185,7 +185,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 			}
 
 			if opts.onInsert != nil {
-				if exp = opts.onInsert(t, pairs[i]); exp != nil {
+				if exp = opts.onInsert(t, w, pairs[i]); exp != nil {
 					return
 				}
 			}
@@ -259,7 +259,7 @@ func (t *tx64) Select(key fdbx.Key, args ...Option) (res fdbx.Pair, err error) {
 		if opts.onLock != nil {
 			// Раз какой-то обработчик в записи, значит модификация - увеличиваем счетчик
 			atomic.AddUint32(&t.mods, 1)
-			return opts.onLock(t, res, w)
+			return opts.onLock(t, w, res)
 		}
 
 		return nil
@@ -481,7 +481,7 @@ func (t *tx64) selectPart(
 			// Раз какой-то обработчик в записи, значит модификация - увеличиваем счетчик
 			atomic.AddUint32(&t.mods, 1)
 
-			if err = opts.onLock(t, part[i], w); err != nil {
+			if err = opts.onLock(t, w, part[i]); err != nil {
 				return
 			}
 		}
@@ -908,7 +908,7 @@ func (t *tx64) fetchRows(
 	return res, nil
 }
 
-func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdbx.Pair, onDelete PairHandler, physical bool) (err error) {
+func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdbx.Pair, onDelete RowHandler, physical bool) (err error) {
 	var row *models.RowT
 
 	if len(pairs) == 0 {
@@ -924,7 +924,7 @@ func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdbx.Pair, onDelete Pa
 
 			// Обработчик имеет возможность предотвратить удаление/обновление, выбросив ошибку
 			if onDelete != nil {
-				if err = onDelete(t, fdbx.NewPair(UnwrapKey(pair.Key()), row.Data)); err != nil {
+				if err = onDelete(t, w, fdbx.NewPair(UnwrapKey(pair.Key()), row.Data)); err != nil {
 					return ErrDelete.WithReason(err)
 				}
 			}
@@ -1032,7 +1032,7 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 	// Теперь можем грохнуть все, что нашли
 	for i := range drop {
 		if onVacuum != nil {
-			if err = onVacuum(t, &usrPair{orig: drop[i]}, w); err != nil {
+			if err = onVacuum(t, w, &usrPair{orig: drop[i]}); err != nil {
 				return
 			}
 		}

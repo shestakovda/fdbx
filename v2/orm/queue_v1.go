@@ -95,22 +95,34 @@ func (q v1Queue) PubList(tx mvcc.Tx, ids []fdbx.Key, args ...Option) (err error)
 
 	// Структура ключа:
 	// db nsUser tb.id q.id qList delay uid = taskID
-	pairs := make([]fdbx.Pair, 0, 2*len(ids))
+	data := make([]fdbx.Pair, len(ids))
+	meta := make([]fdbx.Pair, len(ids))
 	for i := range ids {
 		task := q.newTask(ids[i], plan, &opts)
+		meta[i] = fdbx.NewPair(q.wrapFlagKey(qMeta, task.Key()), task.Dump())
+		data[i] = fdbx.NewPair(q.wrapItemKey(plan, task.Key()), task.Key().Bytes())
 		diff[task.Key().Printable()] = struct{}{}
+	}
 
-		pairs = append(pairs,
-			// Основная запись таски (только айдишка, на которую триггеримся)
-			fdbx.NewPair(q.wrapItemKey(plan, task.Key()), task.Key().Bytes()),
-			// Служебная запись в коллекцию метаданных
-			fdbx.NewPair(q.wrapFlagKey(qMeta, task.Key()), task.Dump()),
-		)
+	// Особый обработчик при удалении записей
+	onDelete := func(_ mvcc.Tx, dw db.Writer, old fdbx.Pair) error {
+		// Если при публикации задача уже существует и она не подтверждена - надо скинуть счетчики
+		switch models.GetRootAsTask(old.Value(), 0).State(nil).Status() {
+		case StatusPublished:
+			dw.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWaitKey)), -1)
+		case StatusUnconfirmed:
+			dw.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWorkKey)), -1)
+		}
+		return nil
 	}
 
 	// Публикацию задач надо делать атомарно, иначе может быть нарушена консистентность счетчиков
 	if err = tx.Conn().Write(func(w db.Writer) (exp error) {
-		if exp = tx.Upsert(pairs, mvcc.Writer(w)); exp != nil {
+		if exp = tx.Upsert(data, mvcc.Writer(w)); exp != nil {
+			return
+		}
+
+		if exp = tx.Upsert(meta, mvcc.Writer(w), mvcc.OnDelete(onDelete)); exp != nil {
 			return
 		}
 
@@ -475,7 +487,7 @@ func (q v1Queue) Task(tx mvcc.Tx, key fdbx.Key) (res Task, err error) {
 	return tsk, nil
 }
 
-func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
+func (q v1Queue) onTaskWork(tx mvcc.Tx, w db.Writer, p fdbx.Pair) (err error) {
 	var pair fdbx.Pair
 
 	key := p.Key()

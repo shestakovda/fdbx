@@ -36,9 +36,9 @@ type options struct {
 	spack    uint64
 	from     fdbx.Key
 	last     fdbx.Key
-	onInsert PairHandler
-	onUpdate PairHandler
-	onDelete PairHandler
+	onInsert RowHandler
+	onUpdate RowHandler
+	onDelete RowHandler
 	onVacuum RowHandler
 	onLock   RowHandler
 	writer   db.Writer
@@ -51,9 +51,9 @@ func Limit(l int) Option              { return func(o *options) { o.limit = l } 
 func Writer(w db.Writer) Option       { return func(o *options) { o.writer = w } }
 func Reverse() Option                 { return func(o *options) { o.reverse = true } }
 func Physical() Option                { return func(o *options) { o.physical = true } }
-func OnInsert(hdl PairHandler) Option { return func(o *options) { o.onInsert = hdl } }
-func OnUpdate(hdl PairHandler) Option { return func(o *options) { o.onUpdate = hdl } }
-func OnDelete(hdl PairHandler) Option { return func(o *options) { o.onDelete = hdl } }
+func OnInsert(hdl RowHandler) Option  { return func(o *options) { o.onInsert = hdl } }
+func OnUpdate(hdl RowHandler) Option  { return func(o *options) { o.onUpdate = hdl } }
+func OnDelete(hdl RowHandler) Option  { return func(o *options) { o.onDelete = hdl } }
 func OnVacuum(hdl RowHandler) Option  { return func(o *options) { o.onVacuum = hdl } }
 func Exclusive(hdl RowHandler) Option { return func(o *options) { o.lock = true; o.onLock = hdl } }
 func SelectPack(size int) Option      { return func(o *options) { o.spack = uint64(size) } }
