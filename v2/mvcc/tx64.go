@@ -121,7 +121,7 @@ func (t *tx64) Delete(keys []fdbx.Key, args ...Option) (err error) {
 				return
 			}
 
-			if exp = t.dropRows(w, opid, rows, opts.onDelete); exp != nil {
+			if exp = t.dropRows(w, opid, rows, opts.onDelete, opts.physical); exp != nil {
 				return
 			}
 		}
@@ -180,7 +180,7 @@ func (t *tx64) Upsert(pairs []fdbx.Pair, args ...Option) (err error) {
 				}
 			}
 
-			if exp = t.dropRows(w, opid, rows, opts.onDelete); exp != nil {
+			if exp = t.dropRows(w, opid, rows, opts.onDelete, false); exp != nil {
 				return
 			}
 
@@ -393,7 +393,7 @@ func (t *tx64) seqScan(ctx context.Context, args ...Option) (<-chan []fdbx.Pair,
 			}
 
 			if len(part) == 0 {
-				if rows < MaxRowCount {
+				if rows < int(opts.spack) {
 					return
 				} else {
 					continue
@@ -428,10 +428,10 @@ func (t *tx64) selectPart(
 	var w db.Writer
 
 	if Debug {
-		glog.Infof("tx64.selectPart(%s, %s, %d)", from.Printable(), to.Printable(), size)
+		glog.Infof("tx64.selectPart(%s, %s, %d, %d)", from.Printable(), to.Printable(), size, opts.spack)
 	}
 
-	lg := r.List(from, to, uint64(MaxRowCount), opts.reverse, skip)
+	lg := r.List(from, to, opts.spack, opts.reverse, skip)
 
 	if part, err = t.fetchRows(r, lc, opid, lg, false, 0); err != nil {
 		return
@@ -492,19 +492,20 @@ func (t *tx64) selectPart(
 
 func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte, args ...Option) (err error) {
 	atomic.AddUint32(&t.mods, 1)
+	opts := getOpts(args)
 
 	sum := 0
 	tmp := blob
 	num := uint16(0)
-	prs := make([]fdbx.Pair, 0, MaxRowMem/MaxRowSize+1)
+	prs := make([]fdbx.Pair, 0, opts.rowmem/opts.rowsize+1)
 	set := func(w db.Writer) error { w.Upsert(prs...); return nil }
 
 	// Разбиваем на элементарные значения, пишем пачками по 10 мб
 	for {
-		if len(tmp) > MaxRowSize {
-			prs = append(prs, fdbx.NewPair(WrapKey(key).RPart(byte(num>>8), byte(num)), tmp[:MaxRowSize]))
-			tmp = tmp[MaxRowSize:]
-			sum += MaxRowSize
+		if len(tmp) > opts.rowsize {
+			prs = append(prs, fdbx.NewPair(WrapKey(key).RPart(byte(num>>8), byte(num)), tmp[:opts.rowsize]))
+			tmp = tmp[opts.rowsize:]
+			sum += opts.rowsize
 			num++
 		} else {
 			prs = append(prs, fdbx.NewPair(WrapKey(key).RPart(byte(num>>8), byte(num)), tmp))
@@ -513,7 +514,7 @@ func (t *tx64) SaveBLOB(key fdbx.Key, blob []byte, args ...Option) (err error) {
 			break
 		}
 
-		if sum >= MaxRowMem-MaxRowSize {
+		if sum >= opts.rowmem-opts.rowsize {
 			if err = t.conn.Write(set); err != nil {
 				return ErrBLOBSave.WithReason(err)
 			}
@@ -794,7 +795,10 @@ func (t *tx64) isVisible(r db.Reader, lc *txCache, opid uint32, item fdbx.Pair, 
 		if rec := recover(); rec != nil {
 			glog.Errorf("panic mvcc.tx64.isVisible(%s): %+v", item.Key().Printable(), rec)
 			ok = false
-			err = nil
+			err = errx.ErrInternal.WithDebug(errx.Debug{
+				"key":   item.Key().Printable(),
+				"panic": rec,
+			})
 		}
 	}()
 
@@ -904,7 +908,7 @@ func (t *tx64) fetchRows(
 	return res, nil
 }
 
-func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdbx.Pair, onDelete PairHandler) (err error) {
+func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdbx.Pair, onDelete PairHandler, physical bool) (err error) {
 	var row *models.RowT
 
 	if len(pairs) == 0 {
@@ -941,7 +945,11 @@ func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdbx.Pair, onDelete Pa
 		}
 
 		// Обновляем данные в БД по ключу
-		w.Upsert(fdbx.NewPair(pair.Key(), fdbx.FlatPack(row)))
+		if physical {
+			w.Delete(pair.Key())
+		} else {
+			w.Upsert(fdbx.NewPair(pair.Key(), fdbx.FlatPack(row)))
+		}
 	}
 	return nil
 }
@@ -970,7 +978,7 @@ func (t *tx64) Vacuum(prefix fdbx.Key, args ...Option) (err error) {
 
 	for {
 		if err = t.conn.Write(func(w db.Writer) (exp error) {
-			lg := w.List(from, to, uint64(opts.packSize), false, skip)
+			lg := w.List(from, to, opts.vpack, false, skip)
 
 			if from, exp = t.vacuumPart(w, lg, opts.onVacuum); exp != nil {
 				return
@@ -1012,7 +1020,8 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdbx.ListGetter, onVacuum RowHandler) 
 	// Проверяем все пары ключ/значение, удаляя все, что может помешать
 	for i := range list {
 		if ok, err = t.isVisible(w, lc, opid, list[i], true); err != nil {
-			return
+			// Ошибку игнорим, потому что это вакуум, важно не удалить лишнего
+			continue
 		}
 
 		if !ok {

@@ -209,6 +209,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 				mvcc.Last(q.wrapItemKey(time.Now(), nil)),
 				mvcc.From(from),
 				mvcc.Limit(pack),
+				mvcc.SelectPack(1000), // Задачи редко бывают большими
 				mvcc.Exclusive(q.onTaskWork),
 				mvcc.Writer(w),
 			); exp != nil {
@@ -483,12 +484,14 @@ func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
 	mkey := q.wrapFlagKey(qMeta, ukey)
 
 	// Удаление по ключу из основной очереди
-	if err = tx.Delete([]fdbx.Key{key}, mvcc.Writer(w)); err != nil {
+	// Физическое удаление - опасный хак, благодаря которому очередь не зависит от сборщика мусора
+	// Так можно делать только тут, потому что все логические операции идут в рамках физической транзакции
+	if err = tx.Delete([]fdbx.Key{key}, mvcc.Writer(w), mvcc.Physical()); err != nil {
 		return ErrSub.WithReason(err)
 	}
 
 	// Выборка элемента из коллекции метаданных
-	if pair, err = tx.Select(mkey); err != nil {
+	if pair, err = tx.Select(mkey, mvcc.Writer(w), mvcc.Lock()); err != nil {
 		return ErrSub.WithReason(err)
 	}
 

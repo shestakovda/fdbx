@@ -6,7 +6,17 @@ import (
 )
 
 func getOpts(args []Option) (o options) {
-	o.packSize = 10
+	// Объем выборки "грязных" записей в процессе вакуума
+	o.vpack = 10
+
+	// Объем выборки "грязных" записей в процессе работы
+	o.spack = 100
+
+	// Максимальное кол-во байт, которое могут занимать строки, сохраняемые в рамках одной физической транзакции
+	o.rowmem = 9000000
+
+	// Максимальное кол-во байт, которое может занимать "чистое" значение ключа, с запасом на накладные расходы
+	o.rowsize = 90000
 
 	for i := range args {
 		args[i](&o)
@@ -18,8 +28,12 @@ func getOpts(args []Option) (o options) {
 type options struct {
 	lock     bool
 	reverse  bool
+	physical bool
 	limit    int
-	packSize int
+	rowmem   int
+	rowsize  int
+	vpack    uint64
+	spack    uint64
 	from     fdbx.Key
 	last     fdbx.Key
 	onInsert PairHandler
@@ -36,9 +50,12 @@ func From(k fdbx.Key) Option          { return func(o *options) { o.from = k } }
 func Limit(l int) Option              { return func(o *options) { o.limit = l } }
 func Writer(w db.Writer) Option       { return func(o *options) { o.writer = w } }
 func Reverse() Option                 { return func(o *options) { o.reverse = true } }
+func Physical() Option                { return func(o *options) { o.physical = true } }
 func OnInsert(hdl PairHandler) Option { return func(o *options) { o.onInsert = hdl } }
 func OnUpdate(hdl PairHandler) Option { return func(o *options) { o.onUpdate = hdl } }
 func OnDelete(hdl PairHandler) Option { return func(o *options) { o.onDelete = hdl } }
 func OnVacuum(hdl RowHandler) Option  { return func(o *options) { o.onVacuum = hdl } }
 func Exclusive(hdl RowHandler) Option { return func(o *options) { o.lock = true; o.onLock = hdl } }
-func VacuumPack(size int) Option      { return func(o *options) { o.packSize = size } }
+func SelectPack(size int) Option      { return func(o *options) { o.spack = uint64(size) } }
+func MaxRowMem(size int) Option       { return func(o *options) { o.rowmem = size } }
+func MaxRowSize(size int) Option      { return func(o *options) { o.rowsize = size } }
