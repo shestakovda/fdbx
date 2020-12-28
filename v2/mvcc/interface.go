@@ -96,11 +96,8 @@ type Option func(*options)
 // TxHandler - обработчик события операции с записью
 type TxHandler func(Tx) error
 
-// PairHandler - обработчик события обработки записи
-type PairHandler func(Tx, fdbx.Pair) error
-
 // RowHandler - обработчик события операции с записью в рамках физической транзакции
-type RowHandler func(Tx, fdbx.Pair, db.Writer) error
+type RowHandler func(Tx, db.Writer, fdbx.Pair) error
 
 // CommitHandler - обработчик события завершения логической транзакции
 type CommitHandler func(db.Writer) error

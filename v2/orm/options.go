@@ -8,8 +8,6 @@ import (
 )
 
 func getOpts(args []Option) (o options) {
-	o.vpack = 1000
-	o.vwait = time.Hour
 	o.refresh = time.Minute
 
 	for i := range args {
@@ -32,7 +30,6 @@ type options struct {
 	reverse  bool
 	creator  string
 	lastkey  fdbx.Key
-	vpack    uint64
 	vwait    time.Duration
 	delay    time.Duration
 	refresh  time.Duration
@@ -77,14 +74,6 @@ func Refresh(d time.Duration) Option {
 	return func(o *options) {
 		if d > 0 {
 			o.refresh = d
-		}
-	}
-}
-
-func VacuumPack(d int) Option {
-	return func(o *options) {
-		if d > 0 {
-			o.vpack = uint64(d)
 		}
 	}
 }

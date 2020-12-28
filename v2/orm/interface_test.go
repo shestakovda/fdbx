@@ -359,7 +359,7 @@ func (s *ORMSuite) TestQueue() {
 		}
 
 		if task, err := q.Task(tx, id3); s.NoError(err) {
-			s.Equal(orm.StatusConfirmed, task.Status())
+			s.Equal(orm.StatusPublished, task.Status())
 		}
 
 		if task, err := q.Task(tx, id4); s.NoError(err) {
@@ -373,8 +373,30 @@ func (s *ORMSuite) TestQueue() {
 
 	if wait, work, err := q.Stat(tx); s.NoError(err) {
 		s.Equal(int64(1), wait) // id3
-		s.Equal(int64(2), work) // id1 id2
+		s.Equal(int64(0), work) // id1 id2
 	}
+
+	if err := q.Undo(tx, id3); s.NoError(err) {
+		if lost, err := q.Lost(tx, 100); s.NoError(err) {
+			s.Len(lost, 1) // id3
+		}
+
+		if err := q.Ack(tx, id1, id2, id3, id4); s.NoError(err) {
+			if task, err := q.Task(tx, id3); s.NoError(err) {
+				s.Equal(orm.StatusConfirmed, task.Status())
+			}
+
+			if lost, err := q.Lost(tx, 100); s.NoError(err) {
+				s.Len(lost, 0)
+			}
+		}
+	}
+
+	if wait, work, err := q.Stat(tx); s.NoError(err) {
+		s.Equal(int64(0), wait)
+		s.Equal(int64(0), work)
+	}
+
 	s.Require().NoError(tx.Commit())
 
 	// Удаляем строки, чтобы автовакуум их собрал

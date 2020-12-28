@@ -85,7 +85,7 @@ func (t *v1Table) upsert(tx mvcc.Tx, unique bool, pairs ...fdbx.Pair) (err error
 	return nil
 }
 
-func (t *v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+func (t *v1Table) onInsert(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) {
 	if len(t.options.batchidx) == 0 {
 		return nil
 	}
@@ -122,13 +122,13 @@ func (t *v1Table) onInsert(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 	return nil
 }
 
-func (t *v1Table) onUpdate(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+func (t *v1Table) onUpdate(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) {
 	return ErrDuplicate.WithDebug(errx.Debug{
 		"key": pair.Key().Printable(),
 	})
 }
 
-func (t *v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
+func (t *v1Table) onDelete(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) {
 	var usr fdbx.Pair
 
 	if len(t.options.batchidx) == 0 {
@@ -171,13 +171,14 @@ func (t *v1Table) onDelete(tx mvcc.Tx, pair fdbx.Pair) (err error) {
 	return nil
 }
 
-func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
+func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Option) {
 	var err error
 	var tbid [2]byte
 	var timer *time.Timer
 
 	binary.BigEndian.PutUint16(tbid[:], t.id)
 	tkey := fdbx.Bytes2Key(tbid[:]).Printable()
+	opts := getOpts(args)
 
 	defer func() {
 		// Перезапуск только в случае ошибки
@@ -210,12 +211,15 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection) {
 
 		// Выбираем случайное время с 00:00 до 06:00
 		// Чтобы делать темные делишки под покровом ночи
-		now := time.Now()
-		min := rand.Intn(60)
-		hour := rand.Intn(7)
-		when := time.Date(now.Year(), now.Month(), now.Day()+1, hour, min, 00, 00, now.Location())
-		timer = time.NewTimer(when.Sub(now))
-		// timer = time.NewTimer(time.Hour)
+		if opts.vwait > 0 {
+			timer = time.NewTimer(opts.vwait)
+		} else {
+			now := time.Now()
+			min := rand.Intn(60)
+			hour := rand.Intn(7)
+			when := time.Date(now.Year(), now.Month(), now.Day()+1, hour, min, 00, 00, now.Location())
+			timer = time.NewTimer(when.Sub(now))
+		}
 
 		select {
 		case <-timer.C:
@@ -262,7 +266,7 @@ func (t *v1Table) Vacuum(dbc db.Connection) error {
 	return nil
 }
 
-func (t *v1Table) onVacuum(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
+func (t *v1Table) onVacuum(tx mvcc.Tx, w db.Writer, p fdbx.Pair) (err error) {
 	var mod models.ValueT
 
 	val := p.Value()

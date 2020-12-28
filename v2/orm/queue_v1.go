@@ -44,48 +44,43 @@ func (q v1Queue) wrapItemKey(plan time.Time, key fdbx.Key) fdbx.Key {
 func (q v1Queue) ID() uint16 { return q.id }
 
 func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
-	var tsk *v1Task
 
-	keys := make([]fdbx.Key, 0, 3*len(ids))
-	diff := make(map[string]struct{}, len(ids))
-	nope := make(map[string]struct{}, len(ids))
+	// Подтверждение задач надо делать атомарно, иначе может быть нарушена консистентность счетчиков
+	if err = tx.Conn().Write(func(w db.Writer) (exp error) {
+		var sel fdbx.Pair
 
-	for i := range ids {
-		diff[ids[i].Printable()] = struct{}{}
+		keys := make([]fdbx.Key, 0, 2*len(ids))
+		diff := make(map[string]struct{}, len(ids))
 
-		// Помечаем к удалению из неподтвержденных
-		keys = append(keys, q.wrapFlagKey(qWork, ids[i]))
+		for i := range ids {
+			mkey := q.wrapFlagKey(qMeta, ids[i])
 
-		// Помечаем к удалению из индекса статусов задач
-		keys = append(keys, q.wrapFlagKey(qMeta, ids[i]))
+			// Пока не удалили - загружаем задачу, если она есть то счетчик надо уменьшить
+			if sel, exp = tx.Select(mkey, mvcc.Writer(w), mvcc.Lock()); exp == nil {
+				if tsk := models.GetRootAsTask(sel.Value(), 0).State(nil).UnPack(); tsk.Status == StatusUnconfirmed {
+					diff[ids[i].Printable()] = struct{}{}
 
-		// Пока не удалили - загружаем задачу, если она есть
-		if tsk, err = q.loadTask(tx, ids[i]); err == nil {
-			// Если задача еще висит и в ней указано плановое время, можем грохнуть из плана
-			if plan := tsk.Planned(); !plan.IsZero() {
-				if tsk.Status() == StatusPublished {
-					nope[ids[i].Printable()] = struct{}{}
+					// Помечаем к удалению из индекса статусов задач
+					keys = append(keys, mkey)
+
+					// Помечаем к удалению из неподтвержденных
+					keys = append(keys, q.wrapFlagKey(qWork, ids[i]))
 				}
-				keys = append(keys, q.wrapItemKey(plan, ids[i]))
 			}
 		}
-	}
 
-	if err = tx.Delete(keys); err != nil {
-		return ErrAck.WithReason(err)
-	}
-
-	// Уменьшаем счетчик задач в работе
-	tx.OnCommit(func(w db.Writer) error {
-		// Убираем задачи из очереди ожидания, если такие были
-		if len(nope) > 0 {
-			w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWaitKey)), int64(-len(nope)))
+		// Удаление всех ключей
+		if exp = tx.Delete(keys, mvcc.Writer(w)); exp != nil {
+			return
 		}
 
 		// Убираем задачи из очереди обработки
 		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWorkKey)), int64(-len(diff)))
 		return nil
-	})
+	}); err != nil {
+		return ErrAck.WithReason(err)
+	}
+
 	return nil
 }
 
@@ -100,32 +95,46 @@ func (q v1Queue) PubList(tx mvcc.Tx, ids []fdbx.Key, args ...Option) (err error)
 
 	// Структура ключа:
 	// db nsUser tb.id q.id qList delay uid = taskID
-	pairs := make([]fdbx.Pair, 0, 2*len(ids))
+	data := make([]fdbx.Pair, len(ids))
+	meta := make([]fdbx.Pair, len(ids))
 	for i := range ids {
 		task := q.newTask(ids[i], plan, &opts)
+		meta[i] = fdbx.NewPair(q.wrapFlagKey(qMeta, task.Key()), task.Dump())
+		data[i] = fdbx.NewPair(q.wrapItemKey(plan, task.Key()), task.Key().Bytes())
 		diff[task.Key().Printable()] = struct{}{}
-
-		pairs = append(pairs,
-			// Основная запись таски (только айдишка, на которую триггеримся)
-			fdbx.NewPair(q.wrapItemKey(plan, task.Key()), task.Key().Bytes()),
-			// Служебная запись в коллекцию метаданных
-			fdbx.NewPair(q.wrapFlagKey(qMeta, task.Key()), task.Dump()),
-		)
 	}
 
-	if err = tx.Upsert(pairs); err != nil {
-		return ErrPub.WithReason(err)
+	// Особый обработчик при удалении записей
+	onDelete := func(_ mvcc.Tx, dw db.Writer, old fdbx.Pair) error {
+		// Если при публикации задача уже существует и она не подтверждена - надо скинуть счетчики
+		switch models.GetRootAsTask(old.Value(), 0).State(nil).Status() {
+		case StatusPublished:
+			dw.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWaitKey)), -1)
+		case StatusUnconfirmed:
+			dw.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWorkKey)), -1)
+		}
+		return nil
 	}
 
-	// Особая магия - инкремент счетчика очереди, чтобы затриггерить подписчиков
-	// А также инкремент счетчиков статистики очереди
-	tx.OnCommit(func(w db.Writer) error {
+	// Публикацию задач надо делать атомарно, иначе может быть нарушена консистентность счетчиков
+	if err = tx.Conn().Write(func(w db.Writer) (exp error) {
+		if exp = tx.Upsert(data, mvcc.Writer(w)); exp != nil {
+			return
+		}
+
+		if exp = tx.Upsert(meta, mvcc.Writer(w), mvcc.OnDelete(onDelete)); exp != nil {
+			return
+		}
+
 		// Увеличиваем счетчик задач в ожидании
 		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWaitKey)), int64(len(diff)))
-		// Триггерим обработчики забрать новые задачи
+
+		// Особая магия - инкремент счетчика очереди, чтобы затриггерить подписчиков
 		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTriggerKey)), 1)
 		return nil
-	})
+	}); err != nil {
+		return ErrPub.WithReason(err)
+	}
 
 	return nil
 }
@@ -212,6 +221,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 				mvcc.Last(q.wrapItemKey(time.Now(), nil)),
 				mvcc.From(from),
 				mvcc.Limit(pack),
+				mvcc.SelectPack(1000), // Задачи редко бывают большими
 				mvcc.Exclusive(q.onTaskWork),
 				mvcc.Writer(w),
 			); exp != nil {
@@ -477,7 +487,7 @@ func (q v1Queue) Task(tx mvcc.Tx, key fdbx.Key) (res Task, err error) {
 	return tsk, nil
 }
 
-func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
+func (q v1Queue) onTaskWork(tx mvcc.Tx, w db.Writer, p fdbx.Pair) (err error) {
 	var pair fdbx.Pair
 
 	key := p.Key()
@@ -486,12 +496,14 @@ func (q v1Queue) onTaskWork(tx mvcc.Tx, p fdbx.Pair, w db.Writer) (err error) {
 	mkey := q.wrapFlagKey(qMeta, ukey)
 
 	// Удаление по ключу из основной очереди
-	if err = tx.Delete([]fdbx.Key{key}, mvcc.Writer(w)); err != nil {
+	// Физическое удаление - опасный хак, благодаря которому очередь не зависит от сборщика мусора
+	// Так можно делать только тут, потому что все логические операции идут в рамках физической транзакции
+	if err = tx.Delete([]fdbx.Key{key}, mvcc.Writer(w), mvcc.Physical()); err != nil {
 		return ErrSub.WithReason(err)
 	}
 
 	// Выборка элемента из коллекции метаданных
-	if pair, err = tx.Select(mkey); err != nil {
+	if pair, err = tx.Select(mkey, mvcc.Writer(w), mvcc.Lock()); err != nil {
 		return ErrSub.WithReason(err)
 	}
 

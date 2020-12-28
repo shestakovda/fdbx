@@ -159,7 +159,7 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 		s.True(errx.Is(err, mvcc.ErrNotFound))
 	}
 
-	onInsert := func(tx mvcc.Tx, p fdbx.Pair) error {
+	onInsert := func(tx mvcc.Tx, w db.Writer, p fdbx.Pair) error {
 		s.NotNil(p)
 		s.Nil(p.Unwrap())
 		s.Equal(val2, p.Value())
@@ -174,7 +174,7 @@ func (s *MVCCSuite) TestUpsertIsolationSameTx() {
 		}
 	}
 
-	onDelete := func(tx mvcc.Tx, p fdbx.Pair) error {
+	onDelete := func(tx mvcc.Tx, w db.Writer, p fdbx.Pair) error {
 		s.Equal(key1.String(), p.Key().String())
 		return nil
 	}
@@ -340,7 +340,7 @@ func (s *MVCCSuite) TestListAll() {
 	// В отдельной транзакции запрашиваем результат
 
 	vals := make([]string, 0, 2)
-	hdlr := func(tx mvcc.Tx, p fdbx.Pair, w db.Writer) error {
+	hdlr := func(tx mvcc.Tx, w db.Writer, p fdbx.Pair) error {
 		vals = append(vals, string(p.Value()))
 		return nil
 	}
