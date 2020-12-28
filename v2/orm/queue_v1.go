@@ -2,7 +2,6 @@ package orm
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"time"
@@ -73,9 +72,6 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 		if exp = tx.Delete(keys, mvcc.Writer(w)); exp != nil {
 			return
 		}
-
-		// Убираем задачи из очереди обработки
-		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWorkKey)), int64(-len(diff)))
 		return nil
 	}); err != nil {
 		return ErrAck.WithReason(err)
@@ -95,39 +91,21 @@ func (q v1Queue) PubList(tx mvcc.Tx, ids []fdbx.Key, args ...Option) (err error)
 
 	// Структура ключа:
 	// db nsUser tb.id q.id qList delay uid = taskID
-	data := make([]fdbx.Pair, len(ids))
-	meta := make([]fdbx.Pair, len(ids))
+	pairs := make([]fdbx.Pair, 0, 2*len(ids))
 	for i := range ids {
 		task := q.newTask(ids[i], plan, &opts)
-		meta[i] = fdbx.NewPair(q.wrapFlagKey(qMeta, task.Key()), task.Dump())
-		data[i] = fdbx.NewPair(q.wrapItemKey(plan, task.Key()), task.Key().Bytes())
 		diff[task.Key().Printable()] = struct{}{}
-	}
-
-	// Особый обработчик при удалении записей
-	onDelete := func(_ mvcc.Tx, dw db.Writer, old fdbx.Pair) error {
-		// Если при публикации задача уже существует и она не подтверждена - надо скинуть счетчики
-		switch models.GetRootAsTask(old.Value(), 0).State(nil).Status() {
-		case StatusPublished:
-			dw.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWaitKey)), -1)
-		case StatusUnconfirmed:
-			dw.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWorkKey)), -1)
-		}
-		return nil
+		pairs = append(pairs,
+			fdbx.NewPair(q.wrapFlagKey(qMeta, task.Key()), task.Dump()),
+			fdbx.NewPair(q.wrapItemKey(plan, task.Key()), task.Key().Bytes()),
+		)
 	}
 
 	// Публикацию задач надо делать атомарно, иначе может быть нарушена консистентность счетчиков
 	if err = tx.Conn().Write(func(w db.Writer) (exp error) {
-		if exp = tx.Upsert(data, mvcc.Writer(w)); exp != nil {
+		if exp = tx.Upsert(pairs, mvcc.Writer(w)); exp != nil {
 			return
 		}
-
-		if exp = tx.Upsert(meta, mvcc.Writer(w), mvcc.OnDelete(onDelete)); exp != nil {
-			return
-		}
-
-		// Увеличиваем счетчик задач в ожидании
-		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWaitKey)), int64(len(diff)))
 
 		// Особая магия - инкремент счетчика очереди, чтобы затриггерить подписчиков
 		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTriggerKey)), 1)
@@ -286,12 +264,6 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 				return nil
 			}
 
-			// Уменьшаем счетчик задач в ожидании
-			w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWaitKey)), int64(-len(pairs)))
-
-			// Увеличиваем счетчик задач в ожидании
-			w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWorkKey)), int64(len(pairs)))
-
 			// Логический коммит в той же физической транзакции
 			// Это самый важный момент - именно благодаря этому перемещенные в процессе чтения
 			// элементы очереди будут видны как перемещенные для других логических транзакций
@@ -412,11 +384,6 @@ func (q v1Queue) Undo(tx mvcc.Tx, key fdbx.Key) (exp error) {
 			return
 		}
 
-		// Уменьшаем счетчик задач в ожидании
-		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWaitKey)), -1)
-
-		// Увеличиваем счетчик задач в работе
-		w.Increment(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWorkKey)), 1)
 		return nil
 	}); exp != nil {
 		return ErrUndo.WithReason(exp)
@@ -427,19 +394,35 @@ func (q v1Queue) Undo(tx mvcc.Tx, key fdbx.Key) (exp error) {
 }
 
 func (q v1Queue) Stat(tx mvcc.Tx) (wait, work int64, err error) {
-	if err = tx.Conn().Read(func(r db.Reader) (exp error) {
+	wctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-		if val := r.Data(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWaitKey))).Value(); len(val) == 8 {
-			wait = int64(binary.LittleEndian.Uint64(val))
+	// Подсчет активных
+	lkey := q.wrapFlagKey(qList, nil)
+	pairs, errs := tx.SeqScan(wctx, mvcc.From(lkey), mvcc.Last(lkey))
+
+	for range pairs {
+		wait++
+	}
+
+	for err = range errs {
+		if err != nil {
+			return 0, 0, ErrStat.WithReason(err)
 		}
+	}
 
-		if val := r.Data(mvcc.WrapKey(q.wrapFlagKey(qFlag, qTotalWorkKey))).Value(); len(val) == 8 {
-			work = int64(binary.LittleEndian.Uint64(val))
+	// Подсчет потеряшек
+	wkey := q.wrapFlagKey(qWork, nil)
+	pairs, errs = tx.SeqScan(wctx, mvcc.From(wkey), mvcc.Last(wkey))
+
+	for range pairs {
+		work++
+	}
+
+	for err = range errs {
+		if err != nil {
+			return 0, 0, ErrStat.WithReason(err)
 		}
-
-		return nil
-	}); err != nil {
-		return 0, 0, ErrStat.WithReason(err)
 	}
 
 	return wait, work, nil

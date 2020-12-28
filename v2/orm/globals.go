@@ -21,5 +21,3 @@ const (
 var loLimit int = 100000
 
 var qTriggerKey = fdbx.String2Key("trigger")
-var qTotalWaitKey = fdbx.String2Key("wait")
-var qTotalWorkKey = fdbx.String2Key("work")
