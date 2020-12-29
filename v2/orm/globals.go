@@ -18,6 +18,7 @@ const (
 	qMeta byte = 3
 )
 
-var loLimit int = 100000
+// Ограничение в 100Кб, но берем небольшой запас на накладные расходы
+var loLimit int = 90000
 
 var qTriggerKey = fdbx.String2Key("trigger")
