@@ -1,6 +1,8 @@
 package orm
 
-import "github.com/shestakovda/fdbx/v2"
+import (
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+)
 
 const (
 	nsData  byte = 0
@@ -21,4 +23,4 @@ const (
 // Ограничение в 100Кб, но берем небольшой запас на накладные расходы
 var loLimit int = 90000
 
-var qTriggerKey = fdbx.String2Key("trigger")
+var qTriggerKey = fdb.Key("trigger")

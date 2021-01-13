@@ -22,10 +22,11 @@ const (
 	txStatusCommitted byte = 3
 )
 
-func newTxID() []byte {
-	var uid [12]byte
+type suid [12]byte
+
+func newTxID() (uid suid) {
 	now := time.Now().UTC().UnixNano()
 	binary.BigEndian.PutUint64(uid[:8], uint64(now))
 	binary.BigEndian.PutUint32(uid[8:12], rand.New(rand.NewSource(now)).Uint32())
-	return uid[:]
+	return
 }

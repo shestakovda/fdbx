@@ -3,7 +3,8 @@ package orm
 import (
 	"time"
 
-	"github.com/shestakovda/fdbx/v2"
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+
 	"github.com/shestakovda/fdbx/v2/models"
 )
 
@@ -29,7 +30,7 @@ type options struct {
 	prefix   []byte
 	reverse  bool
 	creator  string
-	lastkey  fdbx.Key
+	lastkey  fdb.Key
 	vwait    time.Duration
 	delay    time.Duration
 	refresh  time.Duration
@@ -98,7 +99,7 @@ func Reverse(r bool) Option {
 	}
 }
 
-func LastKey(k fdbx.Key) Option {
+func LastKey(k fdb.Key) Option {
 	return func(o *options) {
 		o.lastkey = k
 	}
@@ -138,16 +139,16 @@ func metatask(t *models.TaskT) Option {
 }
 
 func (o options) simple2batch() IndexBatchKey {
-	return func(buf []byte) (res map[uint16][]fdbx.Key, err error) {
-		var tmp fdbx.Key
-		res = make(map[uint16][]fdbx.Key, len(o.indexes))
+	return func(buf []byte) (res map[uint16][]fdb.Key, err error) {
+		var tmp fdb.Key
+		res = make(map[uint16][]fdb.Key, len(o.indexes))
 
 		for idx, fnc := range o.indexes {
 			if tmp, err = fnc(buf); err != nil {
 				return
 			}
 
-			if tmp == nil || len(tmp.Bytes()) == 0 {
+			if len(tmp) == 0 {
 				continue
 			}
 
@@ -159,9 +160,9 @@ func (o options) simple2batch() IndexBatchKey {
 }
 
 func (o options) multi2batch() IndexBatchKey {
-	return func(buf []byte) (res map[uint16][]fdbx.Key, err error) {
-		var keys []fdbx.Key
-		res = make(map[uint16][]fdbx.Key, len(o.indexes))
+	return func(buf []byte) (res map[uint16][]fdb.Key, err error) {
+		var keys []fdb.Key
+		res = make(map[uint16][]fdb.Key, len(o.indexes))
 
 		for idx, fnc := range o.multidx {
 			if keys, err = fnc(buf); err != nil {
@@ -173,7 +174,7 @@ func (o options) multi2batch() IndexBatchKey {
 			}
 
 			for i := range keys {
-				if keys[i] == nil || len(keys[i].Bytes()) == 0 {
+				if len(keys[i]) == 0 {
 					continue
 				}
 

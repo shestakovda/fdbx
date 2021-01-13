@@ -1,14 +1,15 @@
 package orm
 
 import (
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/models"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 	"github.com/shestakovda/typex"
 )
 
-func newSysPair(tx mvcc.Tx, tbid uint16, orig fdbx.Pair) (_ fdbx.Pair, err error) {
-	val := orig.Value()
+func newSysPair(tx mvcc.Tx, tbid uint16, orig fdb.KeyValue) (_ fdb.KeyValue, err error) {
+	val := orig.Value
 	mod := &models.ValueT{
 		Blob: false,
 		Size: uint32(len(val)),
@@ -19,33 +20,16 @@ func newSysPair(tx mvcc.Tx, tbid uint16, orig fdbx.Pair) (_ fdbx.Pair, err error
 	if len(mod.Data) > loLimit {
 		uid := typex.NewUUID()
 
-		if err = tx.SaveBLOB(WrapBlobKey(tbid, fdbx.Bytes2Key(uid)), mod.Data); err != nil {
-			return nil, ErrValPack.WithReason(err)
+		if err = tx.SaveBLOB(WrapBlobKey(tbid, fdb.Key(uid)), mod.Data); err != nil {
+			return fdb.KeyValue{}, ErrValPack.WithReason(err)
 		}
 
 		mod.Blob = true
-		mod.Data = []byte(uid)
+		mod.Data = uid
 	}
 
-	return &sysPair{
-		tbid: tbid,
-		orig: orig,
-		data: fdbx.FlatPack(mod),
+	return fdb.KeyValue{
+		WrapTableKey(tbid, orig.Key),
+		fdbx.FlatPack(mod),
 	}, nil
 }
-
-type sysPair struct {
-	tbid uint16
-	data []byte
-	orig fdbx.Pair
-}
-
-func (p sysPair) Key() fdbx.Key {
-	return WrapTableKey(p.tbid, p.orig.Key())
-}
-
-func (p sysPair) Value() []byte {
-	return p.data
-}
-
-func (p sysPair) Unwrap() fdbx.Pair { return p.orig }

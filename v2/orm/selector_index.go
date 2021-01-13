@@ -3,16 +3,17 @@ package orm
 import (
 	"context"
 
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+
 	"github.com/golang/glog"
-	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
-func NewIndexSelector(tx mvcc.Tx, idx uint16, prefix fdbx.Key) Selector {
+func NewIndexSelector(tx mvcc.Tx, idx uint16, prefix fdb.Key) Selector {
 	return NewIndexRangeSelector(tx, idx, prefix, prefix)
 }
 
-func NewIndexRangeSelector(tx mvcc.Tx, idx uint16, from, last fdbx.Key) Selector {
+func NewIndexRangeSelector(tx mvcc.Tx, idx uint16, from, last fdb.Key) Selector {
 	return &indexSelector{
 		tx:   tx,
 		idx:  idx,
@@ -24,17 +25,17 @@ func NewIndexRangeSelector(tx mvcc.Tx, idx uint16, from, last fdbx.Key) Selector
 type indexSelector struct {
 	tx   mvcc.Tx
 	idx  uint16
-	from fdbx.Key
-	last fdbx.Key
+	from fdb.Key
+	last fdb.Key
 }
 
-func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-chan fdbx.Pair, <-chan error) {
-	list := make(chan fdbx.Pair)
+func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-chan Selected, <-chan error) {
+	list := make(chan Selected)
 	errs := make(chan error, 1)
 
 	go func() {
 		var err error
-		var pair fdbx.Pair
+		var pair fdb.KeyValue
 
 		defer close(list)
 		defer close(errs)
@@ -42,7 +43,7 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 		fkey := s.from
 		lkey := s.last
 		opts := getOpts(args)
-		skip := len(opts.lastkey.Bytes()) > 0
+		skip := len(opts.lastkey) > 0
 
 		if skip {
 			if opts.reverse {
@@ -62,8 +63,8 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 		}
 
 		if Debug {
-			glog.Infof("indexSelector.Select.fkey = %s", WrapIndexKey(tbl.ID(), s.idx, fkey).Printable())
-			glog.Infof("indexSelector.Select.lkey = %s", WrapIndexKey(tbl.ID(), s.idx, lkey).Printable())
+			glog.Infof("indexSelector.Select.fkey = %s", WrapIndexKey(tbl.ID(), s.idx, fkey))
+			glog.Infof("indexSelector.Select.lkey = %s", WrapIndexKey(tbl.ID(), s.idx, lkey))
 			glog.Infof("indexSelector.Select.skip = %t", skip)
 		}
 
@@ -79,13 +80,13 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 				continue
 			}
 
-			if pair, err = s.tx.Select(WrapTableKey(tbl.ID(), fdbx.Bytes2Key(item.Value()))); err != nil {
+			if pair, err = s.tx.Select(WrapTableKey(tbl.ID(), item.Value)); err != nil {
 				errs <- ErrSelect.WithReason(err)
 				return
 			}
 
 			select {
-			case list <- fdbx.WrapPair(UnwrapIndexKey(item.Key()), pair):
+			case list <- Selected{UnwrapIndexKey(item.Key), pair}:
 			case <-wctx.Done():
 				return
 			}

@@ -6,11 +6,11 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
 
-type v610Waiter struct {
+type Waiter struct {
 	fdb.FutureNil
 }
 
-func (w v610Waiter) Resolve(ctx context.Context) (err error) {
+func (w Waiter) Resolve(ctx context.Context) (err error) {
 	wc := make(chan error, 1)
 
 	go func() {

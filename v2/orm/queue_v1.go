@@ -6,6 +6,8 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+
 	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
@@ -29,26 +31,23 @@ type v1Queue struct {
 	tb Table
 }
 
-func (q v1Queue) wrapFlagKey(flag byte, key fdbx.Key) fdbx.Key {
+func (q v1Queue) wrapFlagKey(flag byte, key fdb.Key) fdb.Key {
 	return WrapQueueKey(q.tb.ID(), q.id, q.options.prefix, flag, key)
 }
 
-func (q v1Queue) wrapItemKey(plan time.Time, key fdbx.Key) fdbx.Key {
-	if key == nil {
-		key = fdbx.Bytes2Key(nil)
-	}
-	return WrapQueueKey(q.tb.ID(), q.id, q.options.prefix, qList, key.LPart(fdbx.Time2Byte(plan)...))
+func (q v1Queue) wrapItemKey(plan time.Time, key fdb.Key) fdb.Key {
+	return WrapQueueKey(q.tb.ID(), q.id, q.options.prefix, qList, fdbx.AppendLeft(key, fdbx.Time2Byte(plan)...))
 }
 
 func (q v1Queue) ID() uint16 { return q.id }
 
-func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
+func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdb.Key) (err error) {
 
 	// Подтверждение задач надо делать атомарно, иначе может быть нарушена консистентность счетчиков
 	if err = tx.Conn().Write(func(w db.Writer) (exp error) {
-		var sel fdbx.Pair
+		var sel fdb.KeyValue
 
-		keys := make([]fdbx.Key, 0, 2*len(ids))
+		keys := make([]fdb.Key, 0, 2*len(ids))
 		diff := make(map[string]struct{}, len(ids))
 
 		for i := range ids {
@@ -56,8 +55,8 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 
 			// Пока не удалили - загружаем задачу, если она есть то счетчик надо уменьшить
 			if sel, exp = tx.Select(mkey, mvcc.Writer(w), mvcc.Lock()); exp == nil {
-				if tsk := models.GetRootAsTask(sel.Value(), 0).State(nil).UnPack(); tsk.Status == StatusUnconfirmed {
-					diff[ids[i].Printable()] = struct{}{}
+				if tsk := models.GetRootAsTask(sel.Value, 0).State(nil).UnPack(); tsk.Status == StatusUnconfirmed {
+					diff[ids[i].String()] = struct{}{}
 
 					// Помечаем к удалению из индекса статусов задач
 					keys = append(keys, mkey)
@@ -80,24 +79,24 @@ func (q v1Queue) Ack(tx mvcc.Tx, ids ...fdbx.Key) (err error) {
 	return nil
 }
 
-func (q v1Queue) Pub(tx mvcc.Tx, key fdbx.Key, args ...Option) error {
-	return q.PubList(tx, []fdbx.Key{key}, args...)
+func (q v1Queue) Pub(tx mvcc.Tx, key fdb.Key, args ...Option) error {
+	return q.PubList(tx, []fdb.Key{key}, args...)
 }
 
-func (q v1Queue) PubList(tx mvcc.Tx, ids []fdbx.Key, args ...Option) (err error) {
+func (q v1Queue) PubList(tx mvcc.Tx, ids []fdb.Key, args ...Option) (err error) {
 	opts := getOpts(args)
 	plan := time.Now().Add(opts.delay)
 	diff := make(map[string]struct{}, len(ids))
 
 	// Структура ключа:
 	// db nsUser tb.id q.id qList delay uid = taskID
-	pairs := make([]fdbx.Pair, 0, 2*len(ids))
+	pairs := make([]fdb.KeyValue, 0, 2*len(ids))
 	for i := range ids {
 		task := q.newTask(ids[i], plan, &opts)
-		diff[task.Key().Printable()] = struct{}{}
+		diff[task.Key().String()] = struct{}{}
 		pairs = append(pairs,
-			fdbx.NewPair(q.wrapFlagKey(qMeta, task.Key()), task.Dump()),
-			fdbx.NewPair(q.wrapItemKey(plan, task.Key()), task.Key().Bytes()),
+			fdb.KeyValue{q.wrapFlagKey(qMeta, task.Key()), task.Dump()},
+			fdb.KeyValue{q.wrapItemKey(plan, task.Key()), task.Key()},
 		)
 	}
 
@@ -177,14 +176,14 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 		return nil, nil
 	}
 
-	var pairs []fdbx.Pair
+	var pairs []fdb.KeyValue
 	var waiter fdbx.Waiter
 	var refresh time.Duration
 
 	from := q.wrapFlagKey(qList, nil)
 
 	if Debug {
-		glog.Infof("v1Queue.SubList.from = %s", from.Printable())
+		glog.Infof("v1Queue.SubList.from = %s", from)
 	}
 
 	hdlr := func() error {
@@ -216,13 +215,14 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 
 				// Поскольку выборка задач идет в эксклюзивной блокировке, можем
 				// этим воспользоваться тут и выбрать время следующей задачи по плану.
-				var next []fdbx.Pair
+				var next []fdb.KeyValue
 				if next, exp = tx.ListAll(
 					ctx,
 					mvcc.Last(from),
 					mvcc.From(from),
 					mvcc.Limit(1),
 					mvcc.Writer(w),
+					mvcc.SelectPack(100), // Задачи редко бывают большими
 				); exp != nil {
 					return
 				}
@@ -236,7 +236,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 
 					// Применяем обратное экранирование транзакции и очереди, чтобы получить исходный ключ
 					// Айдишку мы не знаем, но знаем, что сначала идут флаги коллекции, а затем 8 байт времени
-					wkey := next[0].Key().LSkip(5 + 1 + uint16(len(q.options.prefix))).Bytes()
+					wkey := fdbx.SkipLeft(next[0].Key, 5+1+len(q.options.prefix))
 
 					if when, exp = fdbx.Byte2Time(wkey[:8]); exp != nil {
 						return
@@ -327,9 +327,9 @@ func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter, refresh time.
 	time.Sleep(time.Duration(rand.Intn(5)) * time.Millisecond)
 }
 
-func (q v1Queue) Undo(tx mvcc.Tx, key fdbx.Key) (exp error) {
+func (q v1Queue) Undo(tx mvcc.Tx, key fdb.Key) (exp error) {
 	if exp = tx.Conn().Write(func(w db.Writer) (err error) {
-		var pair fdbx.Pair
+		var pair fdb.KeyValue
 
 		// Загружаем задачу, если она есть
 		wkey := q.wrapFlagKey(qWork, key)
@@ -345,7 +345,7 @@ func (q v1Queue) Undo(tx mvcc.Tx, key fdbx.Key) (exp error) {
 		}
 
 		// Получаем буфер метаданных
-		val := pair.Value()
+		val := pair.Value
 
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -367,7 +367,7 @@ func (q v1Queue) Undo(tx mvcc.Tx, key fdbx.Key) (exp error) {
 
 		// Удаляем из списка плановых
 		plan := time.Unix(0, meta.Planned()).UTC()
-		if err = tx.Delete([]fdbx.Key{q.wrapItemKey(plan, key)}, mvcc.Writer(w)); err != nil {
+		if err = tx.Delete([]fdb.Key{q.wrapItemKey(plan, key)}, mvcc.Writer(w)); err != nil {
 			return
 		}
 
@@ -377,9 +377,9 @@ func (q v1Queue) Undo(tx mvcc.Tx, key fdbx.Key) (exp error) {
 		}
 
 		// Сохраняем изменения
-		if err = tx.Upsert([]fdbx.Pair{
-			fdbx.NewPair(wkey, key.Bytes()), // Вставка в коллекцию задач "в работе"
-			fdbx.NewPair(mkey, val),         // Вставка в коллекцию метаданных измененного буфера
+		if err = tx.Upsert([]fdb.KeyValue{
+			{wkey, key}, // Вставка в коллекцию задач "в работе"
+			{mkey, val}, // Вставка в коллекцию метаданных измененного буфера
 		}, mvcc.Writer(w)); err != nil {
 			return
 		}
@@ -433,7 +433,7 @@ func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []Task, err error) {
 		return nil, nil
 	}
 
-	var pairs []fdbx.Pair
+	var pairs []fdb.KeyValue
 	wkey := q.wrapFlagKey(qWork, nil)
 
 	if pairs, err = tx.ListAll(
@@ -456,7 +456,7 @@ func (q v1Queue) Lost(tx mvcc.Tx, pack int) (list []Task, err error) {
 	return list, nil
 }
 
-func (q v1Queue) Task(tx mvcc.Tx, key fdbx.Key) (res Task, err error) {
+func (q v1Queue) Task(tx mvcc.Tx, key fdb.Key) (res Task, err error) {
 	var tsk *v1Task
 
 	if tsk, err = q.loadTask(tx, key); err != nil {
@@ -470,10 +470,10 @@ func (q v1Queue) Task(tx mvcc.Tx, key fdbx.Key) (res Task, err error) {
 	return tsk, nil
 }
 
-func (q v1Queue) onTaskWork(tx mvcc.Tx, w db.Writer, p fdbx.Pair) (err error) {
-	var pair fdbx.Pair
+func (q v1Queue) onTaskWork(tx mvcc.Tx, w db.Writer, p fdb.KeyValue) (err error) {
+	var pair fdb.KeyValue
 
-	key := p.Key()
+	key := p.Key
 	ukey := UnwrapQueueKey(q.prefix, key)
 	wkey := q.wrapFlagKey(qWork, ukey)
 	mkey := q.wrapFlagKey(qMeta, ukey)
@@ -481,7 +481,7 @@ func (q v1Queue) onTaskWork(tx mvcc.Tx, w db.Writer, p fdbx.Pair) (err error) {
 	// Удаление по ключу из основной очереди
 	// Физическое удаление - опасный хак, благодаря которому очередь не зависит от сборщика мусора
 	// Так можно делать только тут, потому что все логические операции идут в рамках физической транзакции
-	if err = tx.Delete([]fdbx.Key{key}, mvcc.Writer(w), mvcc.Physical()); err != nil {
+	if err = tx.Delete([]fdb.Key{key}, mvcc.Writer(w), mvcc.Physical()); err != nil {
 		return ErrSub.WithReason(err)
 	}
 
@@ -491,7 +491,7 @@ func (q v1Queue) onTaskWork(tx mvcc.Tx, w db.Writer, p fdbx.Pair) (err error) {
 	}
 
 	// Получаем буфер метаданных
-	val := pair.Value()
+	val := pair.Value
 
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -514,9 +514,9 @@ func (q v1Queue) onTaskWork(tx mvcc.Tx, w db.Writer, p fdbx.Pair) (err error) {
 		return ErrSub.WithStack()
 	}
 
-	if err = tx.Upsert([]fdbx.Pair{
-		fdbx.NewPair(wkey, p.Value()), // Вставка в коллекцию задач "в работе"
-		fdbx.NewPair(mkey, val),       // Вставка в коллекцию метаданных измененного буфера
+	if err = tx.Upsert([]fdb.KeyValue{
+		{wkey, p.Value}, // Вставка в коллекцию задач "в работе"
+		{mkey, val},     // Вставка в коллекцию метаданных измененного буфера
 	}, mvcc.Writer(w)); err != nil {
 		return ErrSub.WithReason(err)
 	}
@@ -524,8 +524,8 @@ func (q v1Queue) onTaskWork(tx mvcc.Tx, w db.Writer, p fdbx.Pair) (err error) {
 	return nil
 }
 
-func (q v1Queue) loadTask(tx mvcc.Tx, key fdbx.Key) (tsk *v1Task, err error) {
-	var sel fdbx.Pair
+func (q v1Queue) loadTask(tx mvcc.Tx, key fdb.Key) (tsk *v1Task, err error) {
+	var sel fdb.KeyValue
 
 	// Выборка элемента из коллекции метаданных, если его нет - это ужасная ошибка
 	if sel, err = tx.Select(q.wrapFlagKey(qMeta, key)); err != nil {
@@ -533,7 +533,7 @@ func (q v1Queue) loadTask(tx mvcc.Tx, key fdbx.Key) (tsk *v1Task, err error) {
 	}
 
 	// Получаем буфер метаданных
-	buf := sel.Value()
+	buf := sel.Value
 
 	if len(buf) == 0 {
 		return nil, ErrTask.WithStack()
@@ -544,13 +544,13 @@ func (q v1Queue) loadTask(tx mvcc.Tx, key fdbx.Key) (tsk *v1Task, err error) {
 
 	// Так мы достаем объект коллекции. Потенциально удаленный
 	if sel, err = q.tb.Select(tx).PossibleByID(key).First(); err == nil {
-		tsk.b = sel.Value()
+		tsk.b = sel.Value
 	}
 
 	return tsk, nil
 }
 
-func (q v1Queue) loadTasks(tx mvcc.Tx, items []fdbx.Pair, strict bool) (res []Task, err error) {
+func (q v1Queue) loadTasks(tx mvcc.Tx, items []fdb.KeyValue, strict bool) (res []Task, err error) {
 	var tsk *v1Task
 
 	res = make([]Task, 0, len(items))
@@ -558,7 +558,7 @@ func (q v1Queue) loadTasks(tx mvcc.Tx, items []fdbx.Pair, strict bool) (res []Ta
 	for i := range items {
 		// Значение элемента - идентификатор объекта в коллекции
 		// Получаем исходные данные объекта как данные задачи
-		if tsk, err = q.loadTask(tx, fdbx.Bytes2Key(items[i].Value())); err != nil {
+		if tsk, err = q.loadTask(tx, items[i].Value); err != nil {
 			if !strict && errx.Is(err, mvcc.ErrNotFound) {
 				continue
 			}
@@ -580,7 +580,7 @@ func (q v1Queue) loadTasks(tx mvcc.Tx, items []fdbx.Pair, strict bool) (res []Ta
 	return res, nil
 }
 
-func (q v1Queue) newTask(key fdbx.Key, planned time.Time, opts *options) *v1Task {
+func (q v1Queue) newTask(key fdb.Key, planned time.Time, opts *options) *v1Task {
 	t := v1Task{
 		q: q,
 	}
@@ -593,7 +593,7 @@ func (q v1Queue) newTask(key fdbx.Key, planned time.Time, opts *options) *v1Task
 	}
 
 	t.m = &models.TaskT{
-		Key: key.Bytes(),
+		Key: key,
 		State: &models.TaskStateT{
 			Status:  StatusPublished,
 			Repeats: 0,
@@ -614,11 +614,11 @@ func (q v1Queue) newTask(key fdbx.Key, planned time.Time, opts *options) *v1Task
 	return &t
 }
 
-func (q v1Queue) confTask(key fdbx.Key) *v1Task {
+func (q v1Queue) confTask(key fdb.Key) *v1Task {
 	return &v1Task{
 		q: q,
 		m: &models.TaskT{
-			Key: key.Bytes(),
+			Key: key,
 			State: &models.TaskStateT{
 				Status: StatusConfirmed,
 			},
@@ -632,11 +632,11 @@ type v1Task struct {
 	m *models.TaskT
 }
 
-func (t v1Task) Key() fdbx.Key { return fdbx.Bytes2Key(t.m.Key) }
+func (t v1Task) Key() fdb.Key { return t.m.Key }
 
 func (t v1Task) Body() []byte { return t.b }
 
-func (t v1Task) Pair() fdbx.Pair { return fdbx.NewPair(t.Key(), t.b) }
+func (t v1Task) Pair() fdb.KeyValue { return fdb.KeyValue{t.Key(), t.b} }
 
 func (t v1Task) Dump() []byte { return fdbx.FlatPack(t.m) }
 

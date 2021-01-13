@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
@@ -25,17 +27,17 @@ type InterfaceSuite struct {
 }
 
 func (s *InterfaceSuite) TestConnection() {
-	if _, err := db.ConnectV610(0xFF); s.Error(err) {
+	if _, err := db.Connect(0xFF); s.Error(err) {
 		s.True(errx.Is(err, db.ErrConnect))
 	}
 
-	cn, err := db.ConnectV610(
+	cn, err := db.Connect(
 		TestDB,
 		db.ClusterFile(""),
 	)
 	s.Require().NoError(err)
 	s.Require().NoError(cn.Clear())
-	s.Equal(TestDB, cn.DB())
+	s.Equal(TestDB, cn.ID)
 
 	var buf [8]byte
 	var waiter fdbx.Waiter
@@ -45,21 +47,21 @@ func (s *InterfaceSuite) TestConnection() {
 	const add int64 = -100
 	binary.LittleEndian.PutUint64(buf[:], uint64(num))
 
-	key1 := fdbx.String2Key("key1")
-	key2 := fdbx.String2Key("key2")
-	key3 := fdbx.String2Key("key3")
+	key1 := fdb.Key("key1")
+	key2 := fdb.Key("key2")
+	key3 := fdb.Key("key3")
 
 	s.Require().NoError(cn.Write(func(w db.Writer) error {
-		s.Empty(w.Data(key1).Value())
+		s.Empty(w.Data(key1))
 
-		w.Upsert(fdbx.NewPair(key1, []byte("val1")))
-		w.Upsert(fdbx.NewPair(key2, buf[:]))
+		w.Upsert(fdb.KeyValue{Key: key1, Value: []byte("val1")})
+		w.Upsert(fdb.KeyValue{Key: key2, Value: buf[:]})
 		w.Increment(key3, num)
 
 		waiter = w.Watch(key2)
 		waiter2 = w.Watch(key3)
 
-		s.Equal("val1", string(w.Data(key1).Value()))
+		s.Equal("val1", string(w.Data(key1)))
 		return nil
 	}))
 
@@ -90,24 +92,24 @@ func (s *InterfaceSuite) TestConnection() {
 
 		// Проверяем, что к этому моменту уже всё изменилось
 		s.Require().NoError(cn.Read(func(r db.Reader) error {
-			s.Equal("val2", string(r.Data(key1).Value()))
-			s.Equal(num+add, int64(binary.LittleEndian.Uint64(r.Data(key2).Value())))
-			s.Empty(r.Data(key3).Value())
-			s.Len(r.List(nil, nil, 0, false, false).Resolve(), 2)
+			s.Equal("val2", string(r.Data(key1)))
+			s.Equal(num+add, int64(binary.LittleEndian.Uint64(r.Data(key2))))
+			s.Empty(r.Data(key3))
+			s.Len(r.List(nil, nil, 0, false, false).GetSliceOrPanic(), 2)
 			return nil
 		}))
 
 	}()
 
 	s.Require().NoError(cn.Read(func(r db.Reader) error {
-		s.Equal("val1", string(r.Data(key1).Value()))
-		s.Equal(num, int64(binary.LittleEndian.Uint64(r.Data(key2).Value())))
-		s.Equal(num, int64(binary.LittleEndian.Uint64(r.Data(key3).Value())))
+		s.Equal("val1", string(r.Data(key1)))
+		s.Equal(num, int64(binary.LittleEndian.Uint64(r.Data(key2))))
+		s.Equal(num, int64(binary.LittleEndian.Uint64(r.Data(key3))))
 		return nil
 	}))
 
 	s.Require().NoError(cn.Write(func(w db.Writer) error {
-		w.Upsert(fdbx.NewPair(key1, []byte("val2")))
+		w.Upsert(fdb.KeyValue{Key: key1, Value: []byte("val2")})
 		w.Increment(key2, add)
 		w.Delete(key3)
 		return nil
@@ -118,7 +120,7 @@ func (s *InterfaceSuite) TestConnection() {
 	s.Require().NoError(cn.Write(func(w db.Writer) error {
 		w.Lock(key1, key3)
 		w.Erase(key1, key3)
-		s.Len(w.List(nil, nil, 0, false, false).Resolve(), 0)
+		s.Len(w.List(nil, nil, 0, false, false).GetSliceOrPanic(), 0)
 		return nil
 	}))
 }

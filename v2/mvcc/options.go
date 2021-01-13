@@ -1,16 +1,16 @@
 package mvcc
 
 import (
-	"github.com/shestakovda/fdbx/v2"
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/shestakovda/fdbx/v2/db"
 )
 
 func getOpts(args []Option) (o options) {
 	// Объем выборки "грязных" записей в процессе вакуума
-	o.vpack = 10
+	o.vpack = 10000
 
 	// Объем выборки "грязных" записей в процессе работы
-	o.spack = 100
+	o.spack = 0
 
 	// Максимальное кол-во байт, которое могут занимать строки, сохраняемые в рамках одной физической транзакции
 	o.rowmem = 9000000
@@ -34,8 +34,8 @@ type options struct {
 	rowsize  int
 	vpack    uint64
 	spack    uint64
-	from     fdbx.Key
-	last     fdbx.Key
+	from     fdb.Key
+	last     fdb.Key
 	onInsert RowHandler
 	onUpdate RowHandler
 	onDelete RowHandler
@@ -45,8 +45,8 @@ type options struct {
 }
 
 func Lock() Option                    { return func(o *options) { o.lock = true } }
-func Last(k fdbx.Key) Option          { return func(o *options) { o.last = k } }
-func From(k fdbx.Key) Option          { return func(o *options) { o.from = k } }
+func Last(k fdb.Key) Option           { return func(o *options) { o.last = k } }
+func From(k fdb.Key) Option           { return func(o *options) { o.from = k } }
 func Limit(l int) Option              { return func(o *options) { o.limit = l } }
 func Writer(w db.Writer) Option       { return func(o *options) { o.writer = w } }
 func Reverse() Option                 { return func(o *options) { o.reverse = true } }

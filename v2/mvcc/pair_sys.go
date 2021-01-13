@@ -3,28 +3,20 @@ package mvcc
 import (
 	"encoding/binary"
 
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/models"
 )
 
-type sysPair struct {
-	opid uint32
-	txid []byte
-	orig fdbx.Pair
-}
-
-func (p sysPair) Key() fdbx.Key {
+func sysPair(opid uint32, key fdb.Key, txid, data []byte) fdb.KeyValue {
 	var part [16]byte
-	copy(part[:8], p.txid[:8])
-	copy(part[12:16], p.txid[8:12])
-	binary.BigEndian.PutUint32(part[8:12], p.opid)
-	return WrapKey(p.orig.Key()).RPart(part[:]...)
-}
+	copy(part[:8], txid[:8])
+	copy(part[12:16], txid[8:12])
+	binary.BigEndian.PutUint32(part[8:12], opid)
 
-func (p sysPair) Value() []byte {
-	return fdbx.FlatPack(&models.RowT{
-		Data: p.orig.Value(),
-	})
+	return fdb.KeyValue{
+		fdbx.AppendRight(WrapKey(key), part[:]...),
+		fdbx.FlatPack(&models.RowT{Data: data}),
+	}
 }
-
-func (p sysPair) Unwrap() fdbx.Pair { return p.orig }
