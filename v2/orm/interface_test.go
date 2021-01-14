@@ -733,11 +733,11 @@ func BenchmarkCount(b *testing.B) {
 
 	tbl := orm.NewTable(TestTable)
 
-	for k := 0; k < count/int(batchSize); k++ {
+	for k := 0; k < count/batchSize; k++ {
 		batch := make([]fdb.KeyValue, batchSize)
-		for i := 0; i < int(batchSize); i++ {
+		for i := 0; i < batchSize; i++ {
 			uid := []byte(typex.NewUUID())
-			batch[i] = fdb.KeyValue{fdb.Key(uid), uid}
+			batch[i] = fdb.KeyValue{uid, uid}
 		}
 		require.NoError(b, tbl.Upsert(tx, batch...))
 	}

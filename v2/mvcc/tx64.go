@@ -423,38 +423,47 @@ func (t *tx64) selectPart(
 	list := w.List(from, to, opts.spack, opts.reverse, skip).GetSliceOrPanic()
 	part = list[:0]
 
-	for i := range list {
-		list[i].Key = list[i].Key[1:]
+	// Может оказаться, что данных слишком много или сервер перегружен, тогда мы можем не успеть
+	// загрузить объекты вовремя, т.е. нам не хватит времени на обработку. В этом случае сделаем размер пачки меньше
+	// и выйдем, чтобы можно было загружать меньшими кусками
+	if wctx.Err() == nil {
 
-		if ok, err = t.isVisible(w.Reader, lc, opid, list[i], false); err != nil {
-			return
-		}
+		for i := range list {
+			list[i].Key = list[i].Key[1:]
 
-		last = list[i].Key
-		rows++
+			if ok, err = t.isVisible(w.Reader, lc, opid, list[i], false); err != nil {
+				return
+			}
 
-		if ok {
-			list[i] = usrPair(list[i])
+			last = list[i].Key
+			rows++
 
-			if opts.onLock != nil {
-				// Раз какой-то обработчик в записи, значит модификация - увеличиваем счетчик
-				atomic.AddUint32(&t.mods, 1)
+			if ok {
+				list[i] = usrPair(list[i])
 
-				if err = opts.onLock(t, w, list[i]); err != nil {
-					return
+				if opts.onLock != nil {
+					// Раз какой-то обработчик в записи, значит модификация - увеличиваем счетчик
+					atomic.AddUint32(&t.mods, 1)
+
+					if err = opts.onLock(t, w, list[i]); err != nil {
+						return
+					}
+				}
+
+				if part = append(part, list[i]); opts.limit > 0 && size+len(part) >= opts.limit {
+					break
 				}
 			}
 
-			if part = append(part, list[i]); opts.limit > 0 && size+len(part) >= opts.limit {
+			if wctx.Err() != nil {
 				break
 			}
 		}
-
-		if wctx.Err() != nil {
-			break
+	} else {
+		if opts.spack /= 10; opts.spack == 0 {
+			opts.spack = 1
 		}
 	}
-
 	if Debug {
 		glog.Infof("Tx.selectPart.rows = %d", rows)
 		glog.Infof("Tx.selectPart.part = %d", len(part))
