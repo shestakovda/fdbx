@@ -10,7 +10,6 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 
 	"github.com/shestakovda/errx"
-	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/stretchr/testify/suite"
 )
@@ -40,8 +39,8 @@ func (s *InterfaceSuite) TestConnection() {
 	s.Equal(TestDB, cn.ID)
 
 	var buf [8]byte
-	var waiter fdbx.Waiter
-	var waiter2 fdbx.Waiter
+	var waiter db.Waiter
+	var waiter2 db.Waiter
 
 	const num int64 = 123
 	const add int64 = -100

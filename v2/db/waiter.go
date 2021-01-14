@@ -10,8 +10,22 @@ type Waiter struct {
 	fdb.FutureNil
 }
 
+func (w *Waiter) Clear() {
+	if w.FutureNil != nil && !w.IsReady() {
+		w.Cancel()
+	}
+	w.FutureNil = nil
+}
+
+func (w Waiter) Empty() bool { return w.FutureNil == nil }
+
 func (w Waiter) Resolve(ctx context.Context) (err error) {
+	if w.Empty() {
+		return ErrWait.WithStack()
+	}
+
 	wc := make(chan error, 1)
+	defer w.Clear()
 
 	go func() {
 		defer close(wc)
@@ -25,7 +39,6 @@ func (w Waiter) Resolve(ctx context.Context) (err error) {
 	case err = <-wc:
 		return
 	case <-ctx.Done():
-		w.Cancel()
 		return ErrWait.WithReason(ctx.Err())
 	}
 }

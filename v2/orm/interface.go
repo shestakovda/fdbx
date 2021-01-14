@@ -4,12 +4,13 @@ import (
 	"context"
 	"time"
 
+	"github.com/shestakovda/fdbx/v2/mvcc"
+
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 
 	"github.com/shestakovda/errx"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
-	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
 // Debug - флаг отладочных принтов

@@ -277,12 +277,12 @@ func (s *MVCCSuite) TestBLOB() {
 
 	// insert and check long msg
 	if err := s.tx.SaveBLOB(key, msg); s.NoError(err) {
-		if val, err := s.tx.LoadBLOB(key, len(msg)); s.NoError(err) {
+		if val, err := s.tx.LoadBLOB(key); s.NoError(err) {
 			s.Equal(msg, val)
 		}
 
 		if err := s.tx.DropBLOB(key); s.NoError(err) {
-			if val, err := s.tx.LoadBLOB(key, len(msg)); s.NoError(err) {
+			if val, err := s.tx.LoadBLOB(key); s.NoError(err) {
 				s.Len(val, 0)
 			}
 		}

@@ -17,7 +17,7 @@ func newUsrPair(tx mvcc.Tx, tbid uint16, orig fdb.KeyValue) (_ fdb.KeyValue, err
 
 	// Если значение лежит в BLOB, надо достать
 	if mod.Blob {
-		if mod.Data, err = tx.LoadBLOB(WrapBlobKey(tbid, mod.Data), int(mod.Size)); err != nil {
+		if mod.Data, err = tx.LoadBLOB(WrapBlobKey(tbid, mod.Data)); err != nil {
 			return fdb.KeyValue{}, ErrValUnpack.WithReason(err)
 		}
 	}

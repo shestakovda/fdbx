@@ -66,7 +66,7 @@ type Tx interface {
 	SeqScan(context.Context, ...Option) (<-chan fdb.KeyValue, <-chan error)
 
 	// Загрузка бинарных данных по ключу, указывается ожидаемый размер
-	LoadBLOB(fdb.Key, int, ...Option) ([]byte, error)
+	LoadBLOB(fdb.Key, ...Option) ([]byte, error)
 
 	// Удаление бинарных данных по ключу
 	// Поддерживает опции Writer
@@ -89,7 +89,7 @@ type Tx interface {
 	Touch(fdb.Key)
 
 	// Ожидание изменения сигнального ключа в Touch
-	Watch(fdb.Key) (fdbx.Waiter, error)
+	Watch(fdb.Key) (db.Waiter, error)
 }
 
 // Option - дополнительный аргумент при выполнении команды

@@ -177,7 +177,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 	}
 
 	var pairs []fdb.KeyValue
-	var waiter fdbx.Waiter
+	var waiter db.Waiter
 	var refresh time.Duration
 
 	from := q.wrapFlagKey(qList, nil)
@@ -285,7 +285,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 			return nil, ErrSub.WithReason(err)
 		}
 
-		if waiter != nil {
+		if !waiter.Empty() {
 			q.waitTask(ctx, waiter, refresh)
 		}
 
@@ -305,7 +305,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 	}
 }
 
-func (q v1Queue) waitTask(ctx context.Context, waiter fdbx.Waiter, refresh time.Duration) {
+func (q v1Queue) waitTask(ctx context.Context, waiter db.Waiter, refresh time.Duration) {
 	if Debug {
 		glog.Infof("v1Queue.waitTask(%s)", refresh)
 	}

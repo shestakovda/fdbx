@@ -18,7 +18,7 @@ import (
 )
 
 /*
-	newTx64 - создание и старт новой транзакции MVCC поверх транзакций FDB.
+	Begin - создание и старт новой транзакции MVCC поверх транзакций FDB.
 
 	В первой транзакции мы создаем новый объект, после чего записываем его в новый случайный ключ.
 	В момент записи FDB автоматически добавит в значение версию, которую и будем использовать для
@@ -34,28 +34,41 @@ func newTx64(conn db.Connection) *tx64 {
 	return &tx64{
 		conn:   conn,
 		txid:   newTxID(),
-		start:  time.Now().UTC().UnixNano(),
 		status: txStatusRunning,
+		start:  time.Now().UTC().UnixNano(),
 	}
 }
 
+/*
+tx64 - объект "логической" транзакции MVCC поверх "физической" транзакции FDB
+*/
 type tx64 struct {
 	conn   db.Connection
-	mods   uint32
-	opid   uint32
 	txid   suid
+	opid   uint32
+	mods   uint32
 	start  int64
 	locks  locks
 	status byte
 	oncomm []CommitHandler
 }
 
-func (t *tx64) Conn() db.Connection { return t.conn }
+func (t *tx64) Conn() db.Connection {
+	return t.conn
+}
 
+/*
+	OnCommit - Регистрация хука для выполнения при удачном завершении транзакции
+*/
 func (t *tx64) OnCommit(hdl CommitHandler) {
 	t.oncomm = append(t.oncomm, hdl)
 }
 
+/*
+	Commit - Успешное завершение (принятие) транзакции
+	Перед завершением выполняет хуки OnCommit
+	Поддерживает опции Writer
+*/
 func (t *tx64) Commit(args ...Option) (err error) {
 	opts := getOpts(args)
 
@@ -86,18 +99,16 @@ func (t *tx64) Commit(args ...Option) (err error) {
 	return t.close(txStatusCommitted, opts.writer)
 }
 
+// Cancel - Неудачное завершение (отклонение) транзакции
+// Поддерживает опции Writer
 func (t *tx64) Cancel(args ...Option) (err error) {
-	opts := getOpts(args)
-
-	return t.close(txStatusAborted, opts.writer)
+	return t.close(txStatusAborted, getOpts(args).writer)
 }
 
 /*
 	Delete - удаление актуальной в данный момент записи, если она существует.
-
 	Чтобы найти актуальную запись, нужно сделать по сути обычный Select.
 	Удалить - значит обновить значение в служебных полях и записать в тот же ключ.
-
 	Важно, чтобы выборка и обновление шли строго в одной внутренней FDB транзакции.
 */
 func (t *tx64) Delete(keys []fdb.Key, args ...Option) (err error) {
@@ -277,6 +288,10 @@ func (t *tx64) Select(key fdb.Key, args ...Option) (res fdb.KeyValue, err error)
 	return res, nil
 }
 
+/*
+	ListAll - Последовательная выборка всех активных ключей в диапазоне
+	Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
+*/
 func (t *tx64) ListAll(ctx context.Context, args ...Option) (_ []fdb.KeyValue, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -297,23 +312,17 @@ func (t *tx64) ListAll(ctx context.Context, args ...Option) (_ []fdb.KeyValue, e
 	return list, nil
 }
 
-type kvHead struct {
-	size int
-	head *kvPtr
-}
-
-type kvPtr struct {
-	fdb.KeyValue
-	next *kvPtr
-}
-
+/*
+	SeqScan - Последовательная выборка всех активных ключей в диапазоне
+	Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
+*/
 func (t *tx64) SeqScan(ctx context.Context, args ...Option) (<-chan fdb.KeyValue, <-chan error) {
 	list := make(chan fdb.KeyValue)
 	errs := make(chan error, 1)
 
 	go func() {
 		var err error
-		var part kvHead
+		var part []fdb.KeyValue
 
 		defer close(list)
 		defer close(errs)
@@ -336,7 +345,7 @@ func (t *tx64) SeqScan(ctx context.Context, args ...Option) (<-chan fdb.KeyValue
 		}
 
 		if Debug {
-			glog.Infof("tx64.seqScan(%s, %s, %d)", from, last, opts.limit)
+			glog.Infof("Tx.seqScan(%s, %s, %d)", from, last, opts.limit)
 		}
 
 		for {
@@ -356,32 +365,30 @@ func (t *tx64) SeqScan(ctx context.Context, args ...Option) (<-chan fdb.KeyValue
 			}
 
 			if Debug {
-				glog.Infof("tx64.seqScan.from = %s", from)
-				glog.Infof("tx64.seqScan.last = %s", last)
-				glog.Infof("tx64.seqScan.rows = %d", rows)
-				glog.Infof("tx64.seqScan.part = %d", part)
+				glog.Infof("Tx.seqScan.from = %s", from)
+				glog.Infof("Tx.seqScan.last = %s", last)
+				glog.Infof("Tx.seqScan.rows = %d", rows)
+				glog.Infof("Tx.seqScan.part = %d", part)
 			}
 
 			skip = true
 
-			if part.size == 0 {
+			if len(part) == 0 {
 				if rows < int(opts.spack) || (opts.spack == 0 && rows == 0) {
 					return
 				}
 				continue
 			}
 
-			item := part.head
-			for item != nil {
+			for i := range part {
 				select {
-				case list <- item.KeyValue:
+				case list <- part[i]:
 					if size++; opts.limit > 0 && size >= opts.limit {
 						return
 					}
 				case <-ctx.Done():
 					return
 				}
-				item = item.next
 			}
 		}
 	}()
@@ -398,11 +405,11 @@ func (t *tx64) selectPart(
 	skip bool,
 	opid uint32,
 	opts *options,
-) (rows int, part kvHead, last fdb.Key, err error) {
+) (rows int, part []fdb.KeyValue, last fdb.Key, err error) {
 	var ok bool
 
 	if Debug {
-		glog.Infof("tx64.selectPart(%s, %s, %d, %d)", from, to, size, opts.spack)
+		glog.Infof("Tx.selectPart(%s, %s, %d, %d)", from, to, size, opts.spack)
 	}
 
 	if opts.lock {
@@ -410,49 +417,35 @@ func (t *tx64) selectPart(
 		w.Lock(from, to)
 	}
 
-	lg := w.List(from, to, opts.spack, opts.reverse, skip)
-
 	wctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 
-	var ptr *kvPtr
-	iter := lg.Iterator()
-	for iter.Advance() {
-		item := iter.MustGet()
-		item.Key = item.Key[1:]
+	list := w.List(from, to, opts.spack, opts.reverse, skip).GetSliceOrPanic()
+	part = list[:0]
 
-		if ok, err = t.isVisible(w.Reader, lc, opid, item, false); err != nil {
+	for i := range list {
+		list[i].Key = list[i].Key[1:]
+
+		if ok, err = t.isVisible(w.Reader, lc, opid, list[i], false); err != nil {
 			return
 		}
 
-		last = item.Key
+		last = list[i].Key
 		rows++
 
 		if ok {
-			item = usrPair(item)
+			list[i] = usrPair(list[i])
 
 			if opts.onLock != nil {
 				// Раз какой-то обработчик в записи, значит модификация - увеличиваем счетчик
 				atomic.AddUint32(&t.mods, 1)
 
-				if err = opts.onLock(t, w, item); err != nil {
+				if err = opts.onLock(t, w, list[i]); err != nil {
 					return
 				}
 			}
 
-			if ptr == nil {
-				part.head = &kvPtr{
-					KeyValue: item,
-				}
-				ptr = part.head
-			} else {
-				ptr.next = &kvPtr{
-					KeyValue: item,
-				}
-				ptr = ptr.next
-			}
-
-			if part.size++; opts.limit > 0 && size+part.size >= opts.limit {
+			if part = append(part, list[i]); opts.limit > 0 && size+len(part) >= opts.limit {
 				break
 			}
 		}
@@ -463,9 +456,9 @@ func (t *tx64) selectPart(
 	}
 
 	if Debug {
-		glog.Infof("tx64.selectPart.rows = %d", rows)
-		glog.Infof("tx64.selectPart.part = %d", part.size)
-		glog.Infof("tx64.selectPart.last = %s", last)
+		glog.Infof("Tx.selectPart.rows = %d", rows)
+		glog.Infof("Tx.selectPart.part = %d", len(part))
+		glog.Infof("Tx.selectPart.last = %s", last)
 	}
 
 	if rows == 0 {
@@ -479,6 +472,9 @@ func (t *tx64) selectPart(
 	return rows, part, last, nil
 }
 
+/*
+	SaveBLOB - Сохранение больших бинарных данных по ключу
+*/
 func (t *tx64) SaveBLOB(key fdb.Key, blob []byte, args ...Option) (err error) {
 	atomic.AddUint32(&t.mods, 1)
 	opts := getOpts(args)
@@ -521,7 +517,10 @@ func (t *tx64) SaveBLOB(key fdb.Key, blob []byte, args ...Option) (err error) {
 	return nil
 }
 
-func (t *tx64) LoadBLOB(key fdb.Key, size int, args ...Option) (_ []byte, err error) {
+/*
+	LoadBLOB - Загрузка бинарных данных по ключу, указывается ожидаемый размер
+*/
+func (t *tx64) LoadBLOB(key fdb.Key, args ...Option) (_ []byte, err error) {
 	const pack = 100
 
 	var rows []fdb.KeyValue
@@ -555,6 +554,10 @@ func (t *tx64) LoadBLOB(key fdb.Key, size int, args ...Option) (_ []byte, err er
 	return bytes.Join(res, nil), nil
 }
 
+/*
+	DropBLOB - Удаление бинарных данных по ключу
+	Поддерживает опции Writer
+*/
 func (t *tx64) DropBLOB(key fdb.Key, args ...Option) (err error) {
 	atomic.AddUint32(&t.mods, 1)
 
@@ -575,8 +578,11 @@ func (t *tx64) DropBLOB(key fdb.Key, args ...Option) (err error) {
 	return nil
 }
 
+/*
+	SharedLock - Блокировка записи с доступом на чтение по сигнальному ключу
+*/
 func (t *tx64) SharedLock(key fdb.Key, wait time.Duration) (err error) {
-	var lock fdbx.Waiter
+	var lock db.Waiter
 
 	ukey := WrapLockKey(key)
 	pair := fdb.KeyValue{ukey, fdbx.Time2Byte(time.Now())}
@@ -589,7 +595,7 @@ func (t *tx64) SharedLock(key fdb.Key, wait time.Duration) (err error) {
 
 		// Если нам все-таки удается поставить значение - значит блокировка наша
 		w.Upsert(pair)
-		lock = nil
+		lock.Clear()
 		return nil
 	}
 
@@ -615,7 +621,7 @@ func (t *tx64) SharedLock(key fdb.Key, wait time.Duration) (err error) {
 		}
 
 		// Блокировка наша, можно ехать дальше
-		if lock == nil {
+		if lock.Empty() {
 			return nil
 		}
 
@@ -778,7 +784,7 @@ func (t *tx64) isVisible(r db.Reader, lc *txCache, opid uint32, item fdb.KeyValu
 	// Нужна защита от паники, на случай левых или битых записей
 	defer func() {
 		if rec := recover(); rec != nil {
-			glog.Errorf("panic mvcc.tx64.isVisible(%s): %+v", item.Key, rec)
+			glog.Errorf("panic mvcc.Tx.isVisible(%s): %+v", item.Key, rec)
 			ok = false
 			err = errx.ErrInternal.WithDebug(errx.Debug{
 				"key":   item.Key,
@@ -947,6 +953,10 @@ func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdb.KeyValue, onDelete
 	return nil
 }
 
+/*
+	Touch - Изменение сигнального ключа, чтобы сработали Watch
+	По сути, выставляет хук OnCommit с правильным содержимым
+*/
 func (t *tx64) Touch(key fdb.Key) {
 	t.OnCommit(func(w db.Writer) error {
 		w.Upsert(fdb.KeyValue{WrapWatchKey(key), fdbx.Time2Byte(time.Now())})
@@ -954,13 +964,19 @@ func (t *tx64) Touch(key fdb.Key) {
 	})
 }
 
-func (t *tx64) Watch(key fdb.Key) (wait fdbx.Waiter, err error) {
+/*
+Watch - Ожидание изменения сигнального ключа в Touch
+*/
+func (t *tx64) Watch(key fdb.Key) (wait db.Waiter, err error) {
 	return wait, t.conn.Write(func(w db.Writer) error {
 		wait = w.Watch(WrapWatchKey(key))
 		return nil
 	})
 }
 
+/*
+Vacuum - Запуск очистки устаревших записей ключей по указанному префиксу
+*/
 func (t *tx64) Vacuum(prefix fdb.Key, args ...Option) (err error) {
 	atomic.AddUint32(&t.mods, 1)
 

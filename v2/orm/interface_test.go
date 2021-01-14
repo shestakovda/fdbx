@@ -672,7 +672,7 @@ func (s *ORMSuite) TestCursor() {
 	s.Require().NoError(tx.Commit())
 }
 
-func benchmarkUpsert(b *testing.B) {
+func BenchmarkUpsert(b *testing.B) {
 	cn, err := db.Connect(TestDB)
 
 	require.NoError(b, err)
@@ -691,7 +691,7 @@ func benchmarkUpsert(b *testing.B) {
 	}
 }
 
-func benchmarkUpsertBatch(b *testing.B) {
+func BenchmarkUpsertBatch(b *testing.B) {
 	cn, err := db.Connect(TestDB)
 
 	require.NoError(b, err)
@@ -721,7 +721,7 @@ func BenchmarkCount(b *testing.B) {
 	// batchSize := 10000
 	// mvcc.ScanRangeSize = 100000
 
-	const count = 1000000
+	const count = 400000
 	batchSize := 10000
 
 	cn, err := db.Connect(TestDB)
