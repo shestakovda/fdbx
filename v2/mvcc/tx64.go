@@ -497,12 +497,18 @@ func (t *tx64) SaveBLOB(key fdb.Key, blob []byte, args ...Option) (err error) {
 	// Разбиваем на элементарные значения, пишем пачками по 10 мб
 	for {
 		if len(tmp) > opts.rowsize {
-			prs = append(prs, fdb.KeyValue{fdbx.AppendRight(WrapKey(key), byte(num>>8), byte(num)), tmp[:opts.rowsize]})
+			prs = append(prs, fdb.KeyValue{
+				Key:   fdbx.AppendRight(WrapKey(key), byte(num>>8), byte(num)),
+				Value: tmp[:opts.rowsize],
+			})
 			tmp = tmp[opts.rowsize:]
 			sum += opts.rowsize
 			num++
 		} else {
-			prs = append(prs, fdb.KeyValue{fdbx.AppendRight(WrapKey(key), byte(num>>8), byte(num)), tmp})
+			prs = append(prs, fdb.KeyValue{
+				Key:   fdbx.AppendRight(WrapKey(key), byte(num>>8), byte(num)),
+				Value: tmp,
+			})
 			sum += len(tmp)
 			num++
 			break
@@ -594,8 +600,10 @@ func (t *tx64) SharedLock(key fdb.Key, wait time.Duration) (err error) {
 	var lock db.Waiter
 
 	ukey := WrapLockKey(key)
-	pair := fdb.KeyValue{ukey, fdbx.Time2Byte(time.Now())}
+	pair := fdb.KeyValue{Key: ukey, Value: fdbx.Time2Byte(time.Now())}
 	hdlr := func(w db.Writer) (exp error) {
+		w.Lock(ukey, ukey)
+
 		// Если есть значение ключа, значит блокировка занята, придется ждать
 		if len(w.Data(ukey)) > 0 {
 			lock = w.Watch(ukey)
@@ -735,7 +743,7 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	}
 
 	// Cохраняем в БД объект с обновленным статусом
-	pair := fdb.KeyValue{WrapTxKey(t.txid[:]), t.pack()}
+	pair := fdb.KeyValue{Key: WrapTxKey(t.txid[:]), Value: t.pack()}
 	hdlr := func(w db.Writer) error { w.Upsert(pair); return nil }
 
 	// Выполняем обработчик в физической транзакции - указанной или новой
@@ -932,7 +940,7 @@ func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdb.KeyValue, onDelete
 
 			// Обработчик имеет возможность предотвратить удаление/обновление, выбросив ошибку
 			if onDelete != nil {
-				if err = onDelete(t, w, fdb.KeyValue{UnwrapKey(pair.Key), row.Data}); err != nil {
+				if err = onDelete(t, w, fdb.KeyValue{Key: UnwrapKey(pair.Key), Value: row.Data}); err != nil {
 					return ErrDelete.WithReason(err)
 				}
 			}
@@ -956,7 +964,7 @@ func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdb.KeyValue, onDelete
 		if physical {
 			w.Delete(pair.Key)
 		} else {
-			w.Upsert(fdb.KeyValue{pair.Key, fdbx.FlatPack(row)})
+			w.Upsert(fdb.KeyValue{Key: pair.Key, Value: fdbx.FlatPack(row)})
 		}
 	}
 	return nil
@@ -968,7 +976,7 @@ func (t *tx64) dropRows(w db.Writer, opid uint32, pairs []fdb.KeyValue, onDelete
 */
 func (t *tx64) Touch(key fdb.Key) {
 	t.OnCommit(func(w db.Writer) error {
-		w.Upsert(fdb.KeyValue{WrapWatchKey(key), fdbx.Time2Byte(time.Now())})
+		w.Upsert(fdb.KeyValue{Key: WrapWatchKey(key), Value: fdbx.Time2Byte(time.Now())})
 		return nil
 	})
 }
