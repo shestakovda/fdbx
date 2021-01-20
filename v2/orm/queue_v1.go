@@ -285,7 +285,7 @@ func (q v1Queue) SubList(ctx context.Context, cn db.Connection, pack int) (list 
 			return nil, ErrSub.WithReason(err)
 		}
 
-		if !waiter.Empty() {
+		if waiter != nil {
 			q.waitTask(ctx, waiter, refresh)
 		}
 

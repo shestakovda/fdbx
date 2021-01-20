@@ -38,7 +38,7 @@ func (w Writer) Erase(from, to fdb.Key) {
 }
 
 func (w Writer) Watch(key fdb.Key) Waiter {
-	return Waiter{
+	return &keyWaiter{
 		FutureNil: w.tx.Watch(w.usrWrap(key)),
 	}
 }

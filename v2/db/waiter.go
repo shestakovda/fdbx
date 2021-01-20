@@ -6,24 +6,21 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 )
 
-type Waiter struct {
+type Waiter interface {
+	Resolve(ctx context.Context) (err error)
+}
+
+type keyWaiter struct {
 	fdb.FutureNil
 }
 
-func (w *Waiter) Clear() {
-	if w.FutureNil != nil && !w.IsReady() {
+func (w *keyWaiter) Clear() {
+	if !w.IsReady() {
 		w.Cancel()
 	}
-	w.FutureNil = nil
 }
 
-func (w *Waiter) Empty() bool { return w.FutureNil == nil }
-
-func (w *Waiter) Resolve(ctx context.Context) (err error) {
-	if w.Empty() {
-		return ErrWait.WithStack()
-	}
-
+func (w *keyWaiter) Resolve(ctx context.Context) (err error) {
 	wc := make(chan error, 1)
 	defer w.Clear()
 
@@ -33,6 +30,7 @@ func (w *Waiter) Resolve(ctx context.Context) (err error) {
 		if exp := w.Get(); exp != nil {
 			wc <- ErrWait.WithReason(exp)
 		}
+
 	}()
 
 	select {

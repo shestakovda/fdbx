@@ -612,7 +612,7 @@ func (t *tx64) SharedLock(key fdb.Key, wait time.Duration) (err error) {
 
 		// Если нам все-таки удается поставить значение - значит блокировка наша
 		w.Upsert(pair)
-		lock.Clear()
+		lock = nil
 		return nil
 	}
 
@@ -638,7 +638,7 @@ func (t *tx64) SharedLock(key fdb.Key, wait time.Duration) (err error) {
 		}
 
 		// Блокировка наша, можно ехать дальше
-		if lock.Empty() {
+		if lock == nil {
 			return nil
 		}
 
