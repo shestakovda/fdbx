@@ -17,9 +17,9 @@ func (w *Waiter) Clear() {
 	w.FutureNil = nil
 }
 
-func (w Waiter) Empty() bool { return w.FutureNil == nil }
+func (w *Waiter) Empty() bool { return w.FutureNil == nil }
 
-func (w Waiter) Resolve(ctx context.Context) (err error) {
+func (w *Waiter) Resolve(ctx context.Context) (err error) {
 	if w.Empty() {
 		return ErrWait.WithStack()
 	}
