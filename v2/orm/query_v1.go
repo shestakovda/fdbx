@@ -165,6 +165,7 @@ func (q *v1Query) First() (fdb.KeyValue, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	q.limit = 1
 	pairs, errs := q.Sequence(ctx)
 
 	for pair := range pairs {

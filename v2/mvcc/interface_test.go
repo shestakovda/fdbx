@@ -2,9 +2,9 @@ package mvcc_test
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"runtime"
 	"strconv"
 	"sync"
@@ -432,6 +432,63 @@ func (s *MVCCSuite) TestSharedLock() {
 	tx := mvcc.Begin(s.cn)
 	defer tx.Cancel()
 	s.Require().NoError(tx.SharedLock(lock, time.Second))
+}
+
+func (s *MVCCSuite) TestNoDeadlockCommit() {
+	cnt := 90
+	lock := fdb.Key("lock")
+
+	wg := new(sync.WaitGroup)
+	wg.Add(cnt)
+
+	for i := 0; i < cnt; i++ {
+		go func() {
+			defer wg.Done()
+
+			tx := mvcc.Begin(s.cn)
+			defer tx.Cancel()
+
+			time.Sleep(time.Duration(rand.Intn(2)) * time.Millisecond)
+
+			// В первой транзакции забираем блокировку
+			s.Require().NoError(tx.SharedLock(lock, 2*time.Second))
+
+			// Ждем минутку, типа чот делаем
+			time.Sleep(10 * time.Millisecond)
+
+			// Обновляем значение
+			s.Require().NoError(tx.Commit())
+		}()
+	}
+
+	wg.Wait()
+}
+
+func (s *MVCCSuite) TestNoDeadlockCancel() {
+	cnt := 9
+	lock := fdb.Key(typex.NewUUID().Hex() + typex.NewUUID().Hex() + typex.NewUUID().Hex())
+
+	wg := new(sync.WaitGroup)
+	wg.Add(cnt)
+
+	for i := 0; i < cnt; i++ {
+		go func() {
+			defer wg.Done()
+
+			tx := mvcc.Begin(s.cn)
+			defer tx.Cancel()
+
+			time.Sleep(time.Duration(rand.Intn(2)) * time.Millisecond)
+
+			// В первой транзакции забираем блокировку
+			s.Require().NoError(tx.SharedLock(lock, 2*time.Second))
+
+			// Ждем минутку, типа чот делаем
+			time.Sleep(100 * time.Millisecond)
+		}()
+	}
+
+	wg.Wait()
 }
 
 func BenchmarkSequenceWorkflowDiffTx(b *testing.B) {
