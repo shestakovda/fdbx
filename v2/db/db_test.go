@@ -81,9 +81,7 @@ func (s *InterfaceSuite) TestConnection() {
 		ctx, cancel = context.WithTimeout(context.Background(), time.Millisecond)
 		defer cancel()
 
-		if err := waiter2.Resolve(ctx); s.Error(err) {
-			s.True(errx.Is(err, db.ErrWait))
-		}
+		s.NoError(waiter2.Resolve(ctx))
 
 		ctx, cancel = context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

@@ -7,6 +7,7 @@ import (
 )
 
 type Waiter interface {
+	Clear()
 	Resolve(ctx context.Context) (err error)
 }
 
@@ -27,10 +28,11 @@ func (w *keyWaiter) Resolve(ctx context.Context) (err error) {
 	go func() {
 		defer close(wc)
 
-		if exp := w.Get(); exp != nil {
-			wc <- ErrWait.WithReason(exp)
+		if !w.IsReady() {
+			if exp := w.Get(); exp != nil {
+				wc <- ErrWait.WithReason(exp)
+			}
 		}
-
 	}()
 
 	select {

@@ -432,7 +432,8 @@ func (t *tx64) selectPart(
 			list[i].Key = list[i].Key[1:]
 
 			if ok, err = t.isVisible(w.Reader, lc, opid, list[i], false); err != nil {
-				return
+				// Скорее всего кончилась транзакция, в следующей пачке получим
+				return rows, part, last, nil
 			}
 
 			last = list[i].Key
@@ -598,23 +599,13 @@ func (t *tx64) DropBLOB(key fdb.Key, args ...Option) (err error) {
 */
 func (t *tx64) SharedLock(key fdb.Key, wait time.Duration) (err error) {
 	var lock db.Waiter
+	defer func() {
+		if lock != nil {
+			lock.Clear()
+		}
+	}()
 
 	ukey := WrapLockKey(key)
-	pair := fdb.KeyValue{Key: ukey, Value: fdbx.Time2Byte(time.Now())}
-	hdlr := func(w db.Writer) (exp error) {
-		w.Lock(ukey, ukey)
-
-		// Если есть значение ключа, значит блокировка занята, придется ждать
-		if len(w.Data(ukey)) > 0 {
-			lock = w.Watch(ukey)
-			return nil
-		}
-
-		// Если нам все-таки удается поставить значение - значит блокировка наша
-		w.Upsert(pair)
-		lock = nil
-		return nil
-	}
 
 	// Если мы в этой транзакции уже взяли такую блокировку, то нечего и ждать, все ок
 	if t.locks.Append(ukey) {
@@ -626,6 +617,7 @@ func (t *tx64) SharedLock(key fdb.Key, wait time.Duration) (err error) {
 	defer cancel()
 
 	// Стараемся получить блокировку, если занято - ожидаем
+	var ack bool
 	for {
 		// Словили дедлок, выходим
 		if err = wctx.Err(); err != nil {
@@ -633,18 +625,37 @@ func (t *tx64) SharedLock(key fdb.Key, wait time.Duration) (err error) {
 		}
 
 		// Попытка поставить блокировку
-		if err = t.conn.Write(hdlr); err != nil {
+		if err = t.conn.Write(func(w db.Writer) (exp error) {
+			ack = false
+			w.Lock(ukey, ukey)
+
+			// Если есть значение ключа, значит блокировка занята, придется ждать
+			if len(w.Data(ukey)) > 0 {
+				lock = w.Watch(ukey)
+				return nil
+			}
+
+			// Если нам все-таки удается поставить значение - значит блокировка наша
+			w.Upsert(fdb.KeyValue{Key: ukey, Value: fdbx.Time2Byte(time.Now())})
+			ack = true
+			return nil
+		}); err != nil {
 			return ErrSharedLock.WithReason(err)
 		}
 
 		// Блокировка наша, можно ехать дальше
-		if lock == nil {
+		// Значение может быть true тогда и только тогда, когда удалось завершить метод без ошибок
+		if ack {
 			return nil
 		}
 
 		// Значение уже стоит, ждем освобождения, если ошибка - то это скорее всего дедлок
-		if err = lock.Resolve(wctx); err != nil {
-			return ErrSharedLock.WithReason(ErrDeadlock.WithReason(err))
+		if lock != nil {
+			if err = lock.Resolve(wctx); err != nil {
+				return ErrSharedLock.WithReason(ErrDeadlock.WithReason(err))
+			}
+
+			lock.Clear()
 		}
 	}
 }
