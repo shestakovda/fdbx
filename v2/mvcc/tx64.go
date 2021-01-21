@@ -643,13 +643,11 @@ func (t *tx64) SharedLock(key fdb.Key, _ time.Duration) (err error) {
 
 		// Значение уже стоит, ждем освобождения
 		if lock != nil {
-			if err = func() error {
+			func() {
 				wctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
-				return lock.Resolve(wctx)
-			}(); err != nil {
-				return ErrSharedLock.WithReason(ErrDeadlock.WithReason(err))
-			}
+				lock.Resolve(wctx)
+			}()
 		}
 
 		wait := time.Since(start)
