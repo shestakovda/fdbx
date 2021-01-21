@@ -597,13 +597,8 @@ func (t *tx64) DropBLOB(key fdb.Key, args ...Option) (err error) {
 /*
 	SharedLock - Блокировка записи с доступом на чтение по сигнальному ключу
 */
-func (t *tx64) SharedLock(key fdb.Key, wait time.Duration) (err error) {
+func (t *tx64) SharedLock(key fdb.Key, _ time.Duration) (err error) {
 	var lock db.Waiter
-	defer func() {
-		if lock != nil {
-			lock.Clear()
-		}
-	}()
 
 	ukey := WrapLockKey(key)
 
@@ -612,21 +607,14 @@ func (t *tx64) SharedLock(key fdb.Key, wait time.Duration) (err error) {
 		return nil
 	}
 
-	// Ставим контекст с таймаутом. Если он прервется - значит схватили дедлок
-	wctx, cancel := context.WithTimeout(context.Background(), wait)
-	defer cancel()
-
 	// Стараемся получить блокировку, если занято - ожидаем
-	var ack bool
+	cnt := 0
 	for {
-		// Словили дедлок, выходим
-		if err = wctx.Err(); err != nil {
-			return ErrSharedLock.WithReason(ErrDeadlock.WithReason(err))
-		}
+		ack := false
+		start := time.Now()
 
 		// Попытка поставить блокировку
 		if err = t.conn.Write(func(w db.Writer) (exp error) {
-			ack = false
 			w.Lock(ukey, ukey)
 
 			// Если есть значение ключа, значит блокировка занята, придется ждать
@@ -643,20 +631,31 @@ func (t *tx64) SharedLock(key fdb.Key, wait time.Duration) (err error) {
 			return ErrSharedLock.WithReason(err)
 		}
 
+		query := time.Since(start)
+		start = time.Now()
+
 		// Блокировка наша, можно ехать дальше
 		// Значение может быть true тогда и только тогда, когда удалось завершить метод без ошибок
 		if ack {
+			glog.Errorf("Получили блокировку: попыток %d, запрос %s", cnt, query)
 			return nil
 		}
 
-		// Значение уже стоит, ждем освобождения, если ошибка - то это скорее всего дедлок
+		// Значение уже стоит, ждем освобождения
 		if lock != nil {
-			if err = lock.Resolve(wctx); err != nil {
+			if err = func() error {
+				wctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				return lock.Resolve(wctx)
+			}(); err != nil {
 				return ErrSharedLock.WithReason(ErrDeadlock.WithReason(err))
 			}
-
-			lock.Clear()
 		}
+
+		wait := time.Since(start)
+
+		glog.Errorf("Итерация блокировки %d: запрос %s, ожидание %s", cnt, query, wait)
+		cnt++
 	}
 }
 

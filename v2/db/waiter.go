@@ -7,7 +7,6 @@ import (
 )
 
 type Waiter interface {
-	Clear()
 	Resolve(ctx context.Context) (err error)
 }
 
