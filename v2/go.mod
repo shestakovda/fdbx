@@ -3,7 +3,7 @@ module github.com/shestakovda/fdbx/v2
 go 1.13
 
 require (
-	github.com/apple/foundationdb/bindings/go v0.0.0-20190708160503-7f427b60e2b8
+	github.com/apple/foundationdb/bindings/go v0.0.0-20201222225940-f3aef311ccfb
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b
 	github.com/google/flatbuffers v1.12.0

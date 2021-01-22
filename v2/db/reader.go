@@ -14,7 +14,12 @@ type Reader struct {
 
 // Получение объекта ожидания конкретного значения
 func (r Reader) Data(key fdb.Key) []byte {
-	return r.tx.Get(r.usrWrap(key)).MustGet()
+	return r.Item(key).MustGet()
+}
+
+// Получение объекта ожидания конкретного значения
+func (r Reader) Item(key fdb.Key) fdb.FutureByteSlice {
+	return r.tx.Get(r.usrWrap(key))
 }
 
 func (r Reader) List(from, last fdb.Key, limit uint64, reverse, skip bool) fdb.RangeResult {

@@ -396,6 +396,13 @@ func (t *tx64) SeqScan(ctx context.Context, args ...Option) (<-chan fdb.KeyValue
 	return list, errs
 }
 
+type rowStat struct {
+	xmin suid
+	cmin uint32
+	stat byte
+	load fdb.FutureByteSlice
+}
+
 func (t *tx64) selectPart(
 	ctx context.Context,
 	w db.Writer,
@@ -423,15 +430,23 @@ func (t *tx64) selectPart(
 	list := w.List(from, to, opts.spack, opts.reverse, skip).GetSliceOrPanic()
 	part = list[:0]
 
+	stats := make([]rowStat, len(list))
+	loads := make(map[suid]fdb.FutureByteSlice, len(list))
+
+	for i := range list {
+		list[i].Key = list[i].Key[1:]
+
+		if stats[i], err = t.getRowStat(w.Reader, lc, list[i].Key[1:], loads); err != nil {
+			return
+		}
+	}
+
 	// Может оказаться, что данных слишком много или сервер перегружен, тогда мы можем не успеть
 	// загрузить объекты вовремя, т.е. нам не хватит времени на обработку. В этом случае сделаем размер пачки меньше
 	// и выйдем, чтобы можно было загружать меньшими кусками
 	if wctx.Err() == nil {
-
 		for i := range list {
-			list[i].Key = list[i].Key[1:]
-
-			if ok, err = t.isVisible(w.Reader, lc, opid, list[i], false); err != nil {
+			if ok, err = t.isVisible2(w.Reader, lc, opid, stats[i], list[i].Value, false); err != nil {
 				// Скорее всего кончилась транзакция, в следующей пачке получим
 				return rows, part, last, nil
 			}
@@ -711,6 +726,30 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, txid suid) (status byte, er
 	return status, nil
 }
 
+func (t *tx64) txStatus2(loader fdb.FutureByteSlice, local *txCache, txid suid) byte {
+	// Придется слазать в БД за статусом и положить в кеш
+	val := loader.MustGet()
+
+	// Если в БД нет записи, то либо транзакция еще открыта, либо это был откат
+	// Поскольку нет определенности, в глобальный кеш ничего не складываем
+	if len(val) == 0 {
+		local.set(txid, txStatusRunning)
+		return txStatusRunning
+	}
+
+	// Получаем значение статуса как часть модели
+	status := models.GetRootAsTransaction(val, 0).Status()
+
+	// В случае финальных статусов можем положить в глобальный кеш
+	if status == txStatusCommitted || status == txStatusAborted {
+		globCache.set(txid, status)
+	}
+
+	// В локальный кеш можем положить в любом случае, затем вернуть
+	local.set(txid, status)
+	return status
+}
+
 func (t *tx64) pack() []byte {
 	return fdbx.FlatPack(&models.TransactionT{
 		Start:  t.start,
@@ -768,6 +807,153 @@ func (t *tx64) close(status byte, w db.Writer) (err error) {
 	// При удачном стечении обстоятельств - устанавливаем глобальный кеш
 	globCache.set(t.txid, t.status)
 	return nil
+}
+
+func (t *tx64) getRowStat(r db.Reader, local *txCache, key fdb.Key, loads map[suid]fdb.FutureByteSlice) (stat rowStat, err error) {
+
+	// Нужна защита от паники, на случай левых или битых записей
+	defer func() {
+		if rec := recover(); rec != nil {
+			glog.Errorf("panic mvcc.Tx.isVisible(%s): %+v", key, rec)
+			err = errx.ErrInternal.WithDebug(errx.Debug{
+				"key":   key,
+				"panic": rec,
+			})
+		}
+	}()
+
+	kidx := len(key) - 16
+	copy(stat.xmin[:8], key[kidx:kidx+8])
+	copy(stat.xmin[8:12], key[kidx+12:kidx+16])
+	stat.cmin = binary.BigEndian.Uint32(key[kidx+8 : kidx+12])
+
+	// Дешевле всего чекнуть в глобальном кеше, вдруг уже знаем такую
+	if stat.stat = globCache.get(stat.xmin); stat.stat != txStatusUnknown {
+		return
+	}
+
+	// Возможно, это открытая транзакция из локального кеша
+	if stat.stat = local.get(stat.xmin); stat.stat != txStatusUnknown {
+		return
+	}
+
+	// Придется слазать в БД за статусом и положить в кеш
+	if stat.load = loads[stat.xmin]; stat.load == nil {
+		stat.load = r.Item(WrapTxKey(stat.xmin[:]))
+		loads[stat.xmin] = stat.load
+	}
+	return stat, nil
+}
+
+/*
+	isVisible - проверка актуального в данной транзакции значения ключа.
+
+	Каждый ключ для значения на самом деле хранится в нескольких версиях.
+	Их можно разделить на три группы: устаревшие, актуальные, незакоммиченные.
+	В каждый конкретный момент времени актуальной должна быть только 1 версия.
+	Устаревших может быть очень много, это зависит от того, насколько часто объект
+	меняется и как хорошо справляется сборщик мусора в БД (автовакуум). В обязанности
+	сборщика входит очистка как удаленных версий, так и версий отклоненных транзакций.
+	Кол-во незакоммиченных версий зависит от того, сколько транзакций открыто параллельно
+	в данный момент.
+
+	Мы должны выбрать все записанные в БД значения для данного ключа, чтобы проверить
+	каждое и отклонить все неподходящие. Поскольку это происходит каждый раз, когда нам
+	требуется какое-то значение, очевидно, что эффективность работы будет зависеть как
+	от кол-ва параллельных запросов (нагрузки), так и от утилизации сборщика мусора.
+
+	Поскольку мы храним список значений в порядке версий их создания, то мы можем
+	перебирать значения-кандидаты от самых последних к самым старым. В этом случае
+	степень влияния текущей нагрузки будет гораздо выше, чем эффективности сборщика.
+	Это выгоднее, потому что если сборщик не справляется, то равномерно по всем ключам.
+	А очень частые обновления при нагрузке идут только по некоторым из них, к тому же
+	в реальных проектах процент таких ключей не должен быть высок, а нагрузка пиковая.
+
+	Каждая запись содержит 4 служебных поля, определяющих её актуальность, попарно
+	отвечающих за глобальную (между транзакциями) и локальную (в рамках транзакции)
+	актуальность значений.
+
+	Поскольку мы выбираем весь диапазон в рамках внутренней транзакции fdb, то при параллельных
+	действиях в рамках этого диапазона (запись или изменение другой версии этого же значения)
+	сработает внутренний механизм конфликтов fdb, так что одновременно двух актуальных
+	версий не должно появиться. Один из обработчиков увидит изменения и изменит поведение.
+*/
+func (t *tx64) isVisible2(
+	r db.Reader,
+	lc *txCache,
+	opid uint32,
+	stat rowStat,
+	data []byte,
+	dirty bool,
+) (ok bool, err error) {
+	// Частный случай - если запись создана в рамках текущей транзакции
+	// то даже если запись создана позже, тут возвращаем, чтобы можно было выполнить
+	// "превентивное" удаление и чтобы не было никаких конфликтующих строк
+	// Поэтому проверять будем только сторонние транзакции
+	if stat.xmin == t.txid {
+		if !dirty {
+			// Если запись создана позже в рамках данной транзакции, то еще не видна
+			if stat.cmin >= opid {
+				return false, nil
+			}
+		}
+	} else {
+		// Если в кеше не было данных, то получаем из базы, к этому моменту они наверное уже подгрузились
+		if stat.stat == txStatusUnknown {
+			stat.stat = t.txStatus2(stat.load, lc, stat.xmin)
+		}
+
+		// В случае грязного и обычного чтения - разные проверки
+		if dirty {
+			// Если запись отменена, то в любом случае она нас больше не инетересует
+			if stat.stat == txStatusAborted {
+				return false, nil
+			}
+		} else {
+			// Если запись создана другой транзакцией и она еще не закоммичена, то еще не видна
+			if stat.stat != txStatusCommitted {
+				return false, nil
+			}
+		}
+	}
+
+	// Распаковываем строку
+	mod := models.GetRootAsRow(data, 0)
+
+	// В этом случае объект еще не был удален, значит виден
+	if mod.DropLength() == 0 {
+		return true, nil
+	}
+	row := mod.UnPack()
+
+	// Эта запись уже была удалена этой или параллельной транзакцией
+	// Другая транзакция может удалить эту запись "превентивно", на случай конфликтов
+	for i := range row.Drop {
+		// Учитываем изменения, если запись удалена в текущей транзакции
+		if bytes.Equal(row.Drop[i].Tx, t.txid[:]) {
+			// Если удалена до этого момента, то уже не видна
+			// Если "позже" в параллельном потоке - то еще можно читать
+			return row.Drop[i].Op > opid, nil
+		}
+
+		// Проверим, была ли завершена транзакция удаления этой записи
+		var dtx suid
+		var comm bool
+
+		copy(dtx[:], row.Drop[i].Tx)
+
+		if comm, err = t.isCommitted(lc, r, dtx); err != nil {
+			return
+		}
+
+		// Мы должны учитывать изменения, сделанные закоммиченными транзакциями
+		if comm {
+			return false, nil
+		}
+	}
+
+	// Если не нашли "значимых" для нас удалений - значит запись еще видна
+	return true, nil
 }
 
 /*

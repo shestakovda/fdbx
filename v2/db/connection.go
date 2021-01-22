@@ -14,7 +14,7 @@ import (
 //
 // Этот драйвер настроен на совместимость с конкретной версией клиента, с другими может не заработать.
 func Connect(id byte, opts ...Option) (cn Connection, err error) {
-	const verID = 610
+	const verID = 620
 	const badID = "Invalid database ID: %X"
 
 	if id == 0xFF {
