@@ -348,6 +348,10 @@ func (t *tx64) SeqScan(ctx context.Context, args ...Option) (<-chan fdb.KeyValue
 			glog.Infof("Tx.seqScan(%s, %s, %d)", from, last, opts.limit)
 		}
 
+		if opts.limit > 0 && (opts.spack > uint64(10*opts.limit)) {
+			opts.spack = uint64(10 * opts.limit)
+		}
+
 		for {
 			if ctx.Err() != nil {
 				return
@@ -424,7 +428,7 @@ func (t *tx64) selectPart(
 		w.Lock(from, to)
 	}
 
-	wctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	wctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	list := w.List(from, to, opts.spack, opts.reverse, skip).GetSliceOrPanic()
@@ -1230,7 +1234,7 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdb.RangeResult, onVacuum RowHandler) 
 	rows := 0
 	iter := lg.Iterator()
 	opid := atomic.AddUint32(&t.opid, 1)
-	wctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	wctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	for iter.Advance() {
