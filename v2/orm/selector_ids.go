@@ -58,13 +58,13 @@ func (s *idsSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-
 				}
 
 				errs <- ErrSelect.WithReason(ErrNotFound.WithReason(err).WithDebug(errx.Debug{
-					"id": rids[i],
+					"id": s.ids[i],
 				}))
 				return
 			}
 
 			select {
-			case list <- Selected{rids[i], pair}:
+			case list <- Selected{s.ids[i], pair}:
 			case <-ctx.Done():
 				return
 			}
