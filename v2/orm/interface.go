@@ -4,17 +4,13 @@ import (
 	"context"
 	"time"
 
-	"github.com/shestakovda/fdbx/v2/mvcc"
-
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-
 	"github.com/shestakovda/errx"
+
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
+	"github.com/shestakovda/fdbx/v2/mvcc"
 )
-
-// Debug - флаг отладочных принтов
-var Debug = false
 
 // Task status
 const (
@@ -145,6 +141,7 @@ func WrapBlobKey(tbid uint16, key fdb.Key) fdb.Key {
 }
 
 // UnwrapBlobKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
+//goland:noinspection GoUnusedExportedFunction
 func UnwrapBlobKey(key fdb.Key) fdb.Key {
 	return fdbx.SkipLeft(key, 3)
 }
@@ -182,6 +179,7 @@ func WrapQueryKey(tbid uint16, key fdb.Key) fdb.Key {
 }
 
 // UnwrapQueryKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
+//goland:noinspection GoUnusedExportedFunction
 func UnwrapQueryKey(key fdb.Key) fdb.Key {
 	return fdbx.SkipLeft(key, 3)
 }
@@ -195,7 +193,6 @@ var (
 	ErrLost      = errx.New("Ошибка получения неподтвержденных задач")
 	ErrStat      = errx.New("Ошибка получения статистики задач")
 	ErrTask      = errx.New("Ошибка получения метаданных задачи")
-	ErrWatch     = errx.New("Ошибка отслеживания результата задачи")
 	ErrAgg       = errx.New("Ошибка агрегации объектов коллекции")
 	ErrSelect    = errx.New("Ошибка загрузки объектов коллекции")
 	ErrDelete    = errx.New("Ошибка удаления объектов коллекции")

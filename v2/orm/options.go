@@ -63,6 +63,7 @@ func MultiIndex(id uint16, f IndexMultiKey) Option {
 	}
 }
 
+//goland:noinspection GoUnusedExportedFunction
 func BatchIndex(f IndexBatchKey) Option {
 	return func(o *options) {
 		if f != nil {
@@ -79,6 +80,7 @@ func Refresh(d time.Duration) Option {
 	}
 }
 
+//goland:noinspection GoUnusedExportedFunction
 func VacuumWait(d time.Duration) Option {
 	return func(o *options) {
 		if d > 0 {
@@ -111,12 +113,14 @@ func Delay(d time.Duration) Option {
 	}
 }
 
+//goland:noinspection GoUnusedExportedFunction
 func Creator(s string) Option {
 	return func(o *options) {
 		o.creator = s
 	}
 }
 
+//goland:noinspection GoUnusedExportedFunction
 func Header(k, v string) Option {
 	return func(o *options) {
 		if o.headers == nil {
@@ -126,6 +130,7 @@ func Header(k, v string) Option {
 	}
 }
 
+//goland:noinspection GoUnusedExportedFunction
 func Headers(h map[string]string) Option {
 	return func(o *options) {
 		o.headers = h

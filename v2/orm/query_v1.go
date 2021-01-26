@@ -5,14 +5,12 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/shestakovda/fdbx/v2/mvcc"
-
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/shestakovda/typex"
 
-	"github.com/golang/glog"
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/models"
-	"github.com/shestakovda/typex"
+	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
 func NewQuery(tb Table, tx mvcc.Tx) Query {
@@ -64,10 +62,6 @@ func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
 		q.selector = NewIndexRangeSelector(tx, q.idxtype, q.idxfrom, q.idxlast)
 	} else {
 		q.selector = NewFullSelector(tx)
-	}
-
-	if Debug {
-		glog.Infof("loadQuery.query = %#v", q)
 	}
 
 	return &q, nil
@@ -278,10 +272,6 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdb.KeyValue, <-chan err
 
 		size = atomic.LoadUint32(&q.size)
 
-		if Debug {
-			glog.Infof("v1Query.Sequence(%d, %s)", size, q.getLastKey())
-		}
-
 		if q.limit > 0 && size >= q.limit {
 			return
 		}
@@ -296,10 +286,6 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdb.KeyValue, <-chan err
 				return
 			}
 
-			if Debug {
-				glog.Infof("v1Query.Sequence.pair = %s", pair.Key)
-			}
-
 			if len(q.filters) > 0 {
 				if need, err = q.applyFilters(pair); err != nil {
 					errs <- ErrSequence.WithReason(err)
@@ -307,9 +293,6 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdb.KeyValue, <-chan err
 				}
 
 				if !need {
-					if Debug {
-						glog.Infof("v1Query.Sequence.filtered = %s", pair.Key)
-					}
 					continue
 				}
 			}
@@ -319,10 +302,6 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdb.KeyValue, <-chan err
 				q.setLastKey(orig.Last)
 
 				size = atomic.AddUint32(&q.size, 1)
-
-				if Debug {
-					glog.Infof("v1Query.Sequence.size = %d", size)
-				}
 
 				if q.limit > 0 && size >= q.limit {
 					return

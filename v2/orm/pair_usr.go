@@ -2,6 +2,7 @@ package orm
 
 import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+
 	"github.com/shestakovda/fdbx/v2/models"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
@@ -23,7 +24,7 @@ func newUsrPair(tx mvcc.Tx, tbid uint16, orig fdb.KeyValue) (_ fdb.KeyValue, err
 	}
 
 	return fdb.KeyValue{
-		UnwrapTableKey(orig.Key),
-		mod.Data,
+		Key:   UnwrapTableKey(orig.Key),
+		Value: mod.Data,
 	}, nil
 }

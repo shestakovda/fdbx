@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-
 	"github.com/shestakovda/errx"
+
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
@@ -28,8 +28,10 @@ func (s *idsSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-
 	errs := make(chan error, 1)
 
 	go func() {
+		var ok bool
 		var err error
 		var pair fdb.KeyValue
+		var res map[string]fdb.KeyValue
 
 		defer close(list)
 		defer close(errs)
@@ -37,19 +39,27 @@ func (s *idsSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-
 		opts := getOpts(args)
 		rids := s.reversed(s.ids, opts.reverse)
 
+		// Подготовка айдишек к выборке
 		for i := range rids {
-			if pair, err = s.tx.Select(WrapTableKey(tbl.ID(), rids[i])); err != nil {
-				if errx.Is(err, mvcc.ErrNotFound) {
-					if !s.strict {
-						continue
-					}
+			rids[i] = WrapTableKey(tbl.ID(), rids[i])
+		}
 
-					err = ErrNotFound.WithReason(err).WithDebug(errx.Debug{
-						"id": rids[i],
-					})
+		// Запрашиваем сразу все
+		if res, err = s.tx.SelectMany(rids); err != nil {
+			errs <- ErrSelect.WithReason(err)
+			return
+		}
+
+		// Выбираем результаты
+		for i := range rids {
+			if pair, ok = res[rids[i].String()]; !ok {
+				if !s.strict {
+					continue
 				}
 
-				errs <- ErrSelect.WithReason(err)
+				errs <- ErrSelect.WithReason(ErrNotFound.WithReason(err).WithDebug(errx.Debug{
+					"id": rids[i],
+				}))
 				return
 			}
 

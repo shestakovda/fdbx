@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-
 	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
+
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/models"
@@ -87,7 +87,7 @@ func (t *v1Table) upsert(tx mvcc.Tx, unique bool, pairs ...fdb.KeyValue) (err er
 	return nil
 }
 
-func (t *v1Table) onInsert(tx mvcc.Tx, w db.Writer, pair fdb.KeyValue) (err error) {
+func (t *v1Table) onInsert(tx mvcc.Tx, _ db.Writer, pair fdb.KeyValue) (err error) {
 	if len(t.options.batchidx) == 0 {
 		return nil
 	}
@@ -118,7 +118,10 @@ func (t *v1Table) onInsert(tx mvcc.Tx, w db.Writer, pair fdb.KeyValue) (err erro
 				if len(keys[i]) == 0 {
 					continue
 				}
-				rows = append(rows, fdb.KeyValue{fdbx.AppendRight(WrapIndexKey(t.id, idx, keys[i]), pkey...), pkey})
+				rows = append(rows, fdb.KeyValue{
+					Key:   fdbx.AppendRight(WrapIndexKey(t.id, idx, keys[i]), pkey...),
+					Value: pkey,
+				})
 			}
 		}
 	}
@@ -130,13 +133,13 @@ func (t *v1Table) onInsert(tx mvcc.Tx, w db.Writer, pair fdb.KeyValue) (err erro
 	return nil
 }
 
-func (t *v1Table) onUpdate(tx mvcc.Tx, w db.Writer, pair fdb.KeyValue) (err error) {
+func (t *v1Table) onUpdate(_ mvcc.Tx, _ db.Writer, pair fdb.KeyValue) (err error) {
 	return ErrDuplicate.WithDebug(errx.Debug{
 		"key": pair.Key,
 	})
 }
 
-func (t *v1Table) onDelete(tx mvcc.Tx, w db.Writer, pair fdb.KeyValue) (err error) {
+func (t *v1Table) onDelete(tx mvcc.Tx, _ db.Writer, pair fdb.KeyValue) (err error) {
 	var usr fdb.KeyValue
 
 	if len(t.options.batchidx) == 0 {

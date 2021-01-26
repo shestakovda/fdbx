@@ -46,6 +46,9 @@ type Tx interface {
 	// Выборка актуального значения для ключа
 	Select(fdb.Key, ...Option) (fdb.KeyValue, error)
 
+	// Выборка нескольких объектов, в результате использовано печатное представление ключа
+	SelectMany(keys []fdb.Key, args ...Option) (res map[string]fdb.KeyValue, err error)
+
 	// Удаление значения для ключа
 	// Поддерживает опции Writer
 	Delete([]fdb.Key, ...Option) error

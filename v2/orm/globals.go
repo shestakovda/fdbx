@@ -9,7 +9,6 @@ const (
 	nsBLOB  byte = 1
 	nsIndex byte = 2
 	nsQueue byte = 3
-	nsWatch byte = 4
 	nsQuery byte = 5
 )
 
@@ -21,6 +20,6 @@ const (
 )
 
 // Ограничение в 100Кб, но берем небольшой запас на накладные расходы
-var loLimit int = 90000
+var loLimit = 90000
 
 var qTriggerKey = fdb.Key("trigger")

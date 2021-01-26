@@ -294,6 +294,82 @@ func (t *tx64) Select(key fdb.Key, args ...Option) (res fdb.KeyValue, err error)
 }
 
 /*
+	Select - выборка актуального в данной транзакции значения ключа.
+*/
+func (t *tx64) SelectMany(keys []fdb.Key, args ...Option) (res map[string]fdb.KeyValue, err error) {
+	opts := getOpts(args)
+	opid := atomic.AddUint32(&t.opid, 1)
+	ukeys := make([]fdb.Key, len(keys))
+	for i := range ukeys {
+		ukeys[i] = WrapKey(keys[i])
+	}
+	res = make(map[string]fdb.KeyValue, len(keys))
+
+	read := func(r db.Reader) (exp error) {
+		var rows []fdb.KeyValue
+
+		lc := makeCache()
+		lgs := make([]fdb.RangeResult, len(ukeys))
+
+		// prefetch
+		for i := range ukeys {
+			lgs[i] = r.List(ukeys[i], ukeys[i], 0, true, false)
+		}
+
+		for i := range ukeys {
+			if rows, exp = t.fetchRows(r, lc, opid, lgs[i], false, len(ukeys[i])); exp != nil {
+				return
+			}
+
+			if len(rows) == 0 {
+				continue
+			}
+
+			if len(rows) > 1 {
+				return ErrDuplicate.WithDebug(errx.Debug{"key": ukeys[i]})
+			}
+
+			res[keys[i].String()] = usrPair(rows[0])
+		}
+
+		return nil
+	}
+	hdlr := func(w db.Writer) (exp error) {
+		if opts.lock {
+			for i := range ukeys {
+				w.Lock(ukeys[i], ukeys[i])
+			}
+		}
+
+		if exp = read(w.Reader); exp != nil {
+			return
+		}
+
+		if opts.onLock != nil {
+			for _, kv := range res {
+				if exp = opts.onLock(t, w, kv); exp != nil {
+					return
+				}
+			}
+		}
+
+		return nil
+	}
+
+	if opts.lock {
+		err = t.applyWriteHandler(opts.writer, hdlr, opts.onLock != nil)
+	} else {
+		err = t.conn.Read(read)
+	}
+
+	if err != nil {
+		return nil, ErrSelect.WithReason(err)
+	}
+
+	return res, nil
+}
+
+/*
 	ListAll - Последовательная выборка всех активных ключей в диапазоне
 	Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
 */

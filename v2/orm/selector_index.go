@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/shestakovda/errx"
 
-	"github.com/golang/glog"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
@@ -35,7 +35,6 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 
 	go func() {
 		var err error
-		var pair fdb.KeyValue
 
 		defer close(list)
 		defer close(errs)
@@ -62,15 +61,12 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 			reqs = append(reqs, mvcc.Reverse())
 		}
 
-		if Debug {
-			glog.Infof("indexSelector.Select.fkey = %s", WrapIndexKey(tbl.ID(), s.idx, fkey))
-			glog.Infof("indexSelector.Select.lkey = %s", WrapIndexKey(tbl.ID(), s.idx, lkey))
-			glog.Infof("indexSelector.Select.skip = %t", skip)
-		}
-
 		wctx, exit := context.WithCancel(ctx)
 		pairs, errc := s.tx.SeqScan(wctx, reqs...)
 		defer exit()
+
+		bufSize := 100
+		buf := make([]fdb.KeyValue, 0, bufSize)
 
 		for item := range pairs {
 			// В случае реверса из середины интервала нужно пропускать первое значение (b)
@@ -80,19 +76,24 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 				continue
 			}
 
-			if pair, err = s.tx.Select(WrapTableKey(tbl.ID(), item.Value)); err != nil {
-				errs <- ErrSelect.WithReason(err)
-				return
-			}
+			buf = append(buf, item)
 
-			select {
-			case list <- Selected{UnwrapIndexKey(item.Key), pair}:
-			case <-wctx.Done():
+			if len(buf) >= bufSize {
+				if err = s.flush(ctx, tbl.ID(), buf, list); err != nil {
+					errs <- ErrSelect.WithReason(err)
+					return
+				}
+			}
+		}
+
+		if len(buf) > 0 {
+			if err = s.flush(ctx, tbl.ID(), buf, list); err != nil {
+				errs <- ErrSelect.WithReason(err)
 				return
 			}
 		}
 
-		for err := range errc {
+		for err = range errc {
 			if err != nil {
 				errs <- ErrSelect.WithReason(err)
 				return
@@ -101,4 +102,37 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 	}()
 
 	return list, errs
+}
+
+func (s *indexSelector) flush(ctx context.Context, tid uint16, buf []fdb.KeyValue, list chan Selected) (err error) {
+	var ok bool
+	var pair fdb.KeyValue
+	var res map[string]fdb.KeyValue
+
+	rids := make([]fdb.Key, len(buf))
+	for i := range buf {
+		rids[i] = WrapTableKey(tid, buf[i].Value)
+	}
+
+	// Запрашиваем сразу все
+	if res, err = s.tx.SelectMany(rids); err != nil {
+		return
+	}
+
+	// Выбираем результаты
+	for i := range rids {
+		if pair, ok = res[rids[i].String()]; !ok {
+			return ErrNotFound.WithReason(err).WithDebug(errx.Debug{
+				"id": rids[i],
+			})
+		}
+
+		select {
+		case list <- Selected{UnwrapIndexKey(buf[i].Key), pair}:
+		case <-ctx.Done():
+			return
+		}
+	}
+
+	return nil
 }

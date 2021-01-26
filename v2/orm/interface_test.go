@@ -10,15 +10,15 @@ import (
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-
 	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
-	"github.com/shestakovda/fdbx/v2/db"
-	"github.com/shestakovda/fdbx/v2/mvcc"
-	"github.com/shestakovda/fdbx/v2/orm"
 	"github.com/shestakovda/typex"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+
+	"github.com/shestakovda/fdbx/v2/db"
+	"github.com/shestakovda/fdbx/v2/mvcc"
+	"github.com/shestakovda/fdbx/v2/orm"
 )
 
 const TestDB byte = 0x10
@@ -111,9 +111,9 @@ func (s *ORMSuite) TestWorkflow() {
 	s.Require().NoError(err)
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdb.KeyValue{fdb.Key("id1"), baseMsg},
-		fdb.KeyValue{fdb.Key("id2"), longMsg},
-		fdb.KeyValue{fdb.Key("id3"), hugeMsg},
+		fdb.KeyValue{Key: fdb.Key("id1"), Value: baseMsg},
+		fdb.KeyValue{Key: fdb.Key("id2"), Value: longMsg},
+		fdb.KeyValue{Key: fdb.Key("id3"), Value: hugeMsg},
 	))
 
 	if list, err := s.tbl.Select(s.tx).All(); s.NoError(err) {
@@ -143,9 +143,9 @@ func (s *ORMSuite) TestWorkflow() {
 
 func (s *ORMSuite) TestCount() {
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdb.KeyValue{fdb.Key("id1"), []byte("msg1")},
-		fdb.KeyValue{fdb.Key("id2"), []byte("msg2")},
-		fdb.KeyValue{fdb.Key("id3"), []byte("msg3")},
+		fdb.KeyValue{Key: fdb.Key("id1"), Value: []byte("msg1")},
+		fdb.KeyValue{Key: fdb.Key("id2"), Value: []byte("msg2")},
+		fdb.KeyValue{Key: fdb.Key("id3"), Value: []byte("msg3")},
 	))
 
 	var cnt uint64
@@ -164,12 +164,12 @@ func (s *ORMSuite) TestByID() {
 	id4 := fdb.Key("id4")
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdb.KeyValue{id1, []byte("msg1")},
-		fdb.KeyValue{id2, []byte("msg2")},
-		fdb.KeyValue{id3, []byte("msg3")},
+		fdb.KeyValue{Key: id1, Value: []byte("msg1")},
+		fdb.KeyValue{Key: id2, Value: []byte("msg2")},
+		fdb.KeyValue{Key: id3, Value: []byte("msg3")},
 	))
 
-	if err := s.tbl.Insert(s.tx, fdb.KeyValue{id2, []byte("msg4")}); s.Error(err) {
+	if err := s.tbl.Insert(s.tx, fdb.KeyValue{Key: id2, Value: []byte("msg4")}); s.Error(err) {
 		s.True(errx.Is(err, orm.ErrDuplicate))
 	}
 
@@ -216,9 +216,9 @@ func (s *ORMSuite) TestUndo() {
 	q := orm.NewQueue(TestQueue, s.tbl, orm.Refresh(10*time.Millisecond), orm.Prefix([]byte("lox")))
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdb.KeyValue{id1, []byte("msg1")},
-		fdb.KeyValue{id2, []byte("msg2")},
-		fdb.KeyValue{id3, []byte("msg3")},
+		fdb.KeyValue{Key: id1, Value: []byte("msg1")},
+		fdb.KeyValue{Key: id2, Value: []byte("msg2")},
+		fdb.KeyValue{Key: id3, Value: []byte("msg3")},
 	))
 	s.Require().NoError(s.tx.Commit())
 
@@ -257,9 +257,9 @@ func (s *ORMSuite) TestQueue() {
 	q := orm.NewQueue(TestQueue, s.tbl, orm.Refresh(10*time.Millisecond), orm.Prefix([]byte("lox")))
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdb.KeyValue{id1, []byte("msg1")},
-		fdb.KeyValue{id2, []byte("msg2")},
-		fdb.KeyValue{id3, []byte("msg3")},
+		fdb.KeyValue{Key: id1, Value: []byte("msg1")},
+		fdb.KeyValue{Key: id2, Value: []byte("msg2")},
+		fdb.KeyValue{Key: id3, Value: []byte("msg3")},
 	))
 	if wait, work, err := q.Stat(s.tx); s.NoError(err) {
 		s.Equal(int64(0), wait)
@@ -410,8 +410,6 @@ func (s *ORMSuite) TestQueue() {
 }
 
 func (s *ORMSuite) TestWhereLimit() {
-	const recCount = 3
-
 	id1 := fdb.Key("id1")
 	id2 := fdb.Key("id2")
 	id3 := fdb.Key("id3")
@@ -420,12 +418,12 @@ func (s *ORMSuite) TestWhereLimit() {
 	id6 := fdb.Key("id6")
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdb.KeyValue{id1, []byte("msg1 true")},
-		fdb.KeyValue{id2, []byte("txt2 false")},
-		fdb.KeyValue{id3, []byte("msg3 false")},
-		fdb.KeyValue{id4, []byte("msg4 true")},
-		fdb.KeyValue{id5, []byte("txt5 false")},
-		fdb.KeyValue{id6, []byte("txt6 true")},
+		fdb.KeyValue{Key: id1, Value: []byte("msg1 true")},
+		fdb.KeyValue{Key: id2, Value: []byte("txt2 false")},
+		fdb.KeyValue{Key: id3, Value: []byte("msg3 false")},
+		fdb.KeyValue{Key: id4, Value: []byte("msg4 true")},
+		fdb.KeyValue{Key: id5, Value: []byte("txt5 false")},
+		fdb.KeyValue{Key: id6, Value: []byte("txt6 true")},
 	))
 
 	f1 := func(p fdb.KeyValue) (need bool, err error) {
@@ -459,9 +457,9 @@ func (s *ORMSuite) TestMultiIndex() {
 	id3 := fdb.Key("id3")
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdb.KeyValue{id1, []byte("message")},
-		fdb.KeyValue{id2, []byte("text")},
-		fdb.KeyValue{id3, []byte("mussage")},
+		fdb.KeyValue{Key: id1, Value: []byte("message")},
+		fdb.KeyValue{Key: id2, Value: []byte("text")},
+		fdb.KeyValue{Key: id3, Value: []byte("mussage")},
 	))
 	s.Require().NoError(s.tx.Commit())
 
@@ -485,9 +483,9 @@ func (s *ORMSuite) TestSubList() {
 	id3 := fdb.Key("id3")
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdb.KeyValue{id1, []byte("message")},
-		fdb.KeyValue{id2, []byte("text")},
-		fdb.KeyValue{id3, []byte("mussage")},
+		fdb.KeyValue{Key: id1, Value: []byte("message")},
+		fdb.KeyValue{Key: id2, Value: []byte("text")},
+		fdb.KeyValue{Key: id3, Value: []byte("mussage")},
 	))
 	s.Require().NoError(s.tx.Commit())
 
@@ -531,8 +529,6 @@ func (s *ORMSuite) TestSubList() {
 }
 
 func (s *ORMSuite) TestCursor() {
-	const recCount = 3
-
 	id1 := fdb.Key("id1")
 	id2 := fdb.Key("id2")
 	id3 := fdb.Key("id3")
@@ -541,12 +537,12 @@ func (s *ORMSuite) TestCursor() {
 	id6 := fdb.Key("id6")
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdb.KeyValue{id1, []byte("msg1")},
-		fdb.KeyValue{id2, []byte("txt2")},
-		fdb.KeyValue{id3, []byte("msg3")},
-		fdb.KeyValue{id4, []byte("txt4")},
-		fdb.KeyValue{id5, []byte("msg5")},
-		fdb.KeyValue{id6, []byte("msg6")},
+		fdb.KeyValue{Key: id1, Value: []byte("msg1")},
+		fdb.KeyValue{Key: id2, Value: []byte("txt2")},
+		fdb.KeyValue{Key: id3, Value: []byte("msg3")},
+		fdb.KeyValue{Key: id4, Value: []byte("txt4")},
+		fdb.KeyValue{Key: id5, Value: []byte("msg5")},
+		fdb.KeyValue{Key: id6, Value: []byte("msg6")},
 	))
 	s.Require().NoError(s.tx.Commit())
 
@@ -687,7 +683,7 @@ func BenchmarkUpsert(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		uid := []byte(typex.NewUUID())
-		require.NoError(b, tbl.Upsert(tx, fdb.KeyValue{fdb.Key(uid), uid}))
+		require.NoError(b, tbl.Upsert(tx, fdb.KeyValue{Key: uid, Value: uid}))
 	}
 }
 
@@ -710,7 +706,7 @@ func BenchmarkUpsertBatch(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		for i := range batch {
 			uid := []byte(typex.NewUUID())
-			batch[i] = fdb.KeyValue{fdb.Key(uid), uid}
+			batch[i] = fdb.KeyValue{Key: uid, Value: uid}
 		}
 		require.NoError(b, tbl.Upsert(tx, batch...))
 	}
@@ -737,7 +733,7 @@ func BenchmarkCount(b *testing.B) {
 		batch := make([]fdb.KeyValue, batchSize)
 		for i := 0; i < batchSize; i++ {
 			uid := []byte(typex.NewUUID())
-			batch[i] = fdb.KeyValue{uid, uid}
+			batch[i] = fdb.KeyValue{Key: uid, Value: uid}
 		}
 		require.NoError(b, tbl.Upsert(tx, batch...))
 	}

@@ -2,10 +2,11 @@ package orm
 
 import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/shestakovda/typex"
+
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/models"
 	"github.com/shestakovda/fdbx/v2/mvcc"
-	"github.com/shestakovda/typex"
 )
 
 func newSysPair(tx mvcc.Tx, tbid uint16, orig fdb.KeyValue) (_ fdb.KeyValue, err error) {
@@ -29,7 +30,7 @@ func newSysPair(tx mvcc.Tx, tbid uint16, orig fdb.KeyValue) (_ fdb.KeyValue, err
 	}
 
 	return fdb.KeyValue{
-		WrapTableKey(tbid, orig.Key),
-		fdbx.FlatPack(mod),
+		Key:   WrapTableKey(tbid, orig.Key),
+		Value: fdbx.FlatPack(mod),
 	}, nil
 }
