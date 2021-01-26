@@ -32,11 +32,15 @@ import (
 	* Не создать ни одного конфликта записи/чтения между параллельно стартующими транзакциями
 */
 func newTx64(conn db.Connection) *tx64 {
+	lctx, exit := context.WithCancel(context.Background())
 	return &tx64{
 		conn:   conn,
 		txid:   newTxID(),
 		status: txStatusRunning,
 		start:  time.Now().UTC().UnixNano(),
+		wait:   new(sync.WaitGroup),
+		lctx:   lctx,
+		exit:   exit,
 	}
 }
 
@@ -58,7 +62,12 @@ type tx64 struct {
 	// RWMutex
 	status byte
 	oncomm []CommitHandler
-	locks  map[string]lock
+	locks  map[string]fdb.Key
+
+	// Lock update management
+	wait *sync.WaitGroup
+	lctx context.Context
+	exit context.CancelFunc
 }
 
 func (t *tx64) Conn() db.Connection {
@@ -770,11 +779,6 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, txid suid) (status byte, er
 	* Если записи нет в БД - то транзакция считается отмененной (aborted)
 */
 func (t *tx64) close(w db.Writer, status byte) (err error) {
-	// Если что-то пошло не так при освобождении блокировок - придется выйти
-	if err = t.releaseLocks(w); err != nil {
-		return ErrClose.WithReason(err)
-	}
-
 	t.Lock()
 	defer t.Unlock()
 
@@ -783,6 +787,15 @@ func (t *tx64) close(w db.Writer, status byte) (err error) {
 		return nil
 	}
 	t.status = status
+
+	// Останавливаем все обновления
+	t.exit()
+	t.wait.Wait()
+
+	// Если что-то пошло не так при освобождении блокировок - придется выйти
+	if err = t.releaseLocks(w); err != nil {
+		return ErrClose.WithReason(err)
+	}
 
 	// Если в рамках транзакции не было никаких изменений (флаг mods), то обходимся только установкой кеша
 	// Это оптимизация транзакций на чтение, поскольку они должны быть максимально "бесплатны" для юзера
@@ -1123,16 +1136,14 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdb.RangeResult, onVacuum RowHandler) 
 }
 
 type lock struct {
-	key  fdb.Key
-	wait *sync.WaitGroup
-	exit context.CancelFunc
+	key fdb.Key
 }
 
 func (t *tx64) existLock(key fdb.Key) bool {
 	t.RLock()
 	defer t.RUnlock()
 
-	if len(t.locks[key.String()].key) > 0 {
+	if len(t.locks[key.String()]) > 0 {
 		return true
 	}
 
@@ -1148,15 +1159,13 @@ func (t *tx64) appendLock(key fdb.Key) (exists bool) {
 	defer t.Unlock()
 
 	if t.locks == nil {
-		t.locks = make(map[string]lock, 1)
+		t.locks = make(map[string]fdb.Key, 1)
 	}
 
-	wg := new(sync.WaitGroup)
-	wg.Add(1)
-	ctx, cancel := context.WithCancel(context.Background())
+	t.wait.Add(1)
 
 	go func() {
-		defer wg.Done()
+		defer t.wait.Done()
 
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
@@ -1171,32 +1180,19 @@ func (t *tx64) appendLock(key fdb.Key) (exists bool) {
 					// Ни в коем случае нельзя продолжать работу, если блокировка накрылась
 					panic(fmt.Errorf("ошибка обновления блокировки: %+v", err))
 				}
-			case <-ctx.Done():
+			case <-t.lctx.Done():
 				return
 			}
 		}
 	}()
 
-	t.locks[key.String()] = lock{
-		key:  key,
-		wait: wg,
-		exit: cancel,
-	}
+	t.locks[key.String()] = key
 	return false
 }
 
 func (t *tx64) releaseLocks(w db.Writer) (err error) {
-	t.Lock()
-	defer t.Unlock()
-
 	if len(t.locks) == 0 {
 		return nil
-	}
-
-	// Останавливаем все обновления
-	for _, lk := range t.locks {
-		lk.exit()
-		lk.wait.Wait()
 	}
 
 	if err = t.applyWriteHandler(w, t.onRelease, true); err != nil {
@@ -1209,7 +1205,7 @@ func (t *tx64) releaseLocks(w db.Writer) (err error) {
 
 func (t *tx64) onRelease(w db.Writer) error {
 	for _, lk := range t.locks {
-		w.Delete(lk.key)
+		w.Delete(lk)
 	}
 	return nil
 }
