@@ -109,21 +109,21 @@ func (s *indexSelector) flush(ctx context.Context, tid uint16, buf []fdb.KeyValu
 	var pair fdb.KeyValue
 	var res map[string]fdb.KeyValue
 
-	rids := make([]fdb.Key, len(buf))
+	keys := make([]fdb.Key, len(buf))
 	for i := range buf {
-		rids[i] = WrapTableKey(tid, buf[i].Value)
+		keys[i] = WrapTableKey(tid, buf[i].Value)
 	}
 
 	// Запрашиваем сразу все
-	if res, err = s.tx.SelectMany(rids); err != nil {
+	if res, err = s.tx.SelectMany(keys); err != nil {
 		return
 	}
 
 	// Выбираем результаты
-	for i := range rids {
-		if pair, ok = res[rids[i].String()]; !ok {
+	for i := range keys {
+		if pair, ok = res[keys[i].String()]; !ok {
 			return ErrNotFound.WithReason(err).WithDebug(errx.Debug{
-				"id": rids[i],
+				"id": keys[i],
 			})
 		}
 

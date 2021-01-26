@@ -40,31 +40,32 @@ func (s *idsSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-
 		rids := s.reversed(s.ids, opts.reverse)
 
 		// Подготовка айдишек к выборке
+		keys := make([]fdb.Key, len(rids))
 		for i := range rids {
-			rids[i] = WrapTableKey(tbl.ID(), rids[i])
+			keys[i] = WrapTableKey(tbl.ID(), rids[i])
 		}
 
 		// Запрашиваем сразу все
-		if res, err = s.tx.SelectMany(rids); err != nil {
+		if res, err = s.tx.SelectMany(keys); err != nil {
 			errs <- ErrSelect.WithReason(err)
 			return
 		}
 
 		// Выбираем результаты
-		for i := range rids {
-			if pair, ok = res[rids[i].String()]; !ok {
+		for i := range keys {
+			if pair, ok = res[keys[i].String()]; !ok {
 				if !s.strict {
 					continue
 				}
 
 				errs <- ErrSelect.WithReason(ErrNotFound.WithReason(err).WithDebug(errx.Debug{
-					"id": s.ids[i],
+					"id": rids[i],
 				}))
 				return
 			}
 
 			select {
-			case list <- Selected{s.ids[i], pair}:
+			case list <- Selected{rids[i], pair}:
 			case <-ctx.Done():
 				return
 			}
