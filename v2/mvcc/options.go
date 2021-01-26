@@ -2,6 +2,7 @@ package mvcc
 
 import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+
 	"github.com/shestakovda/fdbx/v2/db"
 )
 
@@ -10,7 +11,7 @@ func getOpts(args []Option) (o options) {
 	o.vpack = 0
 
 	// Объем выборки "грязных" записей в процессе работы
-	o.spack = 10000
+	o.spack = 0
 
 	// Максимальное кол-во байт, которое могут занимать строки, сохраняемые в рамках одной физической транзакции
 	o.rowmem = 9000000

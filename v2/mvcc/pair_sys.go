@@ -16,7 +16,7 @@ func sysPair(opid uint32, key fdb.Key, txid, data []byte) fdb.KeyValue {
 	binary.BigEndian.PutUint32(part[8:12], opid)
 
 	return fdb.KeyValue{
-		fdbx.AppendRight(WrapKey(key), part[:]...),
-		fdbx.FlatPack(&models.RowT{Data: data}),
+		Key:   fdbx.AppendRight(WrapKey(key), part[:]...),
+		Value: fdbx.FlatPack(&models.RowT{Data: data}),
 	}
 }

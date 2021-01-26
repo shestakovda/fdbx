@@ -5,14 +5,11 @@ import (
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-
 	"github.com/shestakovda/errx"
+
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 )
-
-// Debug - флаг отладочных принтов
-var Debug = false
 
 // TxCacheSize - размер глобального кеша статусов завершенных транзакций
 var TxCacheSize = 8000000
@@ -37,14 +34,14 @@ type Tx interface {
 	// Ссылка на подключение к БД, на всякий случай
 	Conn() db.Connection
 
+	// Неудачное завершение (отклонение) транзакции
+	// Поддерживает опции Writer
+	Cancel(args ...Option)
+
 	// Успешное завершение (принятие) транзакции
 	// Перед завершением выполняет хуки OnCommit
 	// Поддерживает опции Writer
 	Commit(args ...Option) error
-
-	// Неудачное завершение (отклонение) транзакции
-	// Поддерживает опции Writer
-	Cancel(args ...Option) error
 
 	// Выборка актуального значения для ключа
 	Select(fdb.Key, ...Option) (fdb.KeyValue, error)
@@ -131,8 +128,6 @@ func WrapWatchKey(key fdb.Key) fdb.Key {
 
 // Ошибки модуля
 var (
-	ErrWrite      = errx.New("Модифицикация в транзакции только для чтения")
-	ErrBegin      = errx.New("Ошибка старта транзакции")
 	ErrClose      = errx.New("Ошибка завершения транзакции")
 	ErrSelect     = errx.New("Ошибка получения данных")
 	ErrUpsert     = errx.New("Ошибка обновления данных")
@@ -144,7 +139,5 @@ var (
 	ErrBLOBDrop   = errx.New("Ошибка удаления BLOB")
 	ErrBLOBSave   = errx.New("Ошибка сохранения BLOB")
 	ErrSharedLock = errx.New("Ошибка получения блокировки")
-	ErrDeadlock   = errx.New("Ошибка ожидания освобождения блокировки")
-	ErrWatch      = errx.New("Ошибка отслеживания значения")
 	ErrVacuum     = errx.New("Ошибка автоочистки значений")
 )

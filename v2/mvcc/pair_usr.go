@@ -2,6 +2,7 @@ package mvcc
 
 import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+
 	"github.com/shestakovda/fdbx/v2/models"
 )
 

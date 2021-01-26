@@ -17,7 +17,7 @@ const (
 
 const (
 	txStatusUnknown   byte = 0
-	txStatusAborted   byte = 1
+	txStatusCancelled byte = 1
 	txStatusRunning   byte = 2
 	txStatusCommitted byte = 3
 )

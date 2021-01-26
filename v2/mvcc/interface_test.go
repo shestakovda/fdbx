@@ -14,11 +14,12 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 
 	"github.com/shestakovda/errx"
-	"github.com/shestakovda/fdbx/v2/db"
-	"github.com/shestakovda/fdbx/v2/mvcc"
 	"github.com/shestakovda/typex"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+
+	"github.com/shestakovda/fdbx/v2/db"
+	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
 const TestDB byte = 0x10
@@ -47,7 +48,7 @@ func (s *MVCCSuite) SetupTest() {
 }
 
 func (s *MVCCSuite) TearDownTest() {
-	s.NoError(s.tx.Cancel())
+	s.tx.Cancel()
 }
 
 func (s *MVCCSuite) TestUpsertIsolationSameKeys() {
@@ -195,7 +196,7 @@ func (s *MVCCSuite) TestConcurrentInsideTx() {
 		defer wg.Done()
 
 		for i := 0; i < 100; i++ {
-			pair := fdb.KeyValue{fdb.Key(fmt.Sprintf("key%d", i%9)), []byte(strconv.Itoa(i))}
+			pair := fdb.KeyValue{Key: fdb.Key(fmt.Sprintf("key%d", i%9)), Value: []byte(strconv.Itoa(i))}
 			s.Require().NoError(s.tx.Upsert([]fdb.KeyValue{pair}))
 		}
 	}
@@ -218,13 +219,13 @@ func (s *MVCCSuite) TestConcurrentBetweenTx() {
 
 		for i := 0; i < 100; i++ {
 			tx := mvcc.Begin(s.cn)
-			pair := fdb.KeyValue{fdb.Key(fmt.Sprintf("key%d", i%9)), []byte(strconv.Itoa(i))}
+			pair := fdb.KeyValue{Key: fdb.Key(fmt.Sprintf("key%d", i%9)), Value: []byte(strconv.Itoa(i))}
 			s.Require().NoError(tx.Upsert([]fdb.KeyValue{pair}))
 
 			if i%n == 0 {
 				s.Require().NoError(tx.Commit())
 			} else {
-				s.Require().NoError(tx.Cancel())
+				tx.Cancel()
 			}
 		}
 	}
@@ -249,7 +250,7 @@ func (s *MVCCSuite) TestOnCommit() {
 	if err := tx.Commit(); s.Error(err) {
 		s.True(errx.Is(err, mvcc.ErrBLOBDrop, mvcc.ErrClose))
 	}
-	s.Require().NoError(tx.Cancel())
+	tx.Cancel()
 
 	tx = mvcc.Begin(s.cn)
 
@@ -306,13 +307,13 @@ func (s *MVCCSuite) TestListAll() {
 	val7 := []byte("val7")
 
 	s.Require().NoError(s.tx.Upsert([]fdb.KeyValue{
-		fdb.KeyValue{key1, val1},
-		fdb.KeyValue{key2, val2},
-		fdb.KeyValue{key3, val3},
-		fdb.KeyValue{key4, val4},
-		fdb.KeyValue{key5, val5},
-		fdb.KeyValue{key6, val6},
-		fdb.KeyValue{key7, val7},
+		{key1, val1},
+		{key2, val2},
+		{key3, val3},
+		{key4, val4},
+		{key5, val5},
+		{key6, val6},
+		{key7, val7},
 	}))
 
 	ctx := context.Background()
@@ -374,8 +375,8 @@ func (s *MVCCSuite) TestListAll() {
 
 		return nil
 	}))
-	s.Require().NoError(tx.Cancel())
-	s.Require().NoError(tx2.Cancel())
+	tx.Cancel()
+	tx2.Cancel()
 }
 
 func (s *MVCCSuite) TestSharedLock() {
@@ -508,13 +509,13 @@ func BenchmarkSequenceWorkflowDiffTx(b *testing.B) {
 
 		// INSERT
 		tx := mvcc.Begin(cn)
-		pairs[0] = fdb.KeyValue{key, val}
+		pairs[0] = fdb.KeyValue{Key: key, Value: val}
 		require.NoError(b, tx.Upsert(pairs[:]))
 		require.NoError(b, tx.Commit())
 
 		// UPDATE
 		tx = mvcc.Begin(cn)
-		pairs[0] = fdb.KeyValue{key, val2}
+		pairs[0] = fdb.KeyValue{Key: key, Value: val2}
 		require.NoError(b, tx.Upsert(pairs[:]))
 		require.NoError(b, tx.Commit())
 
@@ -532,7 +533,7 @@ func BenchmarkSequenceWorkflowDiffTx(b *testing.B) {
 		sl, err = tx.Select(key)
 		require.Error(b, err)
 		require.True(b, errx.Is(err, mvcc.ErrNotFound))
-		require.NoError(b, tx.Cancel())
+		tx.Cancel()
 	}
 }
 

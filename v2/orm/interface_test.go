@@ -72,7 +72,7 @@ func (s *ORMSuite) SetupTest() {
 }
 
 func (s *ORMSuite) TearDownTest() {
-	s.NoError(s.tx.Cancel())
+	s.tx.Cancel()
 }
 
 func (s *ORMSuite) checkVacuum(ignore map[string]bool) {
