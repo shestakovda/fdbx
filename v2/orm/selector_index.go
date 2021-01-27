@@ -83,6 +83,7 @@ func (s *indexSelector) Select(ctx context.Context, tbl Table, args ...Option) (
 					errs <- ErrSelect.WithReason(err)
 					return
 				}
+				buf = buf[:0]
 			}
 		}
 
