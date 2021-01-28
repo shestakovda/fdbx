@@ -2,7 +2,6 @@ package mvcc
 
 import (
 	"context"
-	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/shestakovda/errx"
@@ -76,7 +75,10 @@ type Tx interface {
 	SaveBLOB(fdb.Key, []byte, ...Option) error
 
 	// Блокировка записи с доступом на чтение по сигнальному ключу
-	SharedLock(fdb.Key, time.Duration) error
+	SharedLock(...fdb.Key) error
+
+	// Немедленно освобождает блокировку всех ключей, указанных в SharedLock
+	ReleaseLocks()
 
 	// Регистрация хука для выполнения при удачном завершении транзакции
 	OnCommit(CommitHandler)
@@ -131,16 +133,18 @@ func WrapWatchKey(key fdb.Key) fdb.Key {
 
 // Ошибки модуля
 var (
-	ErrClose      = errx.New("Ошибка завершения транзакции")
-	ErrSelect     = errx.New("Ошибка получения данных")
-	ErrUpsert     = errx.New("Ошибка обновления данных")
-	ErrDelete     = errx.New("Ошибка удаления данных")
-	ErrSeqScan    = errx.New("Ошибка полной выборки данных")
-	ErrNotFound   = errx.New("Отсутствует значение")
-	ErrDuplicate  = errx.New("Дублирующее значение")
-	ErrBLOBLoad   = errx.New("Ошибка загрузки BLOB")
-	ErrBLOBDrop   = errx.New("Ошибка удаления BLOB")
-	ErrBLOBSave   = errx.New("Ошибка сохранения BLOB")
-	ErrSharedLock = errx.New("Ошибка получения блокировки")
-	ErrVacuum     = errx.New("Ошибка автоочистки значений")
+	ErrClose         = errx.New("Ошибка завершения транзакции")
+	ErrSelect        = errx.New("Ошибка получения данных")
+	ErrUpsert        = errx.New("Ошибка обновления данных")
+	ErrDelete        = errx.New("Ошибка удаления данных")
+	ErrSeqScan       = errx.New("Ошибка полной выборки данных")
+	ErrNotFound      = errx.New("Отсутствует значение")
+	ErrDuplicate     = errx.New("Дублирующее значение")
+	ErrBLOBLoad      = errx.New("Ошибка загрузки BLOB")
+	ErrBLOBDrop      = errx.New("Ошибка удаления BLOB")
+	ErrBLOBSave      = errx.New("Ошибка сохранения BLOB")
+	ErrSharedLock    = errx.New("Ошибка получения блокировки")
+	ErrReleaseLock   = errx.New("Ошибка освобождения блокировки")
+	ErrVacuum        = errx.New("Ошибка автоочистки значений")
+	ErrAlreadyLocked = errx.New("Уже получена другая блокировка, нужно сначала освободить ее")
 )

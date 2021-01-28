@@ -393,13 +393,18 @@ func (s *MVCCSuite) TestSharedLock() {
 		defer tx.Cancel()
 
 		// В первой транзакции забираем блокировку
-		s.Require().NoError(tx.SharedLock(lock, time.Second))
+		s.Require().NoError(tx.SharedLock(lock))
 
 		// Ждем минутку, типа чот делаем
 		time.Sleep(100 * time.Millisecond)
 
-		// Пытаемся получить блокировку повторно, это должно работать
-		s.Require().NoError(tx.SharedLock(lock, time.Second))
+		// Пытаемся получить ту же блокировку повторно, это должно работать
+		s.Require().NoError(tx.SharedLock(lock))
+
+		// При этом нельзя получить другую блокировку
+		if err := tx.SharedLock(key); s.Error(err) {
+			s.True(errx.Is(err, mvcc.ErrAlreadyLocked))
+		}
 
 		// Обновляем значение
 		s.Require().NoError(tx.Upsert([]fdb.KeyValue{{key, []byte("val1")}}))
@@ -412,11 +417,22 @@ func (s *MVCCSuite) TestSharedLock() {
 		tx := mvcc.Begin(s.cn)
 		defer tx.Cancel()
 
-		// Во второй транзакции сначала чуть ждем, чтобы первая точно успела взять блокировку
+		// Сначала забираем блокировку на первый ключ
+		s.Require().NoError(tx.SharedLock(key))
+
+		// При этом нельзя получить другую блокировку
+		if err := tx.SharedLock(lock); s.Error(err) {
+			s.True(errx.Is(err, mvcc.ErrAlreadyLocked))
+		}
+
+		// Но можно освободить блокировки
+		tx.ReleaseLocks()
+
+		// Еще чуть ждем, чтобы первая точно успела взять блокировку
 		time.Sleep(20 * time.Millisecond)
 
 		// Пытаемся получить блокировку
-		s.Require().NoError(tx.SharedLock(lock, time.Second))
+		s.Require().NoError(tx.SharedLock(lock))
 
 		// Теперь читаем значение. Если блокировка работает, то будет ждать освобождения и прочитаем val1
 		// Если не работает, то прочитает сразу же, там будет пустое значение
@@ -432,7 +448,7 @@ func (s *MVCCSuite) TestSharedLock() {
 	// После двух транзакций не должно быть никакой проблемы с блокировкой, т.к. она должна быть снята
 	tx := mvcc.Begin(s.cn)
 	defer tx.Cancel()
-	s.Require().NoError(tx.SharedLock(lock, time.Second))
+	s.Require().NoError(tx.SharedLock(lock))
 }
 
 func (s *MVCCSuite) TestNoDeadlockCommit() {
@@ -452,7 +468,7 @@ func (s *MVCCSuite) TestNoDeadlockCommit() {
 			time.Sleep(time.Duration(rand.Intn(2)) * time.Millisecond)
 
 			// В первой транзакции забираем блокировку
-			s.Require().NoError(tx.SharedLock(lock, 2*time.Second))
+			s.Require().NoError(tx.SharedLock(lock))
 
 			// Ждем минутку, типа чот делаем
 			time.Sleep(10 * time.Millisecond)
@@ -482,7 +498,7 @@ func (s *MVCCSuite) TestNoDeadlockCancel() {
 			time.Sleep(time.Duration(rand.Intn(2)) * time.Millisecond)
 
 			// В первой транзакции забираем блокировку
-			s.Require().NoError(tx.SharedLock(lock, 2*time.Second))
+			s.Require().NoError(tx.SharedLock(lock))
 
 			// Ждем минутку, типа чот делаем
 			time.Sleep(100 * time.Millisecond)

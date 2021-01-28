@@ -643,13 +643,22 @@ func (t *tx64) DropBLOB(key fdb.Key, args ...Option) (err error) {
 /*
 	SharedLock - Блокировка записи с доступом на чтение по сигнальному ключу
 */
-func (t *tx64) SharedLock(key fdb.Key, _ time.Duration) (err error) {
+func (t *tx64) SharedLock(keys ...fdb.Key) (err error) {
 	var lock db.Waiter
+	var exist bool
 
-	ukey := WrapLockKey(key)
+	usrKeys := make([]fdb.Key, len(keys))
+	for i := range keys {
+		usrKeys[i] = WrapLockKey(keys[i])
+	}
 
-	// Если мы в этой транзакции уже взяли такую блокировку, то нечего и ждать, все ок
-	if t.appendLock(ukey) {
+	// Сначала проверим, можем ли мы вообще получить такую блокировку
+	if exist, err = t.checkLock(usrKeys); err != nil {
+		return
+	}
+
+	// Блокировка уже получена - никаких проблем
+	if exist {
 		return nil
 	}
 
@@ -663,25 +672,35 @@ func (t *tx64) SharedLock(key fdb.Key, _ time.Duration) (err error) {
 		if err = t.conn.Write(func(w db.Writer) (exp error) {
 			var val []byte
 
-			w.Lock(ukey, ukey)
+			now := fdbx.Time2Byte(time.Now())
+			pairs := make([]fdb.KeyValue, len(usrKeys))
+			items := make([]fdb.FutureByteSlice, len(usrKeys))
 
-			// Если есть значение ключа, значит блокировка занята, придется ждать
-			if val = w.Data(ukey); len(val) > 0 {
-				var upd time.Time
+			for i, ukey := range usrKeys {
+				w.Lock(ukey, ukey)
+				pairs[i] = fdb.KeyValue{Key: ukey, Value: now}
+				items[i] = w.Item(ukey)
+			}
 
-				// Если блокировка давно не обновлялась - значит ей кранты, забираем себе
-				if upd, exp = fdbx.Byte2Time(val); exp != nil {
-					return
-				}
+			for i := range usrKeys {
+				// Если есть значение ключа, значит блокировка занята, придется ждать
+				if val = items[i].MustGet(); len(val) > 0 {
+					var upd time.Time
 
-				if time.Since(upd) < 30*time.Second {
-					lock = w.Watch(ukey)
-					return nil
+					// Если блокировка давно не обновлялась - значит ей кранты, забираем себе
+					if upd, exp = fdbx.Byte2Time(val); exp != nil {
+						return
+					}
+
+					if time.Since(upd) < 30*time.Second {
+						lock = w.Watch(usrKeys[i])
+						return nil
+					}
 				}
 			}
 
 			// Если нам все-таки удается поставить значение - значит блокировка наша
-			w.Upsert(fdb.KeyValue{Key: ukey, Value: fdbx.Time2Byte(time.Now())})
+			w.Upsert(pairs...)
 			ack = true
 			return nil
 		}); err != nil {
@@ -694,6 +713,7 @@ func (t *tx64) SharedLock(key fdb.Key, _ time.Duration) (err error) {
 		// Блокировка наша, можно ехать дальше
 		// Значение может быть true тогда и только тогда, когда удалось завершить метод без ошибок
 		if ack {
+			t.appendLock(usrKeys)
 			glog.Errorf("Получили блокировку: попыток %d, запрос %s", cnt, query)
 			return nil
 		}
@@ -712,6 +732,37 @@ func (t *tx64) SharedLock(key fdb.Key, _ time.Duration) (err error) {
 		glog.Errorf("Итерация блокировки %d: запрос %s, ожидание %s", cnt, query, wait)
 		cnt++
 	}
+}
+
+func (t *tx64) ReleaseLocks() {
+	if !t.waitLocks() {
+		return
+	}
+
+	t.Lock()
+	defer t.Unlock()
+	var w db.Writer
+
+	if err := t.applyWriteHandler(w, t.onRelease, true); err != nil {
+		glog.Errorf("%+v", ErrReleaseLock.WithReason(err))
+	}
+
+	t.lctx, t.exit = context.WithCancel(context.Background())
+	t.locks = nil
+}
+
+func (t *tx64) waitLocks() bool {
+	t.RLock()
+	defer t.RUnlock()
+
+	if len(t.locks) == 0 {
+		return false
+	}
+
+	// Останавливаем все обновления
+	t.exit()
+	t.wait.Wait()
+	return true
 }
 
 func (t *tx64) isCommitted(local *txCache, r db.Reader, txid suid) (_ bool, err error) {
@@ -779,6 +830,9 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, txid suid) (status byte, er
 	* Если записи нет в БД - то транзакция считается отмененной (aborted)
 */
 func (t *tx64) close(w db.Writer, status byte) (err error) {
+	// Останавливаем все блокировки
+	t.ReleaseLocks()
+
 	t.Lock()
 	defer t.Unlock()
 
@@ -787,15 +841,6 @@ func (t *tx64) close(w db.Writer, status byte) (err error) {
 		return nil
 	}
 	t.status = status
-
-	// Останавливаем все обновления
-	t.exit()
-	t.wait.Wait()
-
-	// Если что-то пошло не так при освобождении блокировок - придется выйти
-	if err = t.releaseLocks(w); err != nil {
-		return ErrClose.WithReason(err)
-	}
 
 	// Если в рамках транзакции не было никаких изменений (флаг mods), то обходимся только установкой кеша
 	// Это оптимизация транзакций на чтение, поскольку они должны быть максимально "бесплатны" для юзера
@@ -1135,72 +1180,69 @@ func (t *tx64) vacuumPart(w db.Writer, lg fdb.RangeResult, onVacuum RowHandler) 
 	return last, nil
 }
 
-type lock struct {
-	key fdb.Key
-}
-
-func (t *tx64) existLock(key fdb.Key) bool {
+func (t *tx64) checkLock(keys []fdb.Key) (exist bool, err error) {
 	t.RLock()
 	defer t.RUnlock()
 
-	if len(t.locks[key.String()]) > 0 {
-		return true
+	// Если никаких блокировок еще не существует, можем блокировать что угодно
+	if len(t.locks) == 0 {
+		return false, nil
 	}
 
-	return false
+	// Если хотя бы один ключ не был заблокирован ранее - новую блокировку получать нельзя
+	for i := range keys {
+		if len(t.locks[keys[i].String()]) == 0 {
+			return false, ErrAlreadyLocked.WithDebug(errx.Debug{
+				"locks": t.locks,
+			})
+		}
+	}
+
+	// Похоже, что все ключи повторно блокируются, никаких проблем
+	return true, nil
 }
 
-func (t *tx64) appendLock(key fdb.Key) (exists bool) {
-	if t.existLock(key) {
-		return true
-	}
-
+func (t *tx64) appendLock(keys []fdb.Key) {
 	t.Lock()
 	defer t.Unlock()
 
-	if t.locks == nil {
-		t.locks = make(map[string]fdb.Key, 1)
+	t.locks = make(map[string]fdb.Key, len(keys))
+	for i := range keys {
+		t.locks[keys[i].String()] = keys[i]
 	}
 
 	t.wait.Add(1)
-
-	go func() {
-		defer t.wait.Done()
-
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				if err := t.conn.Write(func(w db.Writer) error {
-					w.Upsert(fdb.KeyValue{Key: key, Value: fdbx.Time2Byte(time.Now())})
-					return nil
-				}); err != nil {
-					// Ни в коем случае нельзя продолжать работу, если блокировка накрылась
-					panic(fmt.Errorf("ошибка обновления блокировки: %+v", err))
-				}
-			case <-t.lctx.Done():
-				return
-			}
-		}
-	}()
-
-	t.locks[key.String()] = key
-	return false
+	go t.updateLocks()
 }
 
-func (t *tx64) releaseLocks(w db.Writer) (err error) {
-	if len(t.locks) == 0 {
-		return nil
-	}
+func (t *tx64) updateLocks() {
+	defer t.wait.Done()
 
-	if err = t.applyWriteHandler(w, t.onRelease, true); err != nil {
-		return
-	}
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
 
-	t.locks = nil
-	return nil
+	for {
+		select {
+		case <-ticker.C:
+			if err := t.conn.Write(func(w db.Writer) error {
+				t.RLock()
+				defer t.RUnlock()
+				if len(t.locks) == 0 {
+					t.exit()
+					return nil
+				}
+				for _, key := range t.locks {
+					w.Upsert(fdb.KeyValue{Key: key, Value: fdbx.Time2Byte(time.Now())})
+				}
+				return nil
+			}); err != nil {
+				// Ни в коем случае нельзя продолжать работу, если блокировка накрылась
+				panic(fmt.Errorf("ошибка обновления блокировки: %+v", err))
+			}
+		case <-t.lctx.Done():
+			return
+		}
+	}
 }
 
 func (t *tx64) onRelease(w db.Writer) error {
