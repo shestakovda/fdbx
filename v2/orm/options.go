@@ -1,6 +1,7 @@
 package orm
 
 import (
+	"sync"
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
@@ -39,6 +40,7 @@ type options struct {
 	indexes  map[uint16]IndexKey
 	multidx  map[uint16]IndexMultiKey
 	batchidx []IndexBatchKey
+	wait *sync.WaitGroup
 }
 
 func Index(id uint16, f IndexKey) Option {
@@ -134,6 +136,12 @@ func Header(k, v string) Option {
 func Headers(h map[string]string) Option {
 	return func(o *options) {
 		o.headers = h
+	}
+}
+
+func Waiter(w *sync.WaitGroup) Option {
+	return func(o *options) {
+		o.wait = w
 	}
 }
 

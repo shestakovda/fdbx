@@ -93,7 +93,7 @@ type Query interface {
 	All() ([]fdb.KeyValue, error)
 	Next() ([]fdb.KeyValue, error)
 	First() (fdb.KeyValue, error)
-	Sequence(context.Context) (<-chan fdb.KeyValue, <-chan error)
+	Sequence(context.Context, ...Option) (<-chan fdb.KeyValue, <-chan error)
 	Delete() error
 	Empty() bool
 

@@ -129,23 +129,25 @@ func (q *v1Query) All() ([]fdb.KeyValue, error) {
 }
 
 func (q *v1Query) Next() (_ []fdb.KeyValue, err error) {
-	defer func() { _, err = q.Save() }()
+	wait := new(sync.WaitGroup)
+	defer func() {
+		wait.Wait()
+		_, err = q.Save()
+	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	size := uint32(0)
 	list := make([]fdb.KeyValue, 0, q.page)
-	pairs, errs := q.Sequence(ctx)
+	pairs, errs := q.Sequence(ctx, Waiter(wait))
 
 	for pair := range pairs {
-		list = append(list, pair)
-		if size++; q.page > 0 && size >= q.page {
+		if list = append(list, pair); q.page > 0 && len(list) >= int(q.page) {
 			return list, nil
 		}
 	}
 
-	for err := range errs {
+	for err = range errs {
 		if err != nil {
 			return nil, ErrNext.WithReason(err)
 		}
@@ -252,13 +254,18 @@ func (q *v1Query) Where(hdl Filter) Query {
 	return q
 }
 
-func (q *v1Query) Sequence(ctx context.Context) (<-chan fdb.KeyValue, <-chan error) {
+func (q *v1Query) Sequence(ctx context.Context, args ...Option) (<-chan fdb.KeyValue, <-chan error) {
 	list := make(chan fdb.KeyValue)
 	errs := make(chan error, 1)
+	opts := getOpts(args)
 
 	q.empty = false
 	if q.selector == nil {
 		q.selector = NewFullSelector(q.tx)
+	}
+
+	if opts.wait != nil {
+		opts.wait.Add(1)
 	}
 
 	go func() {
@@ -269,6 +276,10 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdb.KeyValue, <-chan err
 
 		defer close(list)
 		defer close(errs)
+
+		if opts.wait != nil {
+			defer opts.wait.Done()
+		}
 
 		size = atomic.LoadUint32(&q.size)
 
@@ -311,7 +322,7 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdb.KeyValue, <-chan err
 			}
 		}
 
-		for err := range errc {
+		for err = range errc {
 			if err != nil {
 				errs <- ErrSequence.WithReason(err)
 				return
