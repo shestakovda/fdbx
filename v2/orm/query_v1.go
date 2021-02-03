@@ -92,6 +92,11 @@ type v1Query struct {
 
 func (q *v1Query) Empty() bool { return q.empty }
 
+func (q *v1Query) Forward() Query {
+	q.reverse = false
+	return q
+}
+
 func (q *v1Query) Reverse() Query {
 	q.reverse = true
 	return q

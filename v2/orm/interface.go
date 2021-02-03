@@ -83,6 +83,7 @@ type Query interface {
 	BySelector(Selector) Query
 
 	// Модификаторы селекторов
+	Forward() Query
 	Reverse() Query
 	Page(int) Query
 	Limit(int) Query

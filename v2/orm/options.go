@@ -40,7 +40,7 @@ type options struct {
 	indexes  map[uint16]IndexKey
 	multidx  map[uint16]IndexMultiKey
 	batchidx []IndexBatchKey
-	wait *sync.WaitGroup
+	wait     *sync.WaitGroup
 }
 
 func Index(id uint16, f IndexKey) Option {
