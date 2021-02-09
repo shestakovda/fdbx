@@ -1,13 +1,14 @@
 package orm
 
-import "github.com/shestakovda/fdbx/v2"
+import (
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+)
 
 const (
 	nsData  byte = 0
 	nsBLOB  byte = 1
 	nsIndex byte = 2
 	nsQueue byte = 3
-	nsWatch byte = 4
 	nsQuery byte = 5
 )
 
@@ -18,8 +19,7 @@ const (
 	qMeta byte = 3
 )
 
-var loLimit int = 100000
+// Ограничение в 100Кб, но берем небольшой запас на накладные расходы
+var loLimit = 90000
 
-var qTriggerKey = fdbx.String2Key("trigger")
-var qTotalWaitKey = fdbx.String2Key("wait")
-var qTotalWorkKey = fdbx.String2Key("work")
+var qTriggerKey = fdb.Key("trigger")

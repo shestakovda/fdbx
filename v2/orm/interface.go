@@ -4,14 +4,13 @@ import (
 	"context"
 	"time"
 
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/shestakovda/errx"
+
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
-
-// Debug - флаг отладочных принтов
-var Debug = false
 
 // Task status
 const (
@@ -26,9 +25,9 @@ type Table interface {
 
 	Select(mvcc.Tx) Query
 	Cursor(mvcc.Tx, string) (Query, error)
-	Delete(mvcc.Tx, ...fdbx.Key) error
-	Upsert(mvcc.Tx, ...fdbx.Pair) error
-	Insert(mvcc.Tx, ...fdbx.Pair) error
+	Delete(mvcc.Tx, ...fdb.Key) error
+	Upsert(mvcc.Tx, ...fdb.KeyValue) error
+	Insert(mvcc.Tx, ...fdb.KeyValue) error
 
 	Vacuum(db.Connection) error
 	Autovacuum(context.Context, db.Connection, ...Option)
@@ -38,24 +37,24 @@ type Table interface {
 type Queue interface {
 	ID() uint16
 
-	Ack(mvcc.Tx, ...fdbx.Key) (err error)
-	Pub(mvcc.Tx, fdbx.Key, ...Option) error
-	PubList(mvcc.Tx, []fdbx.Key, ...Option) error
+	Ack(mvcc.Tx, ...fdb.Key) (err error)
+	Pub(mvcc.Tx, fdb.Key, ...Option) error
+	PubList(mvcc.Tx, []fdb.Key, ...Option) error
 
 	Sub(context.Context, db.Connection, int) (<-chan Task, <-chan error)
 	SubList(context.Context, db.Connection, int) ([]Task, error)
 
-	Undo(mvcc.Tx, fdbx.Key) error
+	Undo(mvcc.Tx, fdb.Key) error
 	Stat(mvcc.Tx) (int64, int64, error)
 	Lost(mvcc.Tx, int) ([]Task, error)
-	Task(mvcc.Tx, fdbx.Key) (Task, error)
+	Task(mvcc.Tx, fdb.Key) (Task, error)
 }
 
 // Task - исполняемый элемент очереди
 type Task interface {
-	Key() fdbx.Key
+	Key() fdb.Key
 	Body() []byte
-	Pair() fdbx.Pair
+	Pair() fdb.KeyValue
 	Status() byte
 	Repeats() uint32
 	Creator() string
@@ -68,22 +67,23 @@ type Task interface {
 }
 
 // Aggregator - описание функции-агрегатора для запросов
-type Aggregator func(fdbx.Pair) error
+type Aggregator func(fdb.KeyValue) error
 
 // Filter - управляющий метод для фильтрации выборок
 // Должен возвращать true, если объект нужно оставить и false в другом случае
-type Filter func(fdbx.Pair) (ok bool, err error)
+type Filter func(fdb.KeyValue) (ok bool, err error)
 
 // Query - универсальный интерфейс объекта запроса данных, основная логика
 type Query interface {
 	// Критерии выбора (селекторы)
-	ByID(ids ...fdbx.Key) Query
-	PossibleByID(ids ...fdbx.Key) Query
-	ByIndex(idx uint16, query fdbx.Key) Query
-	ByIndexRange(idx uint16, from, last fdbx.Key) Query
+	ByID(ids ...fdb.Key) Query
+	PossibleByID(ids ...fdb.Key) Query
+	ByIndex(idx uint16, query fdb.Key) Query
+	ByIndexRange(idx uint16, from, last fdb.Key) Query
 	BySelector(Selector) Query
 
 	// Модификаторы селекторов
+	Forward() Query
 	Reverse() Query
 	Page(int) Query
 	Limit(int) Query
@@ -91,10 +91,10 @@ type Query interface {
 
 	// Обработка результатов
 	Agg(...Aggregator) error
-	All() ([]fdbx.Pair, error)
-	Next() ([]fdbx.Pair, error)
-	First() (fdbx.Pair, error)
-	Sequence(context.Context) (<-chan fdbx.Pair, <-chan error)
+	All() ([]fdb.KeyValue, error)
+	Next() ([]fdb.KeyValue, error)
+	First() (fdb.KeyValue, error)
+	Sequence(context.Context, ...Option) (<-chan fdb.KeyValue, <-chan error)
 	Delete() error
 	Empty() bool
 
@@ -105,107 +105,84 @@ type Query interface {
 
 // Selector - поставщик сырых данных для запроса
 type Selector interface {
-	Select(context.Context, Table, ...Option) (<-chan fdbx.Pair, <-chan error)
+	Select(context.Context, Table, ...Option) (<-chan Selected, <-chan error)
 }
 
 // IndexKey - для получения ключей при индексации коллекций
-type IndexKey func([]byte) (fdbx.Key, error)
+type IndexKey func([]byte) (fdb.Key, error)
 
 // IndexMultiKey - для получения ключей при индексации коллекций
-type IndexMultiKey func([]byte) ([]fdbx.Key, error)
+type IndexMultiKey func([]byte) ([]fdb.Key, error)
 
 // IndexBatchKey - для получения ключей при индексации коллекций
-type IndexBatchKey func([]byte) (map[uint16][]fdbx.Key, error)
+type IndexBatchKey func([]byte) (map[uint16][]fdb.Key, error)
 
 // Option - доп.аргумент для инициализации коллекций
 type Option func(*options)
 
+// Selected - структура с доп.параметром последнего выбранного ключа селектора
+type Selected struct {
+	Last fdb.Key
+	Pair fdb.KeyValue
+}
+
 // WrapTableKey - обертка для получения системного ключа из пользовательского, при сохранении
-func WrapTableKey(tbid uint16, key fdbx.Key) fdbx.Key {
-	if key == nil {
-		key = fdbx.Bytes2Key(nil)
-	}
-	return key.LPart(byte(tbid>>8), byte(tbid), nsData)
+func WrapTableKey(tbid uint16, key fdb.Key) fdb.Key {
+	return fdbx.AppendLeft(key, byte(tbid>>8), byte(tbid), nsData)
 }
 
 // UnwrapTableKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
-func UnwrapTableKey(key fdbx.Key) fdbx.Key {
-	if key != nil {
-		return key.LSkip(3)
-	}
-	return nil
+func UnwrapTableKey(key fdb.Key) fdb.Key {
+	return fdbx.SkipLeft(key, 3)
 }
 
 // WrapBlobKey - обертка для получения системного ключа из пользовательского, при сохранении
-func WrapBlobKey(tbid uint16, key fdbx.Key) fdbx.Key {
-	if key == nil {
-		key = fdbx.Bytes2Key(nil)
-	}
-	return key.LPart(byte(tbid>>8), byte(tbid), nsBLOB)
+func WrapBlobKey(tbid uint16, key fdb.Key) fdb.Key {
+	return fdbx.AppendLeft(key, byte(tbid>>8), byte(tbid), nsBLOB)
 }
 
 // UnwrapBlobKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
-func UnwrapBlobKey(key fdbx.Key) fdbx.Key {
-	if key != nil {
-		return key.LSkip(3)
-	}
-	return nil
+//goland:noinspection GoUnusedExportedFunction
+func UnwrapBlobKey(key fdb.Key) fdb.Key {
+	return fdbx.SkipLeft(key, 3)
 }
 
 // WrapIndexKey - обертка для получения системного ключа из пользовательского, при сохранении
-func WrapIndexKey(tbid, idxid uint16, key fdbx.Key) fdbx.Key {
-	if key == nil {
-		key = fdbx.Bytes2Key(nil)
-	}
-	return key.LPart(byte(tbid>>8), byte(tbid), nsIndex, byte(idxid>>8), byte(idxid))
+func WrapIndexKey(tbid, idxid uint16, key fdb.Key) fdb.Key {
+	return fdbx.AppendLeft(key, byte(tbid>>8), byte(tbid), nsIndex, byte(idxid>>8), byte(idxid))
 }
 
 // UnwrapIndexKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
-func UnwrapIndexKey(key fdbx.Key) fdbx.Key {
-	if key != nil {
-		return key.LSkip(5)
-	}
-	return nil
+func UnwrapIndexKey(key fdb.Key) fdb.Key {
+	return fdbx.SkipLeft(key, 5)
 }
 
 // WrapQueueKey - обертка для получения системного ключа из пользовательского, при сохранении
-func WrapQueueKey(tbid, qid uint16, pref []byte, flag byte, key fdbx.Key) fdbx.Key {
-	if key == nil {
-		key = fdbx.Bytes2Key(nil)
-	}
-
-	key = key.LPart(flag)
+func WrapQueueKey(tbid, qid uint16, pref []byte, flag byte, key fdb.Key) fdb.Key {
+	res := fdbx.AppendLeft(key, flag)
 
 	if len(pref) > 0 {
-		key = key.LPart(pref...)
+		res = fdbx.AppendLeft(res, pref...)
 	}
 
-	return key.LPart(byte(tbid>>8), byte(tbid), nsQueue, byte(qid>>8), byte(qid))
+	return fdbx.AppendLeft(res, byte(tbid>>8), byte(tbid), nsQueue, byte(qid>>8), byte(qid))
 }
 
 // UnwrapQueueKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
-func UnwrapQueueKey(pref []byte, key fdbx.Key) fdbx.Key {
-	if key != nil {
-		// основные байты (5) + префикс + флаг (1) + метка времени (8)
-		return key.LSkip(5 + uint16(len(pref)) + 1 + 8)
-	}
-	return nil
+func UnwrapQueueKey(pref []byte, key fdb.Key) fdb.Key {
+	// основные байты (5) + префикс + флаг (1) + метка времени (8)
+	return fdbx.SkipLeft(key, 5+len(pref)+1+8)
 }
 
 // WrapQueryKey - обертка для получения системного ключа из пользовательского, при сохранении
-func WrapQueryKey(tbid uint16, key fdbx.Key) fdbx.Key {
-	if key == nil {
-		key = fdbx.Bytes2Key(nil)
-	}
-	return key.LPart(byte(tbid>>8), byte(tbid), nsQuery)
+func WrapQueryKey(tbid uint16, key fdb.Key) fdb.Key {
+	return fdbx.AppendLeft(key, byte(tbid>>8), byte(tbid), nsQuery)
 }
 
 // UnwrapQueryKey - обертка ключа для получения пользовательского ключа из системного, при загрузке
-func UnwrapQueryKey(key fdbx.Key) fdbx.Key {
-	if key != nil {
-		return key.LSkip(3)
-	}
-	return nil
+//goland:noinspection GoUnusedExportedFunction
+func UnwrapQueryKey(key fdb.Key) fdb.Key {
+	return fdbx.SkipLeft(key, 3)
 }
 
 // Ошибки модуля
@@ -217,7 +194,6 @@ var (
 	ErrLost      = errx.New("Ошибка получения неподтвержденных задач")
 	ErrStat      = errx.New("Ошибка получения статистики задач")
 	ErrTask      = errx.New("Ошибка получения метаданных задачи")
-	ErrWatch     = errx.New("Ошибка отслеживания результата задачи")
 	ErrAgg       = errx.New("Ошибка агрегации объектов коллекции")
 	ErrSelect    = errx.New("Ошибка загрузки объектов коллекции")
 	ErrDelete    = errx.New("Ошибка удаления объектов коллекции")

@@ -1,29 +1,15 @@
 package mvcc
 
 import (
-	"github.com/shestakovda/fdbx/v2"
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+
 	"github.com/shestakovda/fdbx/v2/models"
 )
 
-type usrPair struct {
-	orig fdbx.Pair
-}
-
-func (p usrPair) Key() fdbx.Key {
-	if p.orig == nil {
-		return fdbx.Bytes2Key(nil)
+func usrPair(orig fdb.KeyValue) fdb.KeyValue {
+	orig.Key = UnwrapKey(orig.Key)
+	if len(orig.Value) > 0 {
+		orig.Value = models.GetRootAsRow(orig.Value, 0).DataBytes()
 	}
-	return UnwrapKey(p.orig.Key())
+	return orig
 }
-
-func (p usrPair) Value() []byte {
-	if p.orig == nil {
-		return nil
-	}
-	if buf := p.orig.Value(); buf != nil {
-		return models.GetRootAsRow(buf, 0).DataBytes()
-	}
-	return nil
-}
-
-func (p usrPair) Unwrap() fdbx.Pair { return p.orig }

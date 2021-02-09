@@ -3,7 +3,6 @@ package orm
 import (
 	"context"
 
-	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/mvcc"
 )
 
@@ -17,8 +16,8 @@ type fullSelector struct {
 	tx mvcc.Tx
 }
 
-func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-chan fdbx.Pair, <-chan error) {
-	list := make(chan fdbx.Pair)
+func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<-chan Selected, <-chan error) {
+	list := make(chan Selected)
 	errs := make(chan error, 1)
 
 	go func() {
@@ -30,7 +29,7 @@ func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<
 		opts := getOpts(args)
 		fkey := WrapTableKey(tbl.ID(), opts.lastkey)
 		lkey := WrapTableKey(tbl.ID(), nil)
-		skip := len(opts.lastkey.Bytes()) > 0
+		skip := len(opts.lastkey) > 0
 
 		if opts.reverse {
 			reqs = []mvcc.Option{mvcc.From(lkey), mvcc.Last(fkey), mvcc.Reverse()}
@@ -51,7 +50,7 @@ func (s *fullSelector) Select(ctx context.Context, tbl Table, args ...Option) (<
 			}
 
 			select {
-			case list <- fdbx.WrapPair(UnwrapTableKey(pair.Key()), pair):
+			case list <- Selected{UnwrapTableKey(pair.Key), pair}:
 			case <-wctx.Done():
 				return
 			}

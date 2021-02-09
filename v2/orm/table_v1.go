@@ -6,8 +6,10 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
+
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/shestakovda/fdbx/v2/models"
@@ -32,20 +34,20 @@ func (t *v1Table) Select(tx mvcc.Tx) Query { return NewQuery(t, tx) }
 
 func (t *v1Table) Cursor(tx mvcc.Tx, id string) (Query, error) { return loadQuery(t, tx, id) }
 
-func (t *v1Table) Insert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
+func (t *v1Table) Insert(tx mvcc.Tx, pairs ...fdb.KeyValue) (err error) {
 	return t.upsert(tx, true, pairs...)
 }
 
-func (t *v1Table) Upsert(tx mvcc.Tx, pairs ...fdbx.Pair) (err error) {
+func (t *v1Table) Upsert(tx mvcc.Tx, pairs ...fdb.KeyValue) (err error) {
 	return t.upsert(tx, false, pairs...)
 }
 
-func (t *v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
+func (t *v1Table) Delete(tx mvcc.Tx, keys ...fdb.Key) (err error) {
 	if len(keys) == 0 {
 		return nil
 	}
 
-	cp := make([]fdbx.Key, len(keys))
+	cp := make([]fdb.Key, len(keys))
 	for i := range keys {
 		cp[i] = WrapTableKey(t.id, keys[i])
 	}
@@ -57,12 +59,12 @@ func (t *v1Table) Delete(tx mvcc.Tx, keys ...fdbx.Key) (err error) {
 	return nil
 }
 
-func (t *v1Table) upsert(tx mvcc.Tx, unique bool, pairs ...fdbx.Pair) (err error) {
+func (t *v1Table) upsert(tx mvcc.Tx, unique bool, pairs ...fdb.KeyValue) (err error) {
 	if len(pairs) == 0 {
 		return nil
 	}
 
-	cp := make([]fdbx.Pair, len(pairs))
+	cp := make([]fdb.KeyValue, len(pairs))
 	for i := range pairs {
 		if cp[i], err = newSysPair(tx, t.id, pairs[i]); err != nil {
 			return ErrUpsert.WithReason(err)
@@ -85,16 +87,22 @@ func (t *v1Table) upsert(tx mvcc.Tx, unique bool, pairs ...fdbx.Pair) (err error
 	return nil
 }
 
-func (t *v1Table) onInsert(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) {
+func (t *v1Table) onInsert(tx mvcc.Tx, _ db.Writer, pair fdb.KeyValue) (err error) {
 	if len(t.options.batchidx) == 0 {
 		return nil
 	}
 
-	pair = pair.Unwrap()
-	pval := pair.Value()
-	pkey := pair.Key().Bytes()
-	rows := make([]fdbx.Pair, 0, 32)
-	var dict map[uint16][]fdbx.Key
+	var usr fdb.KeyValue
+
+	// Здесь нам придется обернуть еще значение, которое возвращается, потому что оно не обработано уровнем ниже
+	if usr, err = newUsrPair(tx, t.id, pair); err != nil {
+		return ErrIdxUpsert.WithReason(err)
+	}
+
+	pval := usr.Value
+	pkey := usr.Key
+	rows := make([]fdb.KeyValue, 0, 32)
+	var dict map[uint16][]fdb.Key
 
 	for k := range t.options.batchidx {
 		if dict, err = t.options.batchidx[k](pval); err != nil {
@@ -107,10 +115,13 @@ func (t *v1Table) onInsert(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) 
 
 		for idx, keys := range dict {
 			for i := range keys {
-				if keys[i] == nil || len(keys[i].Bytes()) == 0 {
+				if len(keys[i]) == 0 {
 					continue
 				}
-				rows = append(rows, fdbx.NewPair(WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...), pkey))
+				rows = append(rows, fdb.KeyValue{
+					Key:   fdbx.AppendRight(WrapIndexKey(t.id, idx, keys[i]), pkey...),
+					Value: pkey,
+				})
 			}
 		}
 	}
@@ -122,14 +133,14 @@ func (t *v1Table) onInsert(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) 
 	return nil
 }
 
-func (t *v1Table) onUpdate(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) {
+func (t *v1Table) onUpdate(_ mvcc.Tx, _ db.Writer, pair fdb.KeyValue) (err error) {
 	return ErrDuplicate.WithDebug(errx.Debug{
-		"key": pair.Key().Printable(),
+		"key": pair.Key,
 	})
 }
 
-func (t *v1Table) onDelete(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) {
-	var usr fdbx.Pair
+func (t *v1Table) onDelete(tx mvcc.Tx, _ db.Writer, pair fdb.KeyValue) (err error) {
+	var usr fdb.KeyValue
 
 	if len(t.options.batchidx) == 0 {
 		return nil
@@ -140,10 +151,10 @@ func (t *v1Table) onDelete(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) 
 		return ErrIdxDelete.WithReason(err)
 	}
 
-	uval := usr.Value()
-	rows := make([]fdbx.Key, 0, 32)
-	pkey := UnwrapTableKey(pair.Key()).Bytes()
-	var dict map[uint16][]fdbx.Key
+	uval := usr.Value
+	rows := make([]fdb.Key, 0, 32)
+	pkey := UnwrapTableKey(pair.Key)
+	var dict map[uint16][]fdb.Key
 
 	for k := range t.options.batchidx {
 		if dict, err = t.options.batchidx[k](uval); err != nil {
@@ -156,10 +167,10 @@ func (t *v1Table) onDelete(tx mvcc.Tx, w db.Writer, pair fdbx.Pair) (err error) 
 
 		for idx, keys := range dict {
 			for i := range keys {
-				if keys[i] == nil || len(keys[i].Bytes()) == 0 {
+				if len(keys[i]) == 0 {
 					continue
 				}
-				rows = append(rows, WrapIndexKey(t.id, idx, keys[i]).RPart(pkey...))
+				rows = append(rows, fdbx.AppendRight(WrapIndexKey(t.id, idx, keys[i]), pkey...))
 			}
 		}
 	}
@@ -177,7 +188,7 @@ func (t *v1Table) Autovacuum(ctx context.Context, cn db.Connection, args ...Opti
 	var timer *time.Timer
 
 	binary.BigEndian.PutUint16(tbid[:], t.id)
-	tkey := fdbx.Bytes2Key(tbid[:]).Printable()
+	tkey := fdb.Key(tbid[:]).String()
 	opts := getOpts(args)
 
 	defer func() {
@@ -245,12 +256,12 @@ func (t *v1Table) Vacuum(dbc db.Connection) error {
 		}
 
 		// Отдельно очистка всех индексов
-		if err = tx.Vacuum(WrapIndexKey(t.id, 0, nil).RSkip(2)); err != nil {
+		if err = tx.Vacuum(fdbx.SkipRight(WrapIndexKey(t.id, 0, nil), 2)); err != nil {
 			return
 		}
 
 		// Отдельно очистка всех очередей
-		if err = tx.Vacuum(WrapQueueKey(t.id, 0, nil, 0, nil).RSkip(3)); err != nil {
+		if err = tx.Vacuum(fdbx.SkipRight(WrapQueueKey(t.id, 0, nil, 0, nil), 3)); err != nil {
 			return
 		}
 
@@ -266,10 +277,10 @@ func (t *v1Table) Vacuum(dbc db.Connection) error {
 	return nil
 }
 
-func (t *v1Table) onVacuum(tx mvcc.Tx, w db.Writer, p fdbx.Pair) (err error) {
+func (t *v1Table) onVacuum(tx mvcc.Tx, w db.Writer, p fdb.KeyValue) (err error) {
 	var mod models.ValueT
 
-	val := p.Value()
+	val := p.Value
 
 	if len(val) == 0 {
 		return nil
@@ -279,7 +290,7 @@ func (t *v1Table) onVacuum(tx mvcc.Tx, w db.Writer, p fdbx.Pair) (err error) {
 
 	// Если значение лежит в BLOB, надо удалить
 	if mod.Blob {
-		if err = tx.DropBLOB(WrapBlobKey(t.id, fdbx.Bytes2Key(mod.Data)), mvcc.Writer(w)); err != nil {
+		if err = tx.DropBLOB(WrapBlobKey(t.id, mod.Data), mvcc.Writer(w)); err != nil {
 			return ErrVacuum.WithReason(err)
 		}
 	}

@@ -9,15 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/golang/glog"
 	"github.com/shestakovda/errx"
-	"github.com/shestakovda/fdbx/v2"
-	"github.com/shestakovda/fdbx/v2/db"
-	"github.com/shestakovda/fdbx/v2/mvcc"
-	"github.com/shestakovda/fdbx/v2/orm"
 	"github.com/shestakovda/typex"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+
+	"github.com/shestakovda/fdbx/v2/db"
+	"github.com/shestakovda/fdbx/v2/mvcc"
+	"github.com/shestakovda/fdbx/v2/orm"
 )
 
 const TestDB byte = 0x10
@@ -42,7 +43,7 @@ type ORMSuite struct {
 func (s *ORMSuite) SetupTest() {
 	var err error
 
-	s.cn, err = db.ConnectV610(TestDB)
+	s.cn, err = db.Connect(TestDB)
 	s.Require().NoError(err)
 	s.Require().NoError(s.cn.Clear())
 
@@ -51,30 +52,27 @@ func (s *ORMSuite) SetupTest() {
 	s.idx = make([]string, 0, 8)
 	s.tbl = orm.NewTable(
 		TestTable,
-		orm.Index(TestIndex, func(v []byte) (k fdbx.Key, e error) {
+		orm.Index(TestIndex, func(v []byte) (k fdb.Key, e error) {
 			if len(v) < 4 {
 				return nil, nil
 			}
 
-			k = fdbx.Bytes2Key(v[:4])
+			k = v[:4]
 			s.idx = append(s.idx, k.String())
 			return k, nil
 		}),
-		orm.MultiIndex(TestIndex2, func(v []byte) ([]fdbx.Key, error) {
+		orm.MultiIndex(TestIndex2, func(v []byte) ([]fdb.Key, error) {
 			if len(v) < 4 {
 				return nil, nil
 			}
 
-			return []fdbx.Key{
-				fdbx.Bytes2Key(v[0:2]),
-				fdbx.Bytes2Key(v[2:4]),
-			}, nil
+			return []fdb.Key{v[0:2], v[2:4]}, nil
 		}),
 	)
 }
 
 func (s *ORMSuite) TearDownTest() {
-	s.NoError(s.tx.Cancel())
+	s.tx.Cancel()
 }
 
 func (s *ORMSuite) checkVacuum(ignore map[string]bool) {
@@ -83,11 +81,11 @@ func (s *ORMSuite) checkVacuum(ignore map[string]bool) {
 	// В базе ничего не должно оставаться
 	s.Require().NoError(s.cn.Read(func(r db.Reader) error {
 		fail := false
-		nkey := fdbx.Bytes2Key([]byte{0x00})
-		list := r.List(nkey, nkey, 1000, false, false).Resolve()
+		nkey := fdb.Key{0x00}
+		list := r.List(nkey, nkey, 1000, false, false).GetSliceOrPanic()
 
 		for i := range list {
-			if pkey := list[i].Key().Printable(); !ignore[pkey] {
+			if pkey := list[i].Key[1:].String(); !ignore[pkey] {
 				glog.Errorf(">> %s", pkey)
 				fail = true
 			}
@@ -113,22 +111,22 @@ func (s *ORMSuite) TestWorkflow() {
 	s.Require().NoError(err)
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdbx.NewPair(fdbx.String2Key("id1"), baseMsg),
-		fdbx.NewPair(fdbx.String2Key("id2"), longMsg),
-		fdbx.NewPair(fdbx.String2Key("id3"), hugeMsg),
+		fdb.KeyValue{Key: fdb.Key("id1"), Value: baseMsg},
+		fdb.KeyValue{Key: fdb.Key("id2"), Value: longMsg},
+		fdb.KeyValue{Key: fdb.Key("id3"), Value: hugeMsg},
 	))
 
 	if list, err := s.tbl.Select(s.tx).All(); s.NoError(err) {
 		s.Len(list, 3)
 
-		s.Equal("id1", list[0].Key().String())
-		s.Equal(baseMsg, list[0].Value())
+		s.Equal("id1", list[0].Key.String())
+		s.Equal(baseMsg, list[0].Value)
 
-		s.Equal("id2", list[1].Key().String())
-		s.Equal(longMsg, list[1].Value())
+		s.Equal("id2", list[1].Key.String())
+		s.Equal(longMsg, list[1].Value)
 
-		s.Equal("id3", list[2].Key().String())
-		s.Equal(hugeMsg, list[2].Value())
+		s.Equal("id3", list[2].Key.String())
+		s.Equal(hugeMsg, list[2].Value)
 	}
 
 	s.Require().NoError(s.tbl.Select(s.tx).Delete())
@@ -145,9 +143,9 @@ func (s *ORMSuite) TestWorkflow() {
 
 func (s *ORMSuite) TestCount() {
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdbx.NewPair(fdbx.String2Key("id1"), []byte("msg1")),
-		fdbx.NewPair(fdbx.String2Key("id2"), []byte("msg2")),
-		fdbx.NewPair(fdbx.String2Key("id3"), []byte("msg3")),
+		fdb.KeyValue{Key: fdb.Key("id1"), Value: []byte("msg1")},
+		fdb.KeyValue{Key: fdb.Key("id2"), Value: []byte("msg2")},
+		fdb.KeyValue{Key: fdb.Key("id3"), Value: []byte("msg3")},
 	))
 
 	var cnt uint64
@@ -160,29 +158,29 @@ func (s *ORMSuite) TestCount() {
 }
 
 func (s *ORMSuite) TestByID() {
-	id1 := fdbx.String2Key("id1")
-	id2 := fdbx.String2Key("id2")
-	id3 := fdbx.String2Key("id3")
-	id4 := fdbx.String2Key("id4")
+	id1 := fdb.Key("id1")
+	id2 := fdb.Key("id2")
+	id3 := fdb.Key("id3")
+	id4 := fdb.Key("id4")
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdbx.NewPair(id1, []byte("msg1")),
-		fdbx.NewPair(id2, []byte("msg2")),
-		fdbx.NewPair(id3, []byte("msg3")),
+		fdb.KeyValue{Key: id1, Value: []byte("msg1")},
+		fdb.KeyValue{Key: id2, Value: []byte("msg2")},
+		fdb.KeyValue{Key: id3, Value: []byte("msg3")},
 	))
 
-	if err := s.tbl.Insert(s.tx, fdbx.NewPair(id2, []byte("msg4"))); s.Error(err) {
+	if err := s.tbl.Insert(s.tx, fdb.KeyValue{Key: id2, Value: []byte("msg4")}); s.Error(err) {
 		s.True(errx.Is(err, orm.ErrDuplicate))
 	}
 
 	if list, err := s.tbl.Select(s.tx).ByID(id1, id3).All(); s.NoError(err) {
 		s.Len(list, 2)
 
-		s.Equal(id1.String(), list[0].Key().String())
-		s.Equal("msg1", string(list[0].Value()))
+		s.Equal(id1.String(), list[0].Key.String())
+		s.Equal("msg1", string(list[0].Value))
 
-		s.Equal(id3.String(), list[1].Key().String())
-		s.Equal("msg3", string(list[1].Value()))
+		s.Equal(id3.String(), list[1].Key.String())
+		s.Equal("msg3", string(list[1].Value))
 	}
 
 	if list, err := s.tbl.Select(s.tx).ByID(id2, id4).All(); s.Error(err) {
@@ -194,13 +192,13 @@ func (s *ORMSuite) TestByID() {
 	if list, err := s.tbl.Select(s.tx).PossibleByID(id4, id2).All(); s.NoError(err) {
 		s.Len(list, 1)
 
-		s.Equal(id2.String(), list[0].Key().String())
-		s.Equal("msg2", string(list[0].Value()))
+		s.Equal(id2.String(), list[0].Key.String())
+		s.Equal("msg2", string(list[0].Value))
 	}
 
 	if pair, err := s.tbl.Select(s.tx).PossibleByID(id4, id2, id3).First(); s.NoError(err) {
-		s.Equal(id2.String(), pair.Key().String())
-		s.Equal("msg2", string(pair.Value()))
+		s.Equal(id2.String(), pair.Key.String())
+		s.Equal("msg2", string(pair.Value))
 	}
 
 	// Удаляем строки, чтобы автовакуум их собрал
@@ -211,22 +209,22 @@ func (s *ORMSuite) TestByID() {
 }
 
 func (s *ORMSuite) TestUndo() {
-	id1 := fdbx.String2Key("id1")
-	id2 := fdbx.String2Key("id2")
-	id3 := fdbx.String2Key("id3")
+	id1 := fdb.Key("id1")
+	id2 := fdb.Key("id2")
+	id3 := fdb.Key("id3")
 
 	q := orm.NewQueue(TestQueue, s.tbl, orm.Refresh(10*time.Millisecond), orm.Prefix([]byte("lox")))
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdbx.NewPair(id1, []byte("msg1")),
-		fdbx.NewPair(id2, []byte("msg2")),
-		fdbx.NewPair(id3, []byte("msg3")),
+		fdb.KeyValue{Key: id1, Value: []byte("msg1")},
+		fdb.KeyValue{Key: id2, Value: []byte("msg2")},
+		fdb.KeyValue{Key: id3, Value: []byte("msg3")},
 	))
 	s.Require().NoError(s.tx.Commit())
 
 	// Публикация задач по очереди (и нарочно одну и ту же несколько раз)
 	tx := mvcc.Begin(s.cn)
-	s.Require().NoError(q.PubList(tx, []fdbx.Key{id1, id1, id2, id2, id3}, orm.Delay(time.Millisecond)))
+	s.Require().NoError(q.PubList(tx, []fdb.Key{id1, id1, id2, id2, id3}, orm.Delay(time.Millisecond)))
 	s.Require().NoError(tx.Commit())
 
 	// Теперь делаем отмену для пары задач
@@ -251,17 +249,17 @@ func (s *ORMSuite) TestUndo() {
 }
 
 func (s *ORMSuite) TestQueue() {
-	id1 := fdbx.String2Key("id1")
-	id2 := fdbx.String2Key("id2")
-	id3 := fdbx.String2Key("id3")
-	id4 := fdbx.String2Key("id4")
+	id1 := fdb.Key("id1")
+	id2 := fdb.Key("id2")
+	id3 := fdb.Key("id3")
+	id4 := fdb.Key("id4")
 
 	q := orm.NewQueue(TestQueue, s.tbl, orm.Refresh(10*time.Millisecond), orm.Prefix([]byte("lox")))
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdbx.NewPair(id1, []byte("msg1")),
-		fdbx.NewPair(id2, []byte("msg2")),
-		fdbx.NewPair(id3, []byte("msg3")),
+		fdb.KeyValue{Key: id1, Value: []byte("msg1")},
+		fdb.KeyValue{Key: id2, Value: []byte("msg2")},
+		fdb.KeyValue{Key: id3, Value: []byte("msg3")},
 	))
 	if wait, work, err := q.Stat(s.tx); s.NoError(err) {
 		s.Equal(int64(0), wait)
@@ -305,7 +303,7 @@ func (s *ORMSuite) TestQueue() {
 
 	// Публикация задач по очереди (и нарочно одну и ту же два раза)
 	tx = mvcc.Begin(s.cn)
-	s.Require().NoError(q.PubList(tx, []fdbx.Key{id1, id2, id2}, orm.Delay(time.Millisecond)))
+	s.Require().NoError(q.PubList(tx, []fdb.Key{id1, id2, id2}, orm.Delay(time.Millisecond)))
 	s.Require().NoError(tx.Commit())
 
 	tx = mvcc.Begin(s.cn)
@@ -412,84 +410,82 @@ func (s *ORMSuite) TestQueue() {
 }
 
 func (s *ORMSuite) TestWhereLimit() {
-	const recCount = 3
-
-	id1 := fdbx.String2Key("id1")
-	id2 := fdbx.String2Key("id2")
-	id3 := fdbx.String2Key("id3")
-	id4 := fdbx.String2Key("id4")
-	id5 := fdbx.String2Key("id5")
-	id6 := fdbx.String2Key("id6")
+	id1 := fdb.Key("id1")
+	id2 := fdb.Key("id2")
+	id3 := fdb.Key("id3")
+	id4 := fdb.Key("id4")
+	id5 := fdb.Key("id5")
+	id6 := fdb.Key("id6")
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdbx.NewPair(id1, []byte("msg1 true")),
-		fdbx.NewPair(id2, []byte("txt2 false")),
-		fdbx.NewPair(id3, []byte("msg3 false")),
-		fdbx.NewPair(id4, []byte("msg4 true")),
-		fdbx.NewPair(id5, []byte("txt5 false")),
-		fdbx.NewPair(id6, []byte("txt6 true")),
+		fdb.KeyValue{Key: id1, Value: []byte("msg1 true")},
+		fdb.KeyValue{Key: id2, Value: []byte("txt2 false")},
+		fdb.KeyValue{Key: id3, Value: []byte("msg3 false")},
+		fdb.KeyValue{Key: id4, Value: []byte("msg4 true")},
+		fdb.KeyValue{Key: id5, Value: []byte("txt5 false")},
+		fdb.KeyValue{Key: id6, Value: []byte("txt6 true")},
 	))
 
-	f1 := func(p fdbx.Pair) (need bool, err error) {
-		return strings.HasSuffix(string(p.Value()), "true"), nil
+	f1 := func(p fdb.KeyValue) (need bool, err error) {
+		return strings.HasSuffix(string(p.Value), "true"), nil
 	}
 
-	f2 := func(p fdbx.Pair) (need bool, err error) {
-		return strings.HasPrefix(string(p.Value()), "msg"), nil
+	f2 := func(p fdb.KeyValue) (need bool, err error) {
+		return strings.HasPrefix(string(p.Value), "msg"), nil
 	}
 
 	if list, err := s.tbl.Select(s.tx).Where(f1).Where(f2).All(); s.NoError(err) && s.Len(list, 2) {
-		s.Equal("id1", list[0].Key().String())
-		s.Equal("msg1 true", string(list[0].Value()))
+		s.Equal("id1", list[0].Key.String())
+		s.Equal("msg1 true", string(list[0].Value))
 
-		s.Equal("id4", list[1].Key().String())
-		s.Equal("msg4 true", string(list[1].Value()))
+		s.Equal("id4", list[1].Key.String())
+		s.Equal("msg4 true", string(list[1].Value))
 	}
 
 	if list, err := s.tbl.Select(s.tx).Where(f2).Limit(2).Reverse().All(); s.NoError(err) && s.Len(list, 2) {
-		s.Equal("id4", list[0].Key().String())
-		s.Equal("msg4 true", string(list[0].Value()))
+		s.Equal("id4", list[0].Key.String())
+		s.Equal("msg4 true", string(list[0].Value))
 
-		s.Equal("id3", list[1].Key().String())
-		s.Equal("msg3 false", string(list[1].Value()))
+		s.Equal("id3", list[1].Key.String())
+		s.Equal("msg3 false", string(list[1].Value))
 	}
 }
 
 func (s *ORMSuite) TestMultiIndex() {
-	id1 := fdbx.String2Key("id1")
-	id2 := fdbx.String2Key("id2")
-	id3 := fdbx.String2Key("id3")
+	id1 := fdb.Key("id1")
+	id2 := fdb.Key("id2")
+	id3 := fdb.Key("id3")
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdbx.NewPair(id1, []byte("message")),
-		fdbx.NewPair(id2, []byte("text")),
-		fdbx.NewPair(id3, []byte("mussage")),
+		fdb.KeyValue{Key: id1, Value: []byte("message")},
+		fdb.KeyValue{Key: id2, Value: []byte("text")},
+		fdb.KeyValue{Key: id3, Value: []byte("mussage")},
 	))
 	s.Require().NoError(s.tx.Commit())
 
 	tx := mvcc.Begin(s.cn)
 	defer tx.Cancel()
 
-	query := s.tbl.Select(tx).ByIndex(TestIndex2, fdbx.String2Key("ss"))
+	query := s.tbl.Select(tx).ByIndex(TestIndex2, fdb.Key("ss"))
 
 	if list, err := query.All(); s.NoError(err) && s.Len(list, 2) {
-		s.Equal("id1", list[0].Key().String())
-		s.Equal("message", string(list[0].Value()))
+		s.Equal("id1", list[0].Key.String())
+		s.Equal("message", string(list[0].Value))
 
-		s.Equal("id3", list[1].Key().String())
-		s.Equal("mussage", string(list[1].Value()))
+		s.Equal("id3", list[1].Key.String())
+		s.Equal("mussage", string(list[1].Value))
 	}
 }
 
 func (s *ORMSuite) TestSubList() {
-	id1 := fdbx.String2Key("id1")
-	id2 := fdbx.String2Key("id2")
-	id3 := fdbx.String2Key("id3")
+	id1 := fdb.Key("id1")
+	id2 := fdb.Key("id2")
+	id3 := fdb.Key("id3")
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdbx.NewPair(id1, []byte("message")),
-		fdbx.NewPair(id2, []byte("text")),
-		fdbx.NewPair(id3, []byte("mussage")),
+		fdb.KeyValue{Key: id1, Value: []byte("message")},
+		fdb.KeyValue{Key: id2, Value: []byte("text")},
+		fdb.KeyValue{Key: id3, Value: []byte("mussage")},
 	))
 	s.Require().NoError(s.tx.Commit())
 
@@ -497,7 +493,7 @@ func (s *ORMSuite) TestSubList() {
 
 	// Публикация задач по очереди (и нарочно одну и ту же несколько раз)
 	tx := mvcc.Begin(s.cn)
-	s.Require().NoError(q.PubList(tx, []fdbx.Key{id1, id1, id2, id2, id3}, orm.Delay(time.Millisecond)))
+	s.Require().NoError(q.PubList(tx, []fdb.Key{id1, id1, id2, id2, id3}, orm.Delay(time.Millisecond)))
 	s.Require().NoError(tx.Commit())
 
 	// Запрашиваем несколько задач, с ограничением
@@ -533,22 +529,20 @@ func (s *ORMSuite) TestSubList() {
 }
 
 func (s *ORMSuite) TestCursor() {
-	const recCount = 3
-
-	id1 := fdbx.String2Key("id1")
-	id2 := fdbx.String2Key("id2")
-	id3 := fdbx.String2Key("id3")
-	id4 := fdbx.String2Key("id4")
-	id5 := fdbx.String2Key("id5")
-	id6 := fdbx.String2Key("id6")
+	id1 := fdb.Key("id1")
+	id2 := fdb.Key("id2")
+	id3 := fdb.Key("id3")
+	id4 := fdb.Key("id4")
+	id5 := fdb.Key("id5")
+	id6 := fdb.Key("id6")
 
 	s.Require().NoError(s.tbl.Upsert(s.tx,
-		fdbx.NewPair(id1, []byte("msg1")),
-		fdbx.NewPair(id2, []byte("txt2")),
-		fdbx.NewPair(id3, []byte("msg3")),
-		fdbx.NewPair(id4, []byte("txt4")),
-		fdbx.NewPair(id5, []byte("msg5")),
-		fdbx.NewPair(id6, []byte("msg6")),
+		fdb.KeyValue{Key: id1, Value: []byte("msg1")},
+		fdb.KeyValue{Key: id2, Value: []byte("txt2")},
+		fdb.KeyValue{Key: id3, Value: []byte("msg3")},
+		fdb.KeyValue{Key: id4, Value: []byte("txt4")},
+		fdb.KeyValue{Key: id5, Value: []byte("msg5")},
+		fdb.KeyValue{Key: id6, Value: []byte("msg6")},
 	))
 	s.Require().NoError(s.tx.Commit())
 
@@ -556,14 +550,14 @@ func (s *ORMSuite) TestCursor() {
 
 	tx := mvcc.Begin(s.cn)
 
-	query := s.tbl.Select(tx).ByIndex(TestIndex, fdbx.String2Key("msg"))
+	query := s.tbl.Select(tx).ByIndex(TestIndex, fdb.Key("msg"))
 
 	if list, err := query.Page(2).Next(); s.NoError(err) && s.Len(list, 2) {
-		s.Equal("id1", list[0].Key().String())
-		s.Equal("msg1", string(list[0].Value()))
+		s.Equal("id1", list[0].Key.String())
+		s.Equal("msg1", string(list[0].Value))
 
-		s.Equal("id3", list[1].Key().String())
-		s.Equal("msg3", string(list[1].Value()))
+		s.Equal("id3", list[1].Key.String())
+		s.Equal("msg3", string(list[1].Value))
 	}
 
 	qid, err := query.Save()
@@ -576,23 +570,23 @@ func (s *ORMSuite) TestCursor() {
 	s.Require().NoError(err)
 
 	if list, err := query.Next(); s.NoError(err) && s.Len(list, 2) {
-		s.Equal("id5", list[0].Key().String())
-		s.Equal("msg5", string(list[0].Value()))
+		s.Equal("id5", list[0].Key.String())
+		s.Equal("msg5", string(list[0].Value))
 
-		s.Equal("id6", list[1].Key().String())
-		s.Equal("msg6", string(list[1].Value()))
+		s.Equal("id6", list[1].Key.String())
+		s.Equal("msg6", string(list[1].Value))
 	}
 
 	// Проверка курсора по индексу с реверсом
 
-	query = s.tbl.Select(tx).ByIndex(TestIndex, fdbx.String2Key("msg")).Reverse()
+	query = s.tbl.Select(tx).ByIndex(TestIndex, fdb.Key("msg")).Reverse()
 
 	if list, err := query.Page(2).Next(); s.NoError(err) && s.Len(list, 2) {
-		s.Equal("id6", list[0].Key().String())
-		s.Equal("msg6", string(list[0].Value()))
+		s.Equal("id6", list[0].Key.String())
+		s.Equal("msg6", string(list[0].Value))
 
-		s.Equal("id5", list[1].Key().String())
-		s.Equal("msg5", string(list[1].Value()))
+		s.Equal("id5", list[1].Key.String())
+		s.Equal("msg5", string(list[1].Value))
 	}
 
 	qid, err = query.Save()
@@ -605,11 +599,11 @@ func (s *ORMSuite) TestCursor() {
 	s.Require().NoError(err)
 
 	if list, err := query.Next(); s.NoError(err) && s.Len(list, 2) {
-		s.Equal("id3", list[0].Key().String())
-		s.Equal("msg3", string(list[0].Value()))
+		s.Equal("id3", list[0].Key.String())
+		s.Equal("msg3", string(list[0].Value))
 
-		s.Equal("id1", list[1].Key().String())
-		s.Equal("msg1", string(list[1].Value()))
+		s.Equal("id1", list[1].Key.String())
+		s.Equal("msg1", string(list[1].Value))
 	}
 
 	// Проверка курсора по коллекции прямо
@@ -619,11 +613,11 @@ func (s *ORMSuite) TestCursor() {
 	query = s.tbl.Select(tx)
 
 	if list, err := query.Page(2).Next(); s.NoError(err) && s.Len(list, 2) {
-		s.Equal("id1", list[0].Key().String())
-		s.Equal("msg1", string(list[0].Value()))
+		s.Equal("id1", list[0].Key.String())
+		s.Equal("msg1", string(list[0].Value))
 
-		s.Equal("id2", list[1].Key().String())
-		s.Equal("txt2", string(list[1].Value()))
+		s.Equal("id2", list[1].Key.String())
+		s.Equal("txt2", string(list[1].Value))
 	}
 
 	qid, err = query.Save()
@@ -636,22 +630,22 @@ func (s *ORMSuite) TestCursor() {
 	s.Require().NoError(err)
 
 	if list, err := query.Next(); s.NoError(err) && s.Len(list, 2) {
-		s.Equal("id3", list[0].Key().String())
-		s.Equal("msg3", string(list[0].Value()))
+		s.Equal("id3", list[0].Key.String())
+		s.Equal("msg3", string(list[0].Value))
 
-		s.Equal("id4", list[1].Key().String())
-		s.Equal("txt4", string(list[1].Value()))
+		s.Equal("id4", list[1].Key.String())
+		s.Equal("txt4", string(list[1].Value))
 	}
 
 	// Проверка курсора по коллекции с реверсом
 	query = s.tbl.Select(tx).Reverse()
 
 	if list, err := query.Page(2).Next(); s.NoError(err) && s.Len(list, 2) {
-		s.Equal("id6", list[0].Key().String())
-		s.Equal("msg6", string(list[0].Value()))
+		s.Equal("id6", list[0].Key.String())
+		s.Equal("msg6", string(list[0].Value))
 
-		s.Equal("id5", list[1].Key().String())
-		s.Equal("msg5", string(list[1].Value()))
+		s.Equal("id5", list[1].Key.String())
+		s.Equal("msg5", string(list[1].Value))
 	}
 
 	qid, err = query.Save()
@@ -664,18 +658,18 @@ func (s *ORMSuite) TestCursor() {
 	s.Require().NoError(err)
 
 	if list, err := query.Next(); s.NoError(err) && s.Len(list, 2) {
-		s.Equal("id4", list[0].Key().String())
-		s.Equal("txt4", string(list[0].Value()))
+		s.Equal("id4", list[0].Key.String())
+		s.Equal("txt4", string(list[0].Value))
 
-		s.Equal("id3", list[1].Key().String())
-		s.Equal("msg3", string(list[1].Value()))
+		s.Equal("id3", list[1].Key.String())
+		s.Equal("msg3", string(list[1].Value))
 	}
 
 	s.Require().NoError(tx.Commit())
 }
 
 func BenchmarkUpsert(b *testing.B) {
-	cn, err := db.ConnectV610(TestDB)
+	cn, err := db.Connect(TestDB)
 
 	require.NoError(b, err)
 	require.NoError(b, cn.Clear())
@@ -689,12 +683,12 @@ func BenchmarkUpsert(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		uid := []byte(typex.NewUUID())
-		require.NoError(b, tbl.Upsert(tx, fdbx.NewPair(fdbx.Bytes2Key(uid), uid)))
+		require.NoError(b, tbl.Upsert(tx, fdb.KeyValue{Key: uid, Value: uid}))
 	}
 }
 
 func BenchmarkUpsertBatch(b *testing.B) {
-	cn, err := db.ConnectV610(TestDB)
+	cn, err := db.Connect(TestDB)
 
 	require.NoError(b, err)
 	require.NoError(b, cn.Clear())
@@ -705,14 +699,14 @@ func BenchmarkUpsertBatch(b *testing.B) {
 	tbl := orm.NewTable(TestTable)
 
 	count := 1000
-	batch := make([]fdbx.Pair, count)
+	batch := make([]fdb.KeyValue, count)
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
 		for i := range batch {
 			uid := []byte(typex.NewUUID())
-			batch[i] = fdbx.NewPair(fdbx.Bytes2Key(uid), uid)
+			batch[i] = fdb.KeyValue{Key: uid, Value: uid}
 		}
 		require.NoError(b, tbl.Upsert(tx, batch...))
 	}
@@ -723,10 +717,10 @@ func BenchmarkCount(b *testing.B) {
 	// batchSize := 10000
 	// mvcc.ScanRangeSize = 100000
 
-	const count = 10000
+	const count = 400000
 	batchSize := 10000
 
-	cn, err := db.ConnectV610(TestDB)
+	cn, err := db.Connect(TestDB)
 
 	require.NoError(b, err)
 	require.NoError(b, cn.Clear())
@@ -735,26 +729,29 @@ func BenchmarkCount(b *testing.B) {
 
 	tbl := orm.NewTable(TestTable)
 
-	for k := 0; k < count/int(batchSize); k++ {
-		batch := make([]fdbx.Pair, batchSize)
-		for i := 0; i < int(batchSize); i++ {
+	for k := 0; k < count/batchSize; k++ {
+		batch := make([]fdb.KeyValue, batchSize)
+		for i := 0; i < batchSize; i++ {
 			uid := []byte(typex.NewUUID())
-			batch[i] = fdbx.NewPair(fdbx.Bytes2Key(uid), uid)
+			batch[i] = fdb.KeyValue{Key: uid, Value: uid}
 		}
 		require.NoError(b, tbl.Upsert(tx, batch...))
 	}
 
 	require.NoError(b, tx.Commit())
 
-	tx = mvcc.Begin(cn)
-	defer tx.Cancel()
+	b.Run("Count", func(br *testing.B) {
+		tx := mvcc.Begin(cn)
+		defer tx.Cancel()
 
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		cnt := uint64(0)
-		require.NoError(b, tbl.Select(tx).Agg(orm.Count(&cnt)))
-		require.Equal(b, count, int(cnt))
-	}
-
+		for i := 0; i < br.N; i++ {
+			cnt := uint64(0)
+			if tbl.Select(tx).Agg(orm.Count(&cnt)) != nil {
+				b.Fatalf("err = %+v", err)
+			}
+			if int(cnt) != count {
+				b.Fatalf("act %d != exp %d", cnt, count)
+			}
+		}
+	})
 }

@@ -1,9 +1,11 @@
 package orm
 
 import (
+	"sync"
 	"time"
 
-	"github.com/shestakovda/fdbx/v2"
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+
 	"github.com/shestakovda/fdbx/v2/models"
 )
 
@@ -29,7 +31,7 @@ type options struct {
 	prefix   []byte
 	reverse  bool
 	creator  string
-	lastkey  fdbx.Key
+	lastkey  fdb.Key
 	vwait    time.Duration
 	delay    time.Duration
 	refresh  time.Duration
@@ -38,6 +40,7 @@ type options struct {
 	indexes  map[uint16]IndexKey
 	multidx  map[uint16]IndexMultiKey
 	batchidx []IndexBatchKey
+	wait     *sync.WaitGroup
 }
 
 func Index(id uint16, f IndexKey) Option {
@@ -62,6 +65,7 @@ func MultiIndex(id uint16, f IndexMultiKey) Option {
 	}
 }
 
+//goland:noinspection GoUnusedExportedFunction
 func BatchIndex(f IndexBatchKey) Option {
 	return func(o *options) {
 		if f != nil {
@@ -78,6 +82,7 @@ func Refresh(d time.Duration) Option {
 	}
 }
 
+//goland:noinspection GoUnusedExportedFunction
 func VacuumWait(d time.Duration) Option {
 	return func(o *options) {
 		if d > 0 {
@@ -98,7 +103,7 @@ func Reverse(r bool) Option {
 	}
 }
 
-func LastKey(k fdbx.Key) Option {
+func LastKey(k fdb.Key) Option {
 	return func(o *options) {
 		o.lastkey = k
 	}
@@ -110,12 +115,14 @@ func Delay(d time.Duration) Option {
 	}
 }
 
+//goland:noinspection GoUnusedExportedFunction
 func Creator(s string) Option {
 	return func(o *options) {
 		o.creator = s
 	}
 }
 
+//goland:noinspection GoUnusedExportedFunction
 func Header(k, v string) Option {
 	return func(o *options) {
 		if o.headers == nil {
@@ -125,9 +132,16 @@ func Header(k, v string) Option {
 	}
 }
 
+//goland:noinspection GoUnusedExportedFunction
 func Headers(h map[string]string) Option {
 	return func(o *options) {
 		o.headers = h
+	}
+}
+
+func Waiter(w *sync.WaitGroup) Option {
+	return func(o *options) {
+		o.wait = w
 	}
 }
 
@@ -138,16 +152,16 @@ func metatask(t *models.TaskT) Option {
 }
 
 func (o options) simple2batch() IndexBatchKey {
-	return func(buf []byte) (res map[uint16][]fdbx.Key, err error) {
-		var tmp fdbx.Key
-		res = make(map[uint16][]fdbx.Key, len(o.indexes))
+	return func(buf []byte) (res map[uint16][]fdb.Key, err error) {
+		var tmp fdb.Key
+		res = make(map[uint16][]fdb.Key, len(o.indexes))
 
 		for idx, fnc := range o.indexes {
 			if tmp, err = fnc(buf); err != nil {
 				return
 			}
 
-			if tmp == nil || len(tmp.Bytes()) == 0 {
+			if len(tmp) == 0 {
 				continue
 			}
 
@@ -159,9 +173,9 @@ func (o options) simple2batch() IndexBatchKey {
 }
 
 func (o options) multi2batch() IndexBatchKey {
-	return func(buf []byte) (res map[uint16][]fdbx.Key, err error) {
-		var keys []fdbx.Key
-		res = make(map[uint16][]fdbx.Key, len(o.indexes))
+	return func(buf []byte) (res map[uint16][]fdb.Key, err error) {
+		var keys []fdb.Key
+		res = make(map[uint16][]fdb.Key, len(o.indexes))
 
 		for idx, fnc := range o.multidx {
 			if keys, err = fnc(buf); err != nil {
@@ -173,7 +187,7 @@ func (o options) multi2batch() IndexBatchKey {
 			}
 
 			for i := range keys {
-				if keys[i] == nil || len(keys[i].Bytes()) == 0 {
+				if len(keys[i]) == 0 {
 					continue
 				}
 

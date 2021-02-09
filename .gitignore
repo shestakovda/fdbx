@@ -12,4 +12,5 @@
 *.out
 *.cover
 
-bin
+v2/bin
+.idea/

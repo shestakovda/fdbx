@@ -2,28 +2,29 @@ package orm
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 
-	"github.com/golang/glog"
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/shestakovda/typex"
+
 	"github.com/shestakovda/fdbx/v2"
 	"github.com/shestakovda/fdbx/v2/models"
 	"github.com/shestakovda/fdbx/v2/mvcc"
-	"github.com/shestakovda/typex"
 )
 
 func NewQuery(tb Table, tx mvcc.Tx) Query {
-	q := &v1Query{
+	q := v1Query{
 		tx: tx,
 		tb: tb,
 	}
 
-	q.lastkey.Store(fdbx.Bytes2Key(nil))
-	return q
+	return &q
 }
 
 func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
 	var uid typex.UUID
-	var pair fdbx.Pair
+	var pair fdb.KeyValue
 
 	if uid, err = typex.ParseUUID(id); err != nil {
 		return nil, ErrLoadQuery.WithReason(err)
@@ -36,11 +37,11 @@ func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
 		queryid: uid,
 	}
 
-	if pair, err = tx.Select(WrapQueryKey(tb.ID(), fdbx.Bytes2Key(uid))); err != nil {
+	if pair, err = tx.Select(WrapQueryKey(tb.ID(), fdb.Key(uid))); err != nil {
 		return nil, ErrLoadQuery.WithReason(ErrNotFound.WithReason(err))
 	}
 
-	val := pair.Value()
+	val := pair.Value
 
 	if len(val) == 0 {
 		return nil, ErrLoadQuery.WithReason(ErrValUnpack.WithReason(err))
@@ -55,22 +56,20 @@ func loadQuery(tb Table, tx mvcc.Tx, id string) (_ Query, err error) {
 	q.idxtype = cur.IdxType
 	q.idxfrom = cur.IdxFrom
 	q.idxlast = cur.IdxLast
-	q.lastkey.Store(fdbx.Bytes2Key(cur.LastKey))
+	q.setLastKey(cur.LastKey)
 
 	if q.idxtype > 0 {
-		q.selector = NewIndexRangeSelector(tx, q.idxtype, fdbx.Bytes2Key(q.idxfrom), fdbx.Bytes2Key(q.idxlast))
+		q.selector = NewIndexRangeSelector(tx, q.idxtype, q.idxfrom, q.idxlast)
 	} else {
 		q.selector = NewFullSelector(tx)
-	}
-
-	if Debug {
-		glog.Infof("loadQuery.query = %#v", q)
 	}
 
 	return &q, nil
 }
 
 type v1Query struct {
+	sync.RWMutex
+
 	tx mvcc.Tx
 	tb Table
 
@@ -81,10 +80,10 @@ type v1Query struct {
 	empty   bool
 	reverse bool
 	idxtype uint16
-	idxfrom []byte
-	idxlast []byte
+	idxfrom fdb.Key
+	idxlast fdb.Key
+	lastkey fdb.Key
 	queryid typex.UUID
-	lastkey atomic.Value
 
 	// Текущие значения
 	filters  []Filter
@@ -92,6 +91,11 @@ type v1Query struct {
 }
 
 func (q *v1Query) Empty() bool { return q.empty }
+
+func (q *v1Query) Forward() Query {
+	q.reverse = false
+	return q
+}
 
 func (q *v1Query) Reverse() Query {
 	q.reverse = true
@@ -112,8 +116,8 @@ func (q *v1Query) Page(size int) Query {
 	return q
 }
 
-func (q *v1Query) All() ([]fdbx.Pair, error) {
-	list := make([]fdbx.Pair, 0, 128)
+func (q *v1Query) All() ([]fdb.KeyValue, error) {
+	list := make([]fdb.KeyValue, 0, 128)
 	pairs, errs := q.Sequence(context.Background())
 
 	for pair := range pairs {
@@ -129,24 +133,26 @@ func (q *v1Query) All() ([]fdbx.Pair, error) {
 	return list, nil
 }
 
-func (q *v1Query) Next() (_ []fdbx.Pair, err error) {
-	defer func() { _, err = q.Save() }()
+func (q *v1Query) Next() (_ []fdb.KeyValue, err error) {
+	wait := new(sync.WaitGroup)
+	defer func() {
+		wait.Wait()
+		_, err = q.Save()
+	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	size := uint32(0)
-	list := make([]fdbx.Pair, 0, q.page)
-	pairs, errs := q.Sequence(ctx)
+	list := make([]fdb.KeyValue, 0, q.page)
+	pairs, errs := q.Sequence(ctx, Waiter(wait))
 
 	for pair := range pairs {
-		list = append(list, pair)
-		if size++; q.page > 0 && size >= q.page {
+		if list = append(list, pair); q.page > 0 && len(list) >= int(q.page) {
 			return list, nil
 		}
 	}
 
-	for err := range errs {
+	for err = range errs {
 		if err != nil {
 			return nil, ErrNext.WithReason(err)
 		}
@@ -156,10 +162,11 @@ func (q *v1Query) Next() (_ []fdbx.Pair, err error) {
 	return list, nil
 }
 
-func (q *v1Query) First() (fdbx.Pair, error) {
+func (q *v1Query) First() (fdb.KeyValue, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	q.limit = 1
 	pairs, errs := q.Sequence(ctx)
 
 	for pair := range pairs {
@@ -168,11 +175,11 @@ func (q *v1Query) First() (fdbx.Pair, error) {
 
 	for err := range errs {
 		if err != nil {
-			return nil, ErrFirst.WithReason(err)
+			return fdb.KeyValue{}, ErrFirst.WithReason(err)
 		}
 	}
 
-	return nil, ErrNotFound.WithStack()
+	return fdb.KeyValue{}, ErrNotFound.WithStack()
 }
 
 func (q *v1Query) Agg(funcs ...Aggregator) (err error) {
@@ -199,16 +206,16 @@ func (q *v1Query) Agg(funcs ...Aggregator) (err error) {
 }
 
 func (q *v1Query) Delete() (err error) {
-	var list []fdbx.Pair
+	var list []fdb.KeyValue
 
 	if list, err = q.All(); err != nil {
 		return ErrDelete.WithReason(err)
 	}
 
-	keys := make([]fdbx.Key, len(list))
+	keys := make([]fdb.Key, len(list))
 
 	for i := range list {
-		keys[i] = list[i].Key()
+		keys[i] = list[i].Key
 	}
 
 	if err = q.tb.Delete(q.tx, keys...); err != nil {
@@ -223,25 +230,25 @@ func (q *v1Query) BySelector(sel Selector) Query {
 	return q
 }
 
-func (q *v1Query) ByID(ids ...fdbx.Key) Query {
+func (q *v1Query) ByID(ids ...fdb.Key) Query {
 	return q.BySelector(NewIDsSelector(q.tx, ids, true))
 }
 
-func (q *v1Query) PossibleByID(ids ...fdbx.Key) Query {
+func (q *v1Query) PossibleByID(ids ...fdb.Key) Query {
 	return q.BySelector(NewIDsSelector(q.tx, ids, false))
 }
 
-func (q *v1Query) ByIndex(idx uint16, prefix fdbx.Key) Query {
+func (q *v1Query) ByIndex(idx uint16, prefix fdb.Key) Query {
 	q.idxtype = idx
-	q.idxfrom = prefix.Bytes()
-	q.idxlast = prefix.Bytes()
+	q.idxfrom = prefix
+	q.idxlast = prefix
 	return q.BySelector(NewIndexSelector(q.tx, idx, prefix))
 }
 
-func (q *v1Query) ByIndexRange(idx uint16, from, last fdbx.Key) Query {
+func (q *v1Query) ByIndexRange(idx uint16, from, last fdb.Key) Query {
 	q.idxtype = idx
-	q.idxfrom = from.Bytes()
-	q.idxlast = last.Bytes()
+	q.idxfrom = from
+	q.idxlast = last
 	return q.BySelector(NewIndexRangeSelector(q.tx, idx, from, last))
 }
 
@@ -252,46 +259,47 @@ func (q *v1Query) Where(hdl Filter) Query {
 	return q
 }
 
-func (q *v1Query) Sequence(ctx context.Context) (<-chan fdbx.Pair, <-chan error) {
-	list := make(chan fdbx.Pair)
+func (q *v1Query) Sequence(ctx context.Context, args ...Option) (<-chan fdb.KeyValue, <-chan error) {
+	list := make(chan fdb.KeyValue)
 	errs := make(chan error, 1)
+	opts := getOpts(args)
 
 	q.empty = false
 	if q.selector == nil {
 		q.selector = NewFullSelector(q.tx)
 	}
 
+	if opts.wait != nil {
+		opts.wait.Add(1)
+	}
+
 	go func() {
 		var err error
 		var need bool
 		var size uint32
-		var pair fdbx.Pair
+		var pair fdb.KeyValue
 
 		defer close(list)
 		defer close(errs)
 
-		size = atomic.LoadUint32(&q.size)
-
-		if Debug {
-			glog.Infof("v1Query.Sequence(%d, %s)", size, q.lastkey.Load().(fdbx.Key).Printable())
+		if opts.wait != nil {
+			defer opts.wait.Done()
 		}
+
+		size = atomic.LoadUint32(&q.size)
 
 		if q.limit > 0 && size >= q.limit {
 			return
 		}
 
 		wctx, exit := context.WithCancel(ctx)
-		pairs, errc := q.selector.Select(wctx, q.tb, LastKey(q.lastkey.Load().(fdbx.Key)), Reverse(q.reverse))
+		pairs, errc := q.selector.Select(wctx, q.tb, LastKey(q.getLastKey()), Reverse(q.reverse))
 		defer exit()
 
 		for orig := range pairs {
-			if pair, err = newUsrPair(q.tx, q.tb.ID(), orig.Unwrap()); err != nil {
+			if pair, err = newUsrPair(q.tx, q.tb.ID(), orig.Pair); err != nil {
 				errs <- ErrSequence.WithReason(err)
 				return
-			}
-
-			if Debug {
-				glog.Infof("v1Query.Sequence.pair = %s", pair.Key().Printable())
 			}
 
 			if len(q.filters) > 0 {
@@ -301,22 +309,15 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 				}
 
 				if !need {
-					if Debug {
-						glog.Infof("v1Query.Sequence.filtered = %s", pair.Key().Printable())
-					}
 					continue
 				}
 			}
 
 			select {
 			case list <- pair:
-				q.lastkey.Store(orig.Key())
+				q.setLastKey(orig.Last)
 
 				size = atomic.AddUint32(&q.size, 1)
-
-				if Debug {
-					glog.Infof("v1Query.Sequence.size = %d", size)
-				}
 
 				if q.limit > 0 && size >= q.limit {
 					return
@@ -326,7 +327,7 @@ func (q *v1Query) Sequence(ctx context.Context) (<-chan fdbx.Pair, <-chan error)
 			}
 		}
 
-		for err := range errc {
+		for err = range errc {
 			if err != nil {
 				errs <- ErrSequence.WithReason(err)
 				return
@@ -351,12 +352,10 @@ func (q *v1Query) Save() (cid string, err error) {
 		IdxFrom: q.idxfrom,
 		IdxLast: q.idxlast,
 		QueryID: q.queryid,
-		LastKey: q.lastkey.Load().(fdbx.Key).Bytes(),
+		LastKey: q.getLastKey(),
 	}
 
-	pairs := []fdbx.Pair{
-		fdbx.NewPair(WrapQueryKey(q.tb.ID(), fdbx.Bytes2Key(q.queryid)), fdbx.FlatPack(cur)),
-	}
+	pairs := []fdb.KeyValue{{WrapQueryKey(q.tb.ID(), fdb.Key(q.queryid)), fdbx.FlatPack(cur)}}
 
 	if err = q.tx.Upsert(pairs); err != nil {
 		return "", ErrSaveQuery.WithReason(err)
@@ -370,8 +369,8 @@ func (q *v1Query) Drop() (err error) {
 		return nil
 	}
 
-	keys := []fdbx.Key{
-		WrapQueryKey(q.tb.ID(), fdbx.Bytes2Key(q.queryid)),
+	keys := []fdb.Key{
+		WrapQueryKey(q.tb.ID(), fdb.Key(q.queryid)),
 	}
 
 	if err = q.tx.Delete(keys); err != nil {
@@ -381,7 +380,7 @@ func (q *v1Query) Drop() (err error) {
 	return nil
 }
 
-func (q *v1Query) applyFilters(pair fdbx.Pair) (need bool, err error) {
+func (q *v1Query) applyFilters(pair fdb.KeyValue) (need bool, err error) {
 	for i := range q.filters {
 		if need, err = q.filters[i](pair); err != nil {
 			return false, ErrFilter.WithReason(err)
@@ -393,4 +392,16 @@ func (q *v1Query) applyFilters(pair fdbx.Pair) (need bool, err error) {
 	}
 
 	return true, nil
+}
+
+func (q *v1Query) getLastKey() fdb.Key {
+	q.RLock()
+	defer q.RUnlock()
+	return q.lastkey
+}
+
+func (q *v1Query) setLastKey(k fdb.Key) {
+	q.Lock()
+	defer q.Unlock()
+	q.lastkey = k
 }
