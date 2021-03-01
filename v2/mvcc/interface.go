@@ -60,6 +60,8 @@ type Tx interface {
 	// Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
 	ListAll(context.Context, ...Option) ([]fdb.KeyValue, error)
 
+	Count(prefix fdb.Key) (cnt int64, err error)
+
 	// Последовательная выборка всех активных ключей в диапазоне
 	// Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
 	SeqScan(context.Context, ...Option) (<-chan fdb.KeyValue, <-chan error)

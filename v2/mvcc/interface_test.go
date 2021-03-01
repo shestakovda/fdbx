@@ -379,6 +379,67 @@ func (s *MVCCSuite) TestListAll() {
 	tx2.Cancel()
 }
 
+func (s *MVCCSuite) TestCount() {
+	key1 := fdb.Key("key10")
+	key2 := fdb.Key("key11")
+	key3 := fdb.Key("key12")
+	key4 := fdb.Key("key21")
+	key5 := fdb.Key("key221")
+	key6 := fdb.Key("key222")
+	key7 := fdb.Key("key24")
+	val1 := []byte("val1")
+	val2 := []byte("val2")
+	val3 := []byte("val3")
+	val4 := []byte("val4")
+	val5 := []byte("val5")
+	val6 := []byte("val6")
+	val7 := []byte("val7")
+
+	s.Require().NoError(s.tx.Upsert([]fdb.KeyValue{
+		{key1, val1},
+		{key2, val2},
+		{key3, val3},
+		{key4, val4},
+		{key5, val5},
+		{key6, val6},
+		{key7, val7},
+	}))
+
+	if cnt, err := s.tx.Count(fdb.Key("key")); s.NoError(err) {
+		s.Equal(int64(7), cnt)
+	}
+
+	if cnt, err := s.tx.Count(fdb.Key("key1")); s.NoError(err) {
+		s.Equal(int64(3), cnt)
+	}
+
+	if cnt, err := s.tx.Count(fdb.Key("key22")); s.NoError(err) {
+		s.Equal(int64(2), cnt)
+	}
+	s.Require().NoError(s.tx.Commit())
+
+	// Удаляем парочку и коммитим это
+
+	tx := mvcc.Begin(s.cn)
+	s.Require().NoError(tx.Delete([]fdb.Key{key3, key5}))
+	s.Require().NoError(tx.Commit())
+
+	// Удаляем еще парочку, но не коммитим
+
+	tx = mvcc.Begin(s.cn)
+	s.Require().NoError(tx.Delete([]fdb.Key{key4, key6}))
+
+	// В отдельной транзакции запрашиваем результат
+	tx2 := mvcc.Begin(s.cn)
+
+	if cnt, err := tx2.Count(fdb.Key("key")); s.NoError(err) {
+		s.Equal(int64(5), cnt)
+	}
+
+	tx.Cancel()
+	tx2.Cancel()
+}
+
 func (s *MVCCSuite) TestSharedLock() {
 	key := fdb.Key("key")
 	lock := fdb.Key("lock")
@@ -508,7 +569,7 @@ func (s *MVCCSuite) TestNoDeadlockCancel() {
 	wg.Wait()
 }
 
-func BenchmarkSequenceWorkflowDiffTx(b *testing.B) {
+func benchmarkSequenceWorkflowDiffTx(b *testing.B) {
 	cn, err := db.Connect(TestDB)
 	require.NoError(b, err)
 	require.NoError(b, cn.Clear())
@@ -553,7 +614,7 @@ func BenchmarkSequenceWorkflowDiffTx(b *testing.B) {
 	}
 }
 
-func BenchmarkSequenceWorkflowSameTx(b *testing.B) {
+func benchmarkSequenceWorkflowSameTx(b *testing.B) {
 	cn, err := db.Connect(TestDB)
 	require.NoError(b, err)
 	require.NoError(b, cn.Clear())
@@ -586,7 +647,7 @@ func BenchmarkSequenceWorkflowSameTx(b *testing.B) {
 	}
 }
 
-func BenchmarkOperationsSameTx(b *testing.B) {
+func benchmarkOperationsSameTx(b *testing.B) {
 	cn, err := db.Connect(TestDB)
 	require.NoError(b, err)
 	require.NoError(b, cn.Clear())
@@ -620,6 +681,55 @@ func BenchmarkOperationsSameTx(b *testing.B) {
 			uid := []byte(typex.NewUUID())
 			require.NoError(b, tx.Upsert([]fdb.KeyValue{{uid, uid}}))
 			require.NoError(b, tx.Delete([]fdb.Key{uid}))
+		}
+	})
+}
+
+
+func BenchmarkCount(b *testing.B) {
+	// const count = 1000000
+	// batchSize := 10000
+	// mvcc.ScanRangeSize = 100000
+
+	b.StopTimer()
+
+	const count = 400000
+	batchSize := 10000
+
+	cn, err := db.Connect(TestDB)
+
+	require.NoError(b, err)
+	require.NoError(b, cn.Clear())
+
+	tx := mvcc.Begin(cn)
+
+	for k := 0; k < count/batchSize; k++ {
+		batch := make([]fdb.KeyValue, batchSize)
+		for i := 0; i < batchSize; i++ {
+			uid := []byte(typex.NewUUID())
+			batch[i] = fdb.KeyValue{Key: uid, Value: uid}
+		}
+		require.NoError(b, tx.Upsert(batch))
+	}
+
+	require.NoError(b, tx.Commit())
+
+	b.StartTimer()
+
+	b.Run("Count", func(br *testing.B) {
+		var err error
+		var cnt int64
+
+		tx := mvcc.Begin(cn)
+		defer tx.Cancel()
+
+		for i := 0; i < br.N; i++ {
+			if cnt, err = tx.Count(nil); err != nil {
+				b.Fatalf("err = %+v", err)
+			}
+			if int(cnt) != count {
+				b.Fatalf("act %d != exp %d", cnt, count)
+			}
 		}
 	})
 }

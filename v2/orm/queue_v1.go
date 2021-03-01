@@ -360,35 +360,14 @@ func (q v1Queue) Undo(tx mvcc.Tx, key fdb.Key) (exp error) {
 }
 
 func (q v1Queue) Stat(tx mvcc.Tx) (wait, work int64, err error) {
-	wctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// Подсчет активных
-	lkey := q.wrapFlagKey(qList, nil)
-	pairs, errs := tx.SeqScan(wctx, mvcc.From(lkey), mvcc.Last(lkey))
-
-	for range pairs {
-		wait++
-	}
-
-	for err = range errs {
-		if err != nil {
-			return 0, 0, ErrStat.WithReason(err)
-		}
+	if wait, err = tx.Count(q.wrapFlagKey(qList, nil)); err != nil {
+		return 0, 0, ErrStat.WithReason(err)
 	}
 
 	// Подсчет потеряшек
-	wkey := q.wrapFlagKey(qWork, nil)
-	pairs, errs = tx.SeqScan(wctx, mvcc.From(wkey), mvcc.Last(wkey))
-
-	for range pairs {
-		work++
-	}
-
-	for err = range errs {
-		if err != nil {
-			return 0, 0, ErrStat.WithReason(err)
-		}
+	if work, err = tx.Count(q.wrapFlagKey(qWork, nil)); err != nil {
+		return 0, 0, ErrStat.WithReason(err)
 	}
 
 	return wait, work, nil

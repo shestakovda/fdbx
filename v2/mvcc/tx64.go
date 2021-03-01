@@ -402,6 +402,97 @@ func (t *tx64) ListAll(ctx context.Context, args ...Option) (_ []fdb.KeyValue, e
 	return list, nil
 }
 
+func (t *tx64) Count(prefix fdb.Key) (cnt int64, err error) {
+	prefix = WrapKey(prefix)
+
+	if cnt, err = t.getFastCount(prefix); err != nil {
+		return
+	}
+
+	if cnt > 0 {
+		return cnt, nil
+	}
+
+	if err = t.conn.Read(func(r db.Reader) (exp error) {
+		var ok bool
+		const max = 1 << 16
+
+		cnt = 0
+		rate := 0
+		irate := 1 << rate
+		count := max / irate
+		parts := make([]fdb.RangeResult, count)
+		cache := makeCache()
+		opid := atomic.AddUint32(&t.opid, 1)
+		plen := len(prefix)
+		from := make([]byte, plen+2)
+		last := make([]byte, plen+2)
+		copy(from[:plen], prefix)
+		copy(last[:plen], prefix)
+
+		for i := 0; i < count; i += irate {
+			from[plen] = byte(i >> 8)
+			from[plen+1] = byte(i)
+			if i+irate < count {
+				last[plen] = byte((i + rate) >> 8)
+				last[plen+1] = byte(i + rate)
+			} else {
+				last[plen] = 0xFF
+				last[plen+1] = 0xFF
+			}
+			parts[i] = r.List(from, last, 0, false, false)
+		}
+
+		for i := range parts {
+			for _, item := range parts[i].GetSliceOrPanic() {
+				if ok, exp = t.isVisible(r, cache, opid, item, false); exp != nil {
+					return
+				}
+
+				if ok {
+					cnt++
+				}
+			}
+		}
+
+		return nil
+	}); err != nil {
+		return 0, ErrSeqScan.WithReason(err)
+	}
+
+	return cnt, nil
+}
+
+func (t *tx64) getFastCount(prefix fdb.Key) (cnt int64, err error) {
+	const fastLimit = 10000
+	cache := makeCache()
+	opid := atomic.AddUint32(&t.opid, 1)
+
+	if err = t.conn.Read(func(r db.Reader) (exp error) {
+		var ok bool
+
+		for _, item := range r.List(prefix, prefix, fastLimit, false, false).GetSliceOrPanic() {
+			if ok, exp = t.isVisible(r, cache, opid, item, false); exp != nil {
+				return
+			}
+
+			if ok {
+				cnt++
+			}
+		}
+		return nil
+	}); err != nil {
+		return
+	}
+
+	// Достигли предела? Значит объектов больше, придется пересчитать еще раз и точнее
+	if cnt == fastLimit {
+		cnt = 0
+	}
+
+	return cnt, nil
+}
+
 /*
 	SeqScan - Последовательная выборка всех активных ключей в диапазоне
 	Поддерживает опции From, To, Reverse, Limit, PackSize, Exclusive, Writer
