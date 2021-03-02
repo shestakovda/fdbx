@@ -408,14 +408,6 @@ func (t *tx64) Count(prefix fdb.Key) (cnt int64, err error) {
 
 	prefix = WrapKey(prefix)
 
-	if cnt, err = t.getFastCount(prefix); err != nil {
-		return
-	}
-
-	if cnt > 0 {
-		return cnt, nil
-	}
-
 	cnt = 0
 	cpu := runtime.NumCPU()
 	wg := new(sync.WaitGroup)
@@ -438,27 +430,32 @@ func (t *tx64) Count(prefix fdb.Key) (cnt int64, err error) {
 
 	for i := 0; i < cpu; i++ {
 		go func() {
-			var ok bool
-			var exp error
 			defer wg.Done()
 
-			r := db.Reader{}
-			tmp := int64(0)
-
 			for part := range parts {
-				for k := range part {
-					if ok, exp = t.isVisible(r, cache, opid, part[k], false); exp != nil {
-						errs <- ErrSeqScan.WithReason(exp)
-						return
+				if exp := t.conn.Read(func(r db.Reader) (e error) {
+					var ok bool
+
+					tmp := int64(0)
+					r = r.Snapshot()
+
+					for k := range part {
+						if ok, e = t.isVisible(r, cache, opid, part[k], false); e != nil {
+							return
+						}
+
+						if ok {
+							tmp++
+						}
 					}
 
-					if ok {
-						tmp++
-					}
+					atomic.AddInt64(&cnt, tmp)
+					return nil
+				}); exp != nil {
+					errs <- ErrSeqScan.WithReason(exp)
+					return
 				}
 			}
-
-			atomic.AddInt64(&cnt, tmp)
 		}()
 	}
 
@@ -498,38 +495,6 @@ func (t *tx64) Count(prefix fdb.Key) (cnt int64, err error) {
 		if err != nil {
 			return
 		}
-	}
-
-	return cnt, nil
-}
-
-func (t *tx64) getFastCount(prefix fdb.Key) (cnt int64, err error) {
-	const fastLimit = 1000
-	cache := makeCache()
-	opid := atomic.AddUint32(&t.opid, 1)
-
-	if err = t.conn.Read(func(r db.Reader) (exp error) {
-		var ok bool
-
-		r = r.Snapshot()
-
-		for _, item := range r.List(prefix, prefix, fastLimit, false, false).GetSliceOrPanic() {
-			if ok, exp = t.isVisible(r, cache, opid, item, false); exp != nil {
-				return
-			}
-
-			if ok {
-				cnt++
-			}
-		}
-		return nil
-	}); err != nil {
-		return
-	}
-
-	// Достигли предела? Значит объектов больше, придется пересчитать еще раз и точнее
-	if cnt == fastLimit {
-		cnt = 0
 	}
 
 	return cnt, nil
@@ -930,21 +895,7 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, txid suid) (status byte, er
 	}
 
 	// Придется слазать в БД за статусом и положить в кеш
-	var val []byte
-
-	hdlr := func(r2 db.Reader) error {
-		val = r2.Data(WrapTxKey(txid[:]))
-		return nil
-	}
-
-	if r.Empty() {
-		err = t.conn.Read(hdlr)
-	} else {
-		err = hdlr(r)
-	}
-	if err != nil {
-		return
-	}
+	val := r.Data(WrapTxKey(txid[:]))
 
 	// Если в БД нет записи, то либо транзакция еще открыта, либо это был откат
 	// Поскольку нет определенности, в глобальный кеш ничего не складываем
