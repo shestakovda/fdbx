@@ -433,23 +433,64 @@ func (t *tx64) Count(prefix fdb.Key) (cnt int64, err error) {
 			defer wg.Done()
 
 			for part := range parts {
-				if exp := t.conn.Read(func(r db.Reader) (e error) {
-					var ok bool
 
-					tmp := int64(0)
+				if exp := t.conn.Read(func(r db.Reader) (e error) {
 					r = r.Snapshot()
+					ids := make(map[suid]fdb.FutureByteSlice, len(part))
 
 					for k := range part {
-						if ok, e = t.isVisible(r, cache, opid, part[k], false); e != nil {
-							return
+						xmin, _ := t.rowTxData(part[k].Key)
+
+						if globCache.get(xmin) == txStatusUnknown {
+							if cache.get(xmin) == txStatusUnknown {
+								ids[xmin] = r.Item(WrapTxKey(xmin[:]))
+							}
+						}
+					}
+
+					for xmin, fut := range ids {
+						// Придется слазать в БД за статусом и положить в кеш
+						val := fut.MustGet()
+
+						// Если в БД нет записи, то либо транзакция еще открыта, либо это был откат
+						// Поскольку нет определенности, в глобальный кеш ничего не складываем
+						if len(val) == 0 {
+							cache.set(xmin, txStatusRunning)
+							continue
 						}
 
-						if ok {
+						// Получаем значение статуса как часть модели
+						status := models.GetRootAsTransaction(val, 0).Status()
+
+						// В случае финальных статусов можем положить в глобальный кеш
+						if status == txStatusCommitted || status == txStatusCancelled {
+							globCache.set(xmin, status)
+						}
+
+						// В локальный кеш можем положить в любом случае, затем вернуть
+						cache.set(xmin, status)
+					}
+
+					return nil
+				}); exp != nil {
+					errs <- ErrSeqScan.WithReason(exp)
+					return
+				}
+
+				if exp := t.conn.Read(func(r db.Reader) (e error) {
+					tmp := int64(0)
+
+					for k := range part {
+						if ok, exp := t.isVisible(r, cache, opid, part[k], false); exp != nil {
+							errs <- ErrSeqScan.WithReason(exp)
+							return
+						} else if ok {
 							tmp++
 						}
 					}
 
 					atomic.AddInt64(&cnt, tmp)
+
 					return nil
 				}); exp != nil {
 					errs <- ErrSeqScan.WithReason(exp)
@@ -460,9 +501,7 @@ func (t *tx64) Count(prefix fdb.Key) (cnt int64, err error) {
 	}
 
 	if err = t.conn.Read(func(r db.Reader) (exp error) {
-		defer close(parts)
-
-		r = r.Snapshot()
+				r = r.Snapshot()
 
 		for i := 0; i < count; i++ {
 			from[plen] = byte(i * irate >> 8)
@@ -488,6 +527,7 @@ func (t *tx64) Count(prefix fdb.Key) (cnt int64, err error) {
 		return 0, ErrSeqScan.WithReason(err)
 	}
 
+	close(parts)
 	wg.Wait()
 	close(errs)
 

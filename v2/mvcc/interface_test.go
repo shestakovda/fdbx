@@ -1,6 +1,7 @@
 package mvcc_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -692,8 +693,8 @@ func BenchmarkCount(b *testing.B) {
 
 	b.StopTimer()
 
-	const count = 400000
-	batchSize := 10000
+	const count = 40000
+	batchSize := 400
 
 	cn, err := db.Connect(TestDB)
 
@@ -702,11 +703,12 @@ func BenchmarkCount(b *testing.B) {
 
 	tx := mvcc.Begin(cn)
 
+	val := bytes.Repeat(typex.NewUUID(), 1000)
 	for k := 0; k < count/batchSize; k++ {
 		batch := make([]fdb.KeyValue, batchSize)
 		for i := 0; i < batchSize; i++ {
-			uid := []byte(typex.NewUUID())
-			batch[i] = fdb.KeyValue{Key: uid, Value: uid}
+			batch[i].Key = []byte(typex.NewUUID())
+			batch[i].Value = val
 		}
 		require.NoError(b, tx.Upsert(batch))
 	}
