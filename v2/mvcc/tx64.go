@@ -504,12 +504,14 @@ func (t *tx64) Count(prefix fdb.Key) (cnt int64, err error) {
 }
 
 func (t *tx64) getFastCount(prefix fdb.Key) (cnt int64, err error) {
-	const fastLimit = 10000
+	const fastLimit = 1000
 	cache := makeCache()
 	opid := atomic.AddUint32(&t.opid, 1)
 
 	if err = t.conn.Read(func(r db.Reader) (exp error) {
 		var ok bool
+
+		r = r.Snapshot()
 
 		for _, item := range r.List(prefix, prefix, fastLimit, false, false).GetSliceOrPanic() {
 			if ok, exp = t.isVisible(r, cache, opid, item, false); exp != nil {
