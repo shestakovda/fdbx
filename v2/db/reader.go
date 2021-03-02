@@ -12,6 +12,14 @@ type Reader struct {
 	tx fdb.ReadTransaction
 }
 
+// Получение объекта изолированного чтения
+func (r Reader) Snapshot() Reader {
+	return Reader{
+		Connection: r.Connection,
+		tx:         r.tx.Snapshot(),
+	}
+}
+
 // Получение объекта ожидания конкретного значения
 func (r Reader) Data(key fdb.Key) []byte {
 	return r.Item(key).MustGet()

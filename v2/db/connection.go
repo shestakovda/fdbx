@@ -77,6 +77,15 @@ func (cn Connection) Write(hdl WriteHandler) error {
 	return nil
 }
 
+func (cn Connection) ShapshotRead(hdl ReadHandler) error {
+	if _, err := cn.db.ReadTransact(func(tx fdb.ReadTransaction) (interface{}, error) {
+		return nil, hdl(Reader{Connection: cn, tx: tx})
+	}); err != nil {
+		return ErrRead.WithReason(err)
+	}
+	return nil
+}
+
 func (cn Connection) Clear() error {
 	if _, err := cn.db.Transact(func(tx fdb.Transaction) (interface{}, error) {
 		tx.ClearRange(fdb.KeyRange{Begin: cn.usrWrap(nil), End: cn.endWrap(nil)})
