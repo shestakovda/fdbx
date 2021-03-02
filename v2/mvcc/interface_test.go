@@ -685,7 +685,6 @@ func benchmarkOperationsSameTx(b *testing.B) {
 	})
 }
 
-
 func BenchmarkCount(b *testing.B) {
 	// const count = 1000000
 	// batchSize := 10000

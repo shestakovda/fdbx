@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -403,6 +404,8 @@ func (t *tx64) ListAll(ctx context.Context, args ...Option) (_ []fdb.KeyValue, e
 }
 
 func (t *tx64) Count(prefix fdb.Key) (cnt int64, err error) {
+	const max = 1 << 16
+
 	prefix = WrapKey(prefix)
 
 	if cnt, err = t.getFastCount(prefix); err != nil {
@@ -413,53 +416,88 @@ func (t *tx64) Count(prefix fdb.Key) (cnt int64, err error) {
 		return cnt, nil
 	}
 
+	cnt = 0
+	cpu := runtime.NumCPU()
+	wg := new(sync.WaitGroup)
+	wg.Add(cpu)
+
+	rate := 5
+	irate := 1 << rate
+	count := max / irate
+	list := make([]fdb.RangeResult, count)
+	plen := len(prefix)
+	from := make([]byte, plen+2)
+	last := make([]byte, plen+2)
+	copy(from[:plen], prefix)
+	copy(last[:plen], prefix)
+
+	errs := make(chan error, cpu)
+	parts := make(chan []fdb.KeyValue, count)
+	cache := makeCache()
+	opid := atomic.AddUint32(&t.opid, 1)
+
+	for i := 0; i < cpu; i++ {
+		go func() {
+			var ok bool
+			var exp error
+			defer wg.Done()
+
+			r := db.Reader{}
+			tmp := int64(0)
+
+			for part := range parts {
+				for k := range part {
+					if ok, exp = t.isVisible(r, cache, opid, part[k], false); exp != nil {
+						errs <- ErrSeqScan.WithReason(exp)
+						return
+					}
+
+					if ok {
+						tmp++
+					}
+				}
+			}
+
+			atomic.AddInt64(&cnt, tmp)
+		}()
+	}
+
 	if err = t.conn.Read(func(r db.Reader) (exp error) {
+		defer close(parts)
+
 		r = r.Snapshot()
 
-		var ok bool
-		const max = 1 << 16
-
-		cnt = 0
-		rate := 5
-		irate := 1 << rate
-		count := max / irate
-		parts := make([]fdb.RangeResult, 0, count)
-		cache := makeCache()
-		opid := atomic.AddUint32(&t.opid, 1)
-		plen := len(prefix)
-		from := make([]byte, plen+2)
-		last := make([]byte, plen+2)
-		copy(from[:plen], prefix)
-		copy(last[:plen], prefix)
-
 		for i := 0; i < count; i++ {
-			from[plen] = byte(i*irate >> 8)
-			from[plen+1] = byte(i*irate)
+			from[plen] = byte(i * irate >> 8)
+			from[plen+1] = byte(i * irate)
 			if i < count-1 {
-				last[plen] = byte(((i+1)*irate-1) >> 8)
-				last[plen+1] = byte((i+1)*irate-1)
+				last[plen] = byte(((i+1)*irate - 1) >> 8)
+				last[plen+1] = byte((i+1)*irate - 1)
 			} else {
 				last[plen] = 0xFF
 				last[plen+1] = 0xFF
 			}
-			parts = append(parts, r.List(from, last, 0, false, false))
+			list[i] = r.List(from, last, 0, false, false)
 		}
 
-		for i := range parts {
-			part := parts[i].GetSliceOrPanic()
-			for j := range part {
-				if ok, exp = t.isVisible(r, cache, opid, part[j], false); exp != nil {
-					return
-				}
-
-				if ok {
-					cnt++
-				}
+		for i := range list {
+			if part := list[i].GetSliceOrPanic(); len(part) > 0 {
+				parts <- part
 			}
 		}
+
 		return nil
 	}); err != nil {
 		return 0, ErrSeqScan.WithReason(err)
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err = range errs {
+		if err != nil {
+			return
+		}
 	}
 
 	return cnt, nil
@@ -890,7 +928,21 @@ func (t *tx64) txStatus(local *txCache, r db.Reader, txid suid) (status byte, er
 	}
 
 	// Придется слазать в БД за статусом и положить в кеш
-	val := r.Data(WrapTxKey(txid[:]))
+	var val []byte
+
+	hdlr := func(r2 db.Reader) error {
+		val = r2.Data(WrapTxKey(txid[:]))
+		return nil
+	}
+
+	if r.Empty() {
+		err = t.conn.Read(hdlr)
+	} else {
+		err = hdlr(r)
+	}
+	if err != nil {
+		return
+	}
 
 	// Если в БД нет записи, то либо транзакция еще открыта, либо это был откат
 	// Поскольку нет определенности, в глобальный кеш ничего не складываем
