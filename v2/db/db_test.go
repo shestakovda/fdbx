@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
-
 	"github.com/shestakovda/errx"
-	"github.com/shestakovda/fdbx/v2/db"
 	"github.com/stretchr/testify/suite"
+
+	"github.com/shestakovda/fdbx/v2/db"
 )
 
 const TestDB byte = 0x12
@@ -32,6 +32,7 @@ func (s *InterfaceSuite) TestConnection() {
 
 	cn, err := db.Connect(
 		TestDB,
+		db.WithMetrics(),
 		db.ClusterFile(""),
 	)
 	s.Require().NoError(err)

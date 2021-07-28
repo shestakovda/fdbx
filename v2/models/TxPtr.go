@@ -50,6 +50,13 @@ func GetRootAsTxPtr(buf []byte, offset flatbuffers.UOffsetT) *TxPtr {
 	return x
 }
 
+func GetSizePrefixedRootAsTxPtr(buf []byte, offset flatbuffers.UOffsetT) *TxPtr {
+	n := flatbuffers.GetUOffsetT(buf[offset+flatbuffers.SizeUint32:])
+	x := &TxPtr{}
+	x.Init(buf, n+offset+flatbuffers.SizeUint32)
+	return x
+}
+
 func (rcv *TxPtr) Init(buf []byte, i flatbuffers.UOffsetT) {
 	rcv._tab.Bytes = buf
 	rcv._tab.Pos = i

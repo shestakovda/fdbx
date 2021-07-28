@@ -48,6 +48,13 @@ func GetRootAsTaskHeader(buf []byte, offset flatbuffers.UOffsetT) *TaskHeader {
 	return x
 }
 
+func GetSizePrefixedRootAsTaskHeader(buf []byte, offset flatbuffers.UOffsetT) *TaskHeader {
+	n := flatbuffers.GetUOffsetT(buf[offset+flatbuffers.SizeUint32:])
+	x := &TaskHeader{}
+	x.Init(buf, n+offset+flatbuffers.SizeUint32)
+	return x
+}
+
 func (rcv *TaskHeader) Init(buf []byte, i flatbuffers.UOffsetT) {
 	rcv._tab.Bytes = buf
 	rcv._tab.Pos = i

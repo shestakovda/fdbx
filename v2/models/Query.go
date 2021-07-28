@@ -83,6 +83,13 @@ func GetRootAsQuery(buf []byte, offset flatbuffers.UOffsetT) *Query {
 	return x
 }
 
+func GetSizePrefixedRootAsQuery(buf []byte, offset flatbuffers.UOffsetT) *Query {
+	n := flatbuffers.GetUOffsetT(buf[offset+flatbuffers.SizeUint32:])
+	x := &Query{}
+	x.Init(buf, n+offset+flatbuffers.SizeUint32)
+	return x
+}
+
 func (rcv *Query) Init(buf []byte, i flatbuffers.UOffsetT) {
 	rcv._tab.Bytes = buf
 	rcv._tab.Pos = i

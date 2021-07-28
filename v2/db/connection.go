@@ -1,7 +1,10 @@
 package db
 
 import (
+	"time"
+
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
+
 	"github.com/shestakovda/fdbx/v2"
 )
 
@@ -29,6 +32,18 @@ func Connect(id byte, opts ...Option) (cn Connection, err error) {
 		if err = opts[i](&cn.options); err != nil {
 			return cn, ErrConnect.WithReason(err)
 		}
+	}
+
+	if cn.WithMetrics {
+		start := time.Now()
+		OpsCounter.WithLabelValues(opConnect).Inc()
+		CallsCounter.WithLabelValues(opConnect).Inc()
+		defer func() {
+			CallsHistogram.WithLabelValues(opConnect).Observe(time.Since(start).Seconds())
+			if err != nil {
+				ErrorsCounter.WithLabelValues(opConnect).Inc()
+			}
+		}()
 	}
 
 	if err = fdb.APIVersion(verID); err != nil {
@@ -60,28 +75,61 @@ type Connection struct {
 func (cn Connection) Empty() bool { return !cn.ok }
 
 func (cn Connection) Read(hdl ReadHandler) error {
+	if cn.WithMetrics {
+		start := time.Now()
+		CallsCounter.WithLabelValues(opRead).Inc()
+		defer func() { CallsHistogram.WithLabelValues(opRead).Observe(time.Since(start).Seconds()) }()
+	}
 	if _, err := cn.db.ReadTransact(func(tx fdb.ReadTransaction) (interface{}, error) {
+		if cn.WithMetrics {
+			OpsCounter.WithLabelValues(opRead).Inc()
+		}
 		return nil, hdl(Reader{Connection: cn, tx: tx})
 	}); err != nil {
+		if cn.WithMetrics {
+			ErrorsCounter.WithLabelValues(opRead).Inc()
+		}
 		return ErrRead.WithReason(err)
 	}
 	return nil
 }
 
 func (cn Connection) Write(hdl WriteHandler) error {
+	if cn.WithMetrics {
+		start := time.Now()
+		CallsCounter.WithLabelValues(opWrite).Inc()
+		defer func() { CallsHistogram.WithLabelValues(opWrite).Observe(time.Since(start).Seconds()) }()
+	}
 	if _, err := cn.db.Transact(func(tx fdb.Transaction) (interface{}, error) {
+		if cn.WithMetrics {
+			OpsCounter.WithLabelValues(opWrite).Inc()
+		}
 		return nil, hdl(Writer{Reader: Reader{Connection: cn, tx: tx}, tx: tx})
 	}); err != nil {
+		if cn.WithMetrics {
+			ErrorsCounter.WithLabelValues(opWrite).Inc()
+		}
 		return ErrWrite.WithReason(err)
 	}
 	return nil
 }
 
 func (cn Connection) Clear() error {
+	if cn.WithMetrics {
+		start := time.Now()
+		CallsCounter.WithLabelValues(opWrite).Inc()
+		defer func() { CallsHistogram.WithLabelValues(opWrite).Observe(time.Since(start).Seconds()) }()
+	}
 	if _, err := cn.db.Transact(func(tx fdb.Transaction) (interface{}, error) {
+		if cn.WithMetrics {
+			OpsCounter.WithLabelValues(opWrite).Inc()
+		}
 		tx.ClearRange(fdb.KeyRange{Begin: cn.usrWrap(nil), End: cn.endWrap(nil)})
 		return nil, nil
 	}); err != nil {
+		if cn.WithMetrics {
+			ErrorsCounter.WithLabelValues(opWrite).Inc()
+		}
 		return ErrClear.WithReason(err)
 	}
 	return nil
